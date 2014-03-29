@@ -1,0 +1,4 @@
+HsAdapton
+=========
+
+Haskell Adapton Library
