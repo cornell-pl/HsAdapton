@@ -13,6 +13,7 @@ import qualified Control.Monad.State as State
 import Control.Monad.Trans
 import Data.Traversable
 import Control.Monad hiding (mapM)
+import Data.List as List
 
 import Data.Typeable
 import Data.Hashable
@@ -22,7 +23,7 @@ import System.Mem.MemoTable
 data M (m :: * -> *) (r :: * -> *) a = M {
 		idM :: Id
 	,	valueM :: r a
-	,	dependentsM :: r (IntMap (Set (SomeMU m r)))
+	,	dependentsM :: r (IntMap (SomeMU m r))
 	} deriving Typeable
 
 instance EqRef r => Eq (M m r a) where
@@ -33,11 +34,11 @@ data U l (m :: * -> *) (r :: * -> *) a = U {
 		idU :: Id
 	,	valueU :: r a
 	,	forceU :: r (l m r a)
-	,	dependentsU :: r (IntMap (Set (SomeMU m r)))
-	,	dependenciesU :: r (IntMap (Set (SomeMU m r))) -- shouldn't this be a list as in the paper?
+	,	dependentsU :: r (IntMap (SomeMU m r))
+	,	dependenciesU :: r [(Int,SomeMU m r)] -- shouldn't this be a list as in the paper?
 	,	dirtyU :: r Bool
 	,	memoU :: r (MemoTree m r)
-	,	traceU :: [(Computation m r,SomeValue)]
+	,	traceU :: r [(Computation m r,SomeValue)]
 	} deriving Typeable
 
 instance EqRef r => Eq (U l m r a) where
@@ -77,8 +78,18 @@ instance Ref m r => Eq (SomeU m r) where
 
 type SomeMU m r = Either (SomeM m r) (SomeU m r)
 
-class (Monad (l m r),Ref m r) => Layer l m r where
-	get :: M m r a -> l m r a
+class (Typeable m,Typeable r,InL l,Monad (l m r),Ref m r,MonadState (Id, CallStack m r) (l m r)) => Layer l m r where
+	get :: (Eq a,Typeable a) => M m r a -> l m r a
+	get m = do
+		stack <- getCallStack
+		case stack of
+			callcell@(SomeU caller) : stack' -> do			
+				inL $ mapRefM (return . (++ [(idM m,Left $ SomeM m)])) (dependenciesU caller)
+				inL $ mapRefM (return . IntMap.insert (idU caller) (Right callcell)) (dependentsU caller)
+				value <- inL $ readRef $ valueM m
+				inL $ mapRefM (return . ((Get (SomeM m),SomeValue value) :)) (traceU caller) -- shouldn't it be inserted as the last?
+				return value
+			otherwise -> inL $ readRef $ valueM m
 	inner :: Inner m r a -> l m r a
 	force :: (U l m r a) -> l m r a
 	thunk :: l m r a -> l m r (U l m r a)
@@ -107,17 +118,31 @@ forceOuter = undefined
 data Inner (m :: * -> *) (r :: * -> *) a = Inner { innerComp :: Id -> CallStack m r -> m (a,Id,CallStack m r) } deriving Typeable
 data Outer (m :: * -> *) (r :: * -> *) a = Outer { outerComp :: Id -> CallStack m r -> m (a,Id,CallStack m r) } deriving Typeable
 
+instance Ref m r => MonadState (Id,CallStack m r) (Inner m r) where
+	get = Inner $ \id stack -> return ((id,stack),id,stack)
+	put (id',stack') = Inner $ \id stack -> return ((),id',stack')
+
+instance Ref m r => MonadState (Id,CallStack m r) (Outer m r) where
+	get = Outer $ \id stack -> return ((id,stack),id,stack)
+	put (id',stack') = Outer $ \id stack -> return ((),id',stack')
+
+getCallStack :: MonadState (Id,CallStack m r) n => n (CallStack m r)
+getCallStack = liftM snd State.get
+
+putCallStack :: MonadState (Id,CallStack m r) n => CallStack m r -> n ()
+putCallStack stack' = State.modify (\(id,stack) -> (id,stack'))
+
 run :: Monad m => Outer m r a -> m a
 run (Outer comp) = do
 	(x,_,_) <- comp 0 []
 	return x
 
-instance Ref m r => Layer Inner m r where
+instance (Typeable m,Typeable r,Ref m r) => Layer Inner m r where
 	get = undefined
 	inner = id
 	force = forceInner
 
-instance Ref m r => Layer Outer m r where
+instance (Typeable m,Typeable r,Ref m r) => Layer Outer m r where
 	get = undefined
 	inner (Inner c) = Outer c
 	force = forceOuter
@@ -145,8 +170,8 @@ set (M idM valueM dependentsM) v' = do
 			return ()
 
 -- internal, used at set
-dirty :: Ref m r => r (IntMap (Set (SomeMU m r))) -> m (r (IntMap (Set (SomeMU m r))))
-dirty = mapRefM $ mapM $ mapSetM $ either (return . Left) (liftM Right . dirty')
+dirty :: Ref m r => r (IntMap (SomeMU m r)) -> m (r (IntMap (SomeMU m r)))
+dirty = mapRefM $ mapM $ either (return . Left) (liftM Right . dirty')
 	where
 	dirty' :: Ref m r => SomeU m r -> m (SomeU m r)
 	dirty' (SomeU u) = do

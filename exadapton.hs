@@ -1,4 +1,4 @@
-{-# LANGUAGE KindSignatures, ExistentialQuantification, DataKinds, FlexibleInstances, DeriveGeneric, FlexibleContexts #-}
+{-# LANGUAGE DeriveDataTypeable, KindSignatures, ExistentialQuantification, DataKinds, FlexibleInstances, DeriveGeneric, FlexibleContexts #-}
 
 module Main where
 
@@ -18,18 +18,19 @@ import Data.IORef
 import Control.Monad.Adapton
 import System.Mem.MemoTable
 import System.Mem.StableName
+import Data.Typeable
 
-data ListM' m r a = NilM | ConsM a (ListM m r a) deriving (Generic)
+data ListM' m r a = NilM | ConsM a (ListM m r a) deriving (Eq,Generic,Typeable)
 type ListM m r a = M m r (ListM' m r a)
 
-data ListU' l m r a = NilU | ConsU a (ListU l m r a) deriving (Generic)
+data ListU' l m r a = NilU | ConsU a (ListU l m r a) deriving (Eq,Generic,Typeable)
 type ListU l m r a = U l m r (ListU' l m r a)
 
 -- filter
-filterInc :: Layer l m r => (a -> Bool) -> ListM m r a -> l m r (ListU l m r a)
+filterInc :: (Eq a,Typeable a,Layer l m r) => (a -> Bool) -> ListM m r a -> l m r (ListU l m r a)
 filterInc p = thunk . filterInc' p
 
-filterInc' :: Layer l m r => (a -> Bool) -> ListM m r a -> l m r (ListU' l m r a)
+filterInc' :: (Eq a,Typeable a,Layer l m r) => (a -> Bool) -> ListM m r a -> l m r (ListU' l m r a)
 filterInc' p mxs = get mxs >>= \xs -> case xs of
 	ConsM x mxs' -> if p x
 		then liftM (ConsU x) $ filterInc p mxs'
