@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, UndecidableInstances, ScopedTypeVariables, DeriveDataTypeable, KindSignatures, MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances, GADTs #-}
+{-# LANGUAGE TypeFamilies, FlexibleContexts, UndecidableInstances, ScopedTypeVariables, DeriveDataTypeable, KindSignatures, MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances, GADTs #-}
 
 module Control.Monad.Adapton where
 
@@ -83,13 +83,15 @@ class (Monad (l m r),Ref m r) => Layer l m r where
 	force :: (U l m r a) -> l m r a
 	thunk :: l m r a -> l m r (U l m r a)
 
-instance EqRef r => Hash (M m r a) where
-	hashVal = hash . refId . valueM
+instance EqRef r => Memo (M m r a) where
+	type MemoKey (M m r a) = Id
+	memoKey = return . refId . valueM
 
-instance EqRef r => Hash (U l m r a) where
-	hashVal = hash . refId . valueU
+instance EqRef r => Memo (U l m r a) where
+	type MemoKey (U l m r a) = Id
+	memoKey = return . refId . valueU
 
-memo :: (Layer l m r,Hash arg) => ((arg -> l m r (U l m r a)) -> arg -> l m r a) -> (arg -> l m r (U l m r a))
+memo :: (Layer l m r,Memo arg) => ((arg -> l m r (U l m r a)) -> arg -> l m r a) -> (arg -> l m r (U l m r a))
 memo f = do
 	let memo_func = memoLazy (thunk . f memo_func)
 	memo_func
