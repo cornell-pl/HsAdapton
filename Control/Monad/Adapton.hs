@@ -8,7 +8,7 @@ import Data.IntMap (IntMap(..))
 import qualified Data.IntMap as IntMap
 import Data.Set (Set(..))
 import qualified Data.Set as Set
-import Control.Monad.State (State(..),StateT(..),MonadState(..))
+import Control.Monad.State (State(..),StateT(..),MonadState)
 import qualified Control.Monad.State as State
 import Control.Monad.Trans
 import Data.Traversable
@@ -36,13 +36,15 @@ data U l (m :: * -> *) (r :: * -> *) a = U {
 		idU :: Id
 	,	valueU :: r a
 	,	forceU :: r (l m r a)
-	,	dependentsU :: r (IntMap (SomeMU m r))
-	,	dependenciesU :: r [(Int,SomeMU m r)] -- shouldn't this be a list as in the paper?
+	,	dependentsU :: r (Dependents m r)
+	,	dependenciesU :: r (Dependencies m r)
 	,	dirtyU :: r Bool
 	,	memoU :: r (MemoTree m r)
 	,	traceU :: r (Trace m r)
 	} deriving Typeable
 
+type Dependents m r = IntMap (SomeMU m r)
+type Dependencies m r = [(Int,SomeMU m r)] -- shouldn't this be a list as in the paper? order matters
 type Trace m r = [(Computation m r,SomeValue)]
 
 instance EqRef r => Eq (U l m r a) where
@@ -55,6 +57,20 @@ data MemoTree m r = Leaf SomeValue
 				  | Empty
 
 data Computation m r = Get (SomeM m r) | Force (SomeU m r)
+
+search_memo :: Layer Inner m r => SomeU m r -> Inner m r (Maybe SomeValue)
+search_memo (SomeU t) = readRef (memoU t) >>= search_memo_helper where
+	search_memo_helper (Leaf value) = return $ Just value
+	search_memo_helper Empty = return Nothing
+	search_memo_helper (Node comp tbl) = do
+		k <- case comp of
+			Get (SomeM m) -> get m >>= doIO . memoKey
+			Force (SomeU t) -> case castInnerThunk t of
+				Just t' -> force t' >>= doIO . memoKey
+				Nothing -> error "force should have the same type"
+		case Map.lookup k tbl of
+			Just tree -> search_memo_helper tree
+			Nothing -> return Nothing
 
 treeify :: HasIO m => Trace m r -> SomeValue -> m (MemoTree m r)
 treeify [] result = return $ Leaf result
@@ -86,7 +102,7 @@ instance Eq SomeValue where
 		Nothing -> False
 
 data SomeM m r where
-	SomeM :: (Eq a,Typeable m,Typeable r,Typeable a) => M m r a -> SomeM m r
+	SomeM :: (Memo a,Eq a,Typeable m,Typeable r,Typeable a) => M m r a -> SomeM m r
 
 instance Ref m r => Eq (SomeM m r) where
 	(SomeM (x :: M m r a)) == (SomeM (y :: M m' r' b)) = case cast x :: Maybe (M m r b) of
@@ -94,7 +110,7 @@ instance Ref m r => Eq (SomeM m r) where
 		Nothing -> False
 
 data SomeU m r where
-	SomeU :: (Layer l m r,Typeable l,Eq a,Typeable m,Typeable r,Typeable a) => U l m r a -> SomeU m r
+	SomeU :: (Memo a,Layer l m r,Typeable l,Eq a,Typeable m,Typeable r,Typeable a) => U l m r a -> SomeU m r
 
 instance Ref m r => Eq (SomeU m r) where
 	(SomeU (x :: U l m r a)) == (SomeU (y :: U l' m' r' b)) = case cast x :: Maybe (U l' m' r' b) of
@@ -103,10 +119,9 @@ instance Ref m r => Eq (SomeU m r) where
 
 type SomeMU m r = Either (SomeM m r) (SomeU m r)
 
-class (Typeable m,Typeable r,InL l,Monad (l m r),Ref m r,MonadState (Id, CallStack m r) (l m r)) => Layer l m r where
+class (HasIO m,NewRef (l m r) r,Ref (l m r) r,Typeable l,Typeable m,Typeable r,InL l,Monad (l m r),Ref m r,MonadState (Id, CallStack m r) (l m r)) => Layer l m r where
 	inner :: Inner m r a -> l m r a
-	force :: U l m r a -> l m r a
-	thunk :: l m r a -> l m r (U l m r a)
+	force :: (Memo a,Eq a,Typeable a) => U l m r a -> l m r a
 	inOuter :: l m r a -> Outer m r a
 
 get :: (Memo a,Eq a,Typeable a,Layer l m r) => M m r a -> l m r a
@@ -127,18 +142,99 @@ instance EqRef r => Memo (M m r a) where
 instance EqRef r => Memo (U l m r a) where
 	memoKey = return . MemoKey . refId . valueU
 
-memo :: (Layer l m r,Memo arg) => ((arg -> l m r (U l m r a)) -> arg -> l m r a) -> (arg -> l m r (U l m r a))
+memo :: (Eq a,Typeable a,Memo a,Layer l m r,Memo arg) => ((arg -> l m r (U l m r a)) -> arg -> l m r a) -> (arg -> l m r (U l m r a))
 memo f = do
 	let memo_func = memoLazy (thunk . f memo_func)
 	memo_func
 
 -- with change propagation
-forceInner :: (U Inner m r a) -> Inner m r a
-forceInner = undefined
+forceInner :: (Memo a,Eq a,Typeable a,Layer Inner m r) => U Inner m r a -> Inner m r a
+forceInner t = do
+	dirty <- readRef $ dirtyU t
+	result <- if (not dirty)
+		then readRef $ valueU t
+		else do
+			oldstack <- getCallStack
+			mbv <- search_memo (SomeU t)
+			case mbv of
+				Just value -> castAsThunkValue t value
+				Nothing -> do
+					inL $ clearDependenciesDependents (idU t) (dependenciesU t)
+					putCallStack (SomeU t : oldstack)
+					value <- readRef (forceU t) >>= \c -> c
+					writeRef (valueU t) value
+					writeRef (dirtyU t) False
+					putCallStack oldstack
+					return value
+	callstack <- getCallStack
+	case callstack of
+		(SomeU caller:_) -> do
+			mapRefM (\tbl -> return $ tbl ++ [(idU t,Right $ SomeU t)]) (dependenciesU caller) -- insert at the end?
+			mapRefM (return . IntMap.insert (idU caller) (Right $ SomeU caller)) (dependentsU t)
+			mapRefM (\trace -> return $ (Force (SomeU t),SomeValue result) : trace) (traceU caller)
+			return ()
+		otherwise -> return ()
+	return result
+
+clearDependenciesDependents :: Ref m r => Id -> r (Dependencies m r) -> m (r (Dependencies m r))
+clearDependenciesDependents id r = mapRefM (\deps -> mapM_ clearDependency deps >> return []) r where
+	clearDependency (id',Left (SomeM m')) = mapRefM (return . IntMap.delete id) (dependentsM m')
+	clearDependency (id',Right (SomeU t')) = mapRefM (return . IntMap.delete id) (dependentsU t')
+
+castAsThunkValue :: (Typeable a,Layer l m r) => U l m r a -> SomeValue -> l m r a
+castAsThunkValue (t :: U l m r a) v = castAsValue (undefined :: a) v
+
+castAsValue :: (Typeable a,Layer l m r) => a -> SomeValue -> l m r a
+castAsValue (_ :: a) (SomeValue (b :: b)) = case cast b :: Maybe a of
+	Just b' -> return b'
+	Nothing -> error "types do not match"
+
+castInnerThunk :: (Typeable l,Typeable m,Typeable r,Typeable a) => U l m r a -> Maybe (U Inner m r a)
+castInnerThunk (t :: U l m r a) = cast t :: Maybe (U Inner m r a)
 
 -- without change propagation
-forceOuter :: (U Outer m r a) -> Outer m r a
-forceOuter = undefined
+forceOuter :: (Layer Outer m r,Eq a,Typeable a,Memo a) => (U Outer m r a) -> Outer m r a
+forceOuter t = do
+	dirty <- readRef $ dirtyU t
+	result <- if (not dirty)
+		then readRef $ valueU t
+		else do
+			oldstack <- getCallStack
+			inL $ clearDependenciesDependents (idU t) (dependenciesU t)
+			putCallStack (SomeU t : oldstack)
+			value <- readRef (forceU t) >>= \c -> c
+			writeRef (valueU t) value
+			writeRef (dirtyU t) False
+			putCallStack oldstack
+			return value
+	callstack <- getCallStack
+	case callstack of
+		(SomeU caller:_) -> do
+			mapRefM (\tbl -> return $ tbl ++ [(idU t,Right $ SomeU t)]) (dependenciesU caller) -- insert at the end?
+			mapRefM (return . IntMap.insert (idU caller) (Right $ SomeU caller)) (dependentsU t)
+			mapRefM (\trace -> return $ (Force (SomeU t),SomeValue result) : trace) (traceU caller)
+			return ()
+		otherwise -> return ()
+	return result
+
+thunk :: (Eq a,Typeable a,Memo a,Layer l m r) => l m r a -> l m r (U l m r a)
+thunk c = do
+	valueU <- newRef $ error "no old value in thunk"
+	let idU = refId valueU
+	forceU <- newNonUniqueRef $ return $ error "no old value in thunk"
+	dependentsU <- newNonUniqueRef IntMap.empty
+	dependenciesU <- newNonUniqueRef []
+	dirtyU <- newNonUniqueRef True
+	memoU <- newNonUniqueRef Empty
+	traceU <- newNonUniqueRef []
+	let t = U idU valueU forceU dependentsU dependenciesU dirtyU memoU traceU
+	let final_comp = do
+		inL $ mapRefM (\x -> return []) traceU
+		result <- c
+		inL $ mapRefM (\memo -> readRef traceU >>= \trace -> insert_trace (reverse trace) memo (SomeValue result)) memoU
+		return result
+	inL $ writeRef forceU final_comp
+	return t
 
 data Inner (m :: * -> *) (r :: * -> *) a = Inner { innerComp :: Id -> CallStack m r -> m (a,Id,CallStack m r) } deriving Typeable
 data Outer (m :: * -> *) (r :: * -> *) a = Outer { outerComp :: Id -> CallStack m r -> m (a,Id,CallStack m r) } deriving Typeable
@@ -162,12 +258,12 @@ run (Outer comp) = do
 	(x,_,_) <- comp 0 []
 	return x
 
-instance (Typeable m,Typeable r,Ref m r) => Layer Inner m r where
+instance (HasIO m,NewRef (Inner m r) r,Typeable m,Typeable r,Ref m r) => Layer Inner m r where
 	inner = id
 	force = forceInner
 	inOuter (Inner f) = Outer f
 
-instance (Typeable m,Typeable r,Ref m r) => Layer Outer m r where
+instance (HasIO m,NewRef (Outer m r) r,Typeable m,Typeable r,Ref m r) => Layer Outer m r where
 	inner (Inner c) = Outer c
 	force = forceOuter
 	inOuter = id
@@ -195,7 +291,7 @@ set (M idM valueM dependentsM) v' = do
 			return ()
 
 -- internal, used at set
-dirty :: Ref m r => r (IntMap (SomeMU m r)) -> m (r (IntMap (SomeMU m r)))
+dirty :: Ref m r => r (Dependents m r) -> m (r (Dependents m r))
 dirty = mapRefM $ mapM $ either (return . Left) (liftM Right . dirty')
 	where
 	dirty' :: Ref m r => SomeU m r -> m (SomeU m r)
@@ -284,3 +380,9 @@ class Monad m => HasIO m where
 
 instance HasIO IO where
 	doIO = id
+
+instance (Ref m r,HasIO m) => HasIO (Inner m r) where
+	doIO m = inL (doIO m)
+
+instance (Ref m r,HasIO m) => HasIO (Outer m r) where
+	doIO m = inL (doIO m)

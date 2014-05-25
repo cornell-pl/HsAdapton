@@ -29,6 +29,9 @@ instance (Typeable m,Typeable r,Typeable a) => Memo (ListM' m r a) where
 data ListU' l m r a = NilU | ConsU a (ListU l m r a) deriving (Eq,Generic,Typeable)
 type ListU l m r a = U l m r (ListU' l m r a)
 
+instance (Typeable l,Typeable m,Typeable r,Typeable a) => Memo (ListU' l m r a) where
+	memoKey = liftM MemoKey . makeStableName
+
 -- filter
 filterInc :: (Eq a,Typeable a,Layer l m r) => (a -> Bool) -> ListM m r a -> l m r (ListU l m r a)
 filterInc p = thunk . filterInc' p
