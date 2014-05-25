@@ -23,6 +23,9 @@ import Data.Typeable
 data ListM' m r a = NilM | ConsM a (ListM m r a) deriving (Eq,Generic,Typeable)
 type ListM m r a = M m r (ListM' m r a)
 
+instance (Typeable m,Typeable r,Typeable a) => Memo (ListM' m r a) where
+	memoKey = liftM MemoKey . makeStableName
+
 data ListU' l m r a = NilU | ConsU a (ListU l m r a) deriving (Eq,Generic,Typeable)
 type ListU l m r a = U l m r (ListU' l m r a)
 

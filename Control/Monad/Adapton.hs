@@ -14,6 +14,8 @@ import Control.Monad.Trans
 import Data.Traversable
 import Control.Monad hiding (mapM)
 import Data.List as List
+import Data.Map (Map(..))
+import qualified Data.Map as Map
 
 import Data.Typeable
 import Data.Hashable
@@ -38,8 +40,10 @@ data U l (m :: * -> *) (r :: * -> *) a = U {
 	,	dependenciesU :: r [(Int,SomeMU m r)] -- shouldn't this be a list as in the paper?
 	,	dirtyU :: r Bool
 	,	memoU :: r (MemoTree m r)
-	,	traceU :: r [(Computation m r,SomeValue)]
+	,	traceU :: r (Trace m r)
 	} deriving Typeable
+
+type Trace m r = [(Computation m r,SomeValue)]
 
 instance EqRef r => Eq (U l m r a) where
 	u1 == u2 = valueU u1 `eqRef` valueU u2 -- we could compare ids instead, but this should be safer
@@ -47,13 +51,34 @@ instance EqRef r => Eq (U l m r a) where
 type CallStack m r = [SomeU m r] -- not sure
 
 data MemoTree m r = Leaf SomeValue
-				  | Node (Computation m r) (IntMap (MemoTree m r)) (IntMap (MemoTree m r))
+				  | Node (Computation m r) (Map MemoKey (MemoTree m r))
 				  | Empty
 
 data Computation m r = Get (SomeM m r) | Force (SomeU m r)
 
+treeify :: HasIO m => Trace m r -> SomeValue -> m (MemoTree m r)
+treeify [] result = return $ Leaf result
+treeify ((comp,SomeValue value):trace') result = do
+	id <- doIO $ memoKey value
+	tree' <- treeify trace' result
+	return $ Node comp $ Map.singleton id tree'
+
+insert_trace :: HasIO m => Trace m r -> MemoTree m r -> SomeValue -> m (MemoTree m r)
+insert_trace [] tree result = return $ Leaf result
+insert_trace trace (Leaf _) result = error "inconsistent computation"
+insert_trace ((comp,SomeValue value):trace') (Node comp' tbl) result = do
+	id <- doIO $ memoKey value
+	case Map.lookup id tbl of
+		Just mem -> do
+			tree <- insert_trace trace' mem result
+			return $ Node comp' $ Map.insert id tree tbl
+		Nothing -> do
+			tree <- treeify trace' result
+			return $ Node comp' $ Map.insert id tree tbl
+insert_trace trace Empty result = treeify trace result
+
 data SomeValue where
-	SomeValue :: (Eq a,Typeable a) => a -> SomeValue
+	SomeValue :: (Eq a,Typeable a,Memo a) => a -> SomeValue
 
 instance Eq SomeValue where
 	(SomeValue (x :: a)) == (SomeValue (y :: b)) = case cast x :: Maybe b of
@@ -79,28 +104,28 @@ instance Ref m r => Eq (SomeU m r) where
 type SomeMU m r = Either (SomeM m r) (SomeU m r)
 
 class (Typeable m,Typeable r,InL l,Monad (l m r),Ref m r,MonadState (Id, CallStack m r) (l m r)) => Layer l m r where
-	get :: (Eq a,Typeable a) => M m r a -> l m r a
-	get m = do
-		stack <- getCallStack
-		case stack of
-			callcell@(SomeU caller) : stack' -> do			
-				inL $ mapRefM (return . (++ [(idM m,Left $ SomeM m)])) (dependenciesU caller)
-				inL $ mapRefM (return . IntMap.insert (idU caller) (Right callcell)) (dependentsU caller)
-				value <- inL $ readRef $ valueM m
-				inL $ mapRefM (return . ((Get (SomeM m),SomeValue value) :)) (traceU caller) -- shouldn't it be inserted as the last?
-				return value
-			otherwise -> inL $ readRef $ valueM m
 	inner :: Inner m r a -> l m r a
-	force :: (U l m r a) -> l m r a
+	force :: U l m r a -> l m r a
 	thunk :: l m r a -> l m r (U l m r a)
+	inOuter :: l m r a -> Outer m r a
+
+get :: (Memo a,Eq a,Typeable a,Layer l m r) => M m r a -> l m r a
+get m = do
+	stack <- getCallStack
+	case stack of
+		callcell@(SomeU caller) : stack' -> do			
+			inL $ mapRefM (return . (++ [(idM m,Left $ SomeM m)])) (dependenciesU caller)
+			inL $ mapRefM (return . IntMap.insert (idU caller) (Right callcell)) (dependentsU caller)
+			value <- inL $ readRef $ valueM m
+			inL $ mapRefM (return . ((Get (SomeM m),SomeValue value) :)) (traceU caller) -- shouldn't it be inserted as the last?
+			return value
+		otherwise -> inL $ readRef $ valueM m
 
 instance EqRef r => Memo (M m r a) where
-	type MemoKey (M m r a) = Id
-	memoKey = return . refId . valueM
+	memoKey = return . MemoKey . refId . valueM
 
 instance EqRef r => Memo (U l m r a) where
-	type MemoKey (U l m r a) = Id
-	memoKey = return . refId . valueU
+	memoKey = return . MemoKey . refId . valueU
 
 memo :: (Layer l m r,Memo arg) => ((arg -> l m r (U l m r a)) -> arg -> l m r a) -> (arg -> l m r (U l m r a))
 memo f = do
@@ -138,14 +163,14 @@ run (Outer comp) = do
 	return x
 
 instance (Typeable m,Typeable r,Ref m r) => Layer Inner m r where
-	get = undefined
 	inner = id
 	force = forceInner
+	inOuter (Inner f) = Outer f
 
 instance (Typeable m,Typeable r,Ref m r) => Layer Outer m r where
-	get = undefined
 	inner (Inner c) = Outer c
 	force = forceOuter
+	inOuter = id
 
 instance Ref m r => Monad (Inner m r) where
 	return x = Inner $ \counter stack -> return (x,counter,stack)
@@ -186,7 +211,7 @@ dirty = mapRefM $ mapM $ either (return . Left) (liftM Right . dirty')
 ref :: (NewRef (Outer m r) r) => a -> Outer m r (M m r a)
 ref v = do
 	valueM <- newRef v
-	dependents <- newRef $ IntMap.empty
+	dependents <- newNonUniqueRef $ IntMap.empty -- we only needs ids for the ref/thunk value references
 	return $ M (refId valueM) valueM dependents
 
 class EqRef r where
@@ -253,3 +278,9 @@ instance InL Outer where
 
 mapSetM :: (Monad m,Eq b) => (a -> m b) -> Set a -> m (Set b)
 mapSetM f s = liftM Set.fromAscList $ mapM f $ Set.toAscList s
+
+class Monad m => HasIO m where
+	doIO :: IO a -> m a
+
+instance HasIO IO where
+	doIO = id

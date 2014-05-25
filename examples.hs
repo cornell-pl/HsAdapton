@@ -29,6 +29,10 @@ instance Show (IORef a) where
 instance Show (a -> b) where
 	show x = "f"
 
+--composers in the 16th century - 16th century composers by country
+
+--composersSym :: SymLens () () [(Composer,(Year,Year))] [(Composer,Country)]
+
 data MapCpl k c = MapCpl (k (Either (k ()) (k (k c,k (MapCpl k c))))) deriving Generic
 
 mapSym :: Box k m => SymLens m k c a b -> SymLens m k (MapCpl k c) [a] [b]
