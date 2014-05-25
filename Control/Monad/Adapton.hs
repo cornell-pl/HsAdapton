@@ -119,10 +119,24 @@ instance Ref m r => Eq (SomeU m r) where
 
 type SomeMU m r = Either (SomeM m r) (SomeU m r)
 
-class (HasIO m,NewRef (l m r) r,Ref (l m r) r,Typeable l,Typeable m,Typeable r,InL l,Monad (l m r),Ref m r,MonadState (Id, CallStack m r) (l m r)) => Layer l m r where
+class (HasIO (l m r),HasIO m,NewRef (l m r) r,Ref (l m r) r,Typeable l,Typeable m,Typeable r,InL l,Monad (l m r),Ref m r,MonadState (Id, CallStack m r) (l m r)) => Layer l m r where
 	inner :: Inner m r a -> l m r a
 	force :: (Memo a,Eq a,Typeable a) => U l m r a -> l m r a
 	inOuter :: l m r a -> Outer m r a
+
+-- get and print the value
+displayM :: (Eq a,Typeable a,Memo a,Show a,Layer l m r) => M m r a -> l m r a
+displayM t = do
+	v <- get t
+	doIO $ print v
+	return v
+
+-- force and print the value
+displayU :: (Eq a,Typeable a,Memo a,Show a,Layer l m r) => U l m r a -> l m r a
+displayU t = do
+	v <- force t
+	doIO $ print v
+	return v
 
 get :: (Memo a,Eq a,Typeable a,Layer l m r) => M m r a -> l m r a
 get m = do
