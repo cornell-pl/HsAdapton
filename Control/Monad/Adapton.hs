@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, FlexibleContexts, UndecidableInstances, ScopedTypeVariables, DeriveDataTypeable, KindSignatures, MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances, GADTs #-}
+{-# LANGUAGE TypeOperators, TypeFamilies, FlexibleContexts, UndecidableInstances, ScopedTypeVariables, DeriveDataTypeable, KindSignatures, MultiParamTypeClasses, FunctionalDependencies, FlexibleInstances, GADTs #-}
 
 module Control.Monad.Adapton where
 
@@ -20,6 +20,9 @@ import qualified Data.Map as Map
 import Data.Typeable
 import Data.Hashable
 import System.Mem.MemoTable
+import GHC.Generics
+
+import Debug.Trace
 
 -- | Ref of @a@
 data M (m :: * -> *) (r :: * -> *) a = M {
@@ -124,20 +127,6 @@ class (HasIO (l m r),HasIO m,NewRef (l m r) r,Ref (l m r) r,Typeable l,Typeable 
 	force :: (Memo a,Eq a,Typeable a) => U l m r a -> l m r a
 	inOuter :: l m r a -> Outer m r a
 
--- get and print the value
-displayM :: (Eq a,Typeable a,Memo a,Show a,Layer l m r) => M m r a -> l m r a
-displayM t = do
-	v <- get t
-	doIO $ print v
-	return v
-
--- force and print the value
-displayU :: (Eq a,Typeable a,Memo a,Show a,Layer l m r) => U l m r a -> l m r a
-displayU t = do
-	v <- force t
-	doIO $ print v
-	return v
-
 get :: (Memo a,Eq a,Typeable a,Layer l m r) => M m r a -> l m r a
 get m = do
 	stack <- getCallStack
@@ -208,7 +197,7 @@ castInnerThunk (t :: U l m r a) = cast t :: Maybe (U Inner m r a)
 
 -- without change propagation
 forceOuter :: (Layer Outer m r,Eq a,Typeable a,Memo a) => (U Outer m r a) -> Outer m r a
-forceOuter t = do
+forceOuter t = trace "forced at the outer layer" $ do
 	dirty <- readRef $ dirtyU t
 	result <- if (not dirty)
 		then readRef $ valueU t
@@ -337,7 +326,7 @@ class (EqRef r, Monad m) => Ref m r where
 class (Ref m r) => NewRef m r where
 	newRef   :: a -> m (r a)
 
-data IdRef a = IdRef Id (IORef a)
+data IdRef a = IdRef Id (IORef a) deriving Typeable
 
 instance EqRef IdRef where
 	eqRef (IdRef i1 r1) (IdRef i2 r2) = eqRef r1 r2
@@ -400,3 +389,41 @@ instance (Ref m r,HasIO m) => HasIO (Inner m r) where
 
 instance (Ref m r,HasIO m) => HasIO (Outer m r) where
 	doIO m = inL (doIO m)
+
+
+-- * generic mechanism for displaying data types with refs/thunks
+
+class (Layer l m r) => Display l m r a where
+	display :: a -> l m r ()
+	display x = showL x >>= doIO . print
+	showL :: a -> l m r String
+
+instance (Display l m r a,Eq a,Typeable a,Memo a) => Display l m r (U l m r a) where
+	showL t = force t >>= showL
+
+instance (Display l m r a,Eq a,Typeable a,Memo a) => Display l m r (M m r a) where
+	showL m = get m >>= showL
+
+instance Layer l m r => Display l m r (U1 p) where
+	showL U1 = return ""
+instance (Display l m r c,Layer l m r) => Display l m r (K1 i c p) where
+	showL (K1 c) = showL c
+instance (Display l m r (f p),Constructor c) => Display l m r (M1 C c f p) where
+	showL m1 = do
+		str <- showL (unM1 m1)
+		return $ "(" ++ conName m1 ++ " " ++ str ++ ")"
+instance (Display l m r (f p)) => Display l m r (M1 D c f p) where
+	showL m1 = showL (unM1 m1)
+instance (Display l m r (f p)) => Display l m r (M1 S c f p) where
+	showL m1 = showL (unM1 m1)
+instance (Display l m r (f p),Display l m r (g p)) => Display l m r ((f :+: g) p) where
+	showL (L1 x) = showL x
+	showL (R1 x) = showL x
+instance (Display l m r (f p),Display l m r (g p)) => Display l m r ((f :*: g) p) where
+	showL (x :*: y) = do
+		str1 <- showL x
+		str2 <- showL y
+		return $ str1 ++ " " ++ str2
+instance Layer l m r => Display l m r Int where
+	showL i = return $ show i
+
