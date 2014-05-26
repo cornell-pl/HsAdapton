@@ -69,9 +69,16 @@ testFilter = run $ do
 	doIO (putStrLn "input: ") >> display mxs
 	tys <- inner $ filterInc odd mxs
 	inner $ doIO (putStrLn "output: ") >> display tys
+	
+	inL $ printDependentsM "" mxs
+	inL $ printDependenciesU "" tys
+	
+	doIO $ putStrLn "changing"
 	mtailx <- tailOfListM mxs
 	tailx <- toListM' [5,6]
 	set mtailx tailx
+	inL $ printDependentsM "" mxs
+	inL $ printDependenciesU "" tys
 	doIO (putStrLn "input: ") >> display mxs
 	inner $ doIO (putStrLn "output: ") >> display tys
 

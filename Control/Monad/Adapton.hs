@@ -131,9 +131,9 @@ get :: (Memo a,Eq a,Typeable a,Layer l m r) => M m r a -> l m r a
 get m = do
 	stack <- getCallStack
 	case stack of
-		callcell@(SomeU caller) : stack' -> do			
+		(SomeU caller) : stack' -> do			
 			inL $ mapRefM (return . (++ [(idM m,Left $ SomeM m)])) (dependenciesU caller)
-			inL $ mapRefM (return . IntMap.insert (idU caller) (Right callcell)) (dependentsU caller)
+			inL $ mapRefM (return . IntMap.insert (idU caller) (Right $ SomeU caller)) (dependentsM m)
 			value <- inL $ readRef $ valueM m
 			inL $ mapRefM (return . ((Get (SomeM m),SomeValue value) :)) (traceU caller) -- shouldn't it be inserted as the last?
 			return value
@@ -161,7 +161,7 @@ forceInner t = do
 			mbv <- search_memo (SomeU t)
 			case mbv of
 				Just value -> castAsThunkValue t value
-				Nothing -> do
+				Nothing -> trace "forced at the inner layer" $ do
 					inL $ clearDependenciesDependents (idU t) (dependenciesU t)
 					putCallStack (SomeU t : oldstack)
 					value <- readRef (forceU t) >>= \c -> c
@@ -275,19 +275,19 @@ instance Ref m r => Monad (Inner m r) where
 	return x = Inner $ \counter stack -> return (x,counter,stack)
 	(Inner m) >>= f = Inner $ \counter stack -> do
 		(x,counter',stack') <- m counter stack
-		innerComp (f x) counter stack'
+		innerComp (f x) counter' stack'
 
 instance Ref m r => Monad (Outer m r) where
 	return x = Outer $ \counter stack -> return (x,counter,stack)
 	(Outer m) >>= f = Outer $ \counter stack -> do
 		(x,counter',stack') <- m counter stack
-		outerComp (f x) counter stack'
+		outerComp (f x) counter' stack'
 
 set :: (Ref m r,Eq a) => M m r a -> a -> Outer m r ()
 set (M idM valueM dependentsM) v' = do
 	v <- readRef valueM
 	if v == v'
-		then return ()
+		then trace "do nothing" $ return ()
 		else do
 			writeRef valueM v'
 			inL $ dirty dependentsM
@@ -427,3 +427,26 @@ instance (Display l m r (f p),Display l m r (g p)) => Display l m r ((f :*: g) p
 instance Layer l m r => Display l m r Int where
 	showL i = return $ show i
 
+-- * debugging
+
+printDependenciesM :: (HasIO m,Ref m r) => String -> M m r a -> m ()
+printDependenciesM pad m = doIO $ putStrLn $ pad ++ "<--M" ++ show (idM m)
+printDependenciesU :: Layer l m r => String -> U l m r a -> m ()
+printDependenciesU pad t = do
+	doIO $ putStrLn $ pad ++ "<--U" ++ show (idU t)
+	deps <- readRef (dependenciesU t)
+	mapM_ (\(i,some) -> case some of { Left (SomeM m') -> printDependenciesM (pad++" ") m' ; Right (SomeU t') -> printDependenciesU (pad++" ") t' }) deps
+
+printDependentsM :: (HasIO m,Ref m r) => String -> M m r a -> m ()
+printDependentsM pad m = do
+	doIO $ putStrLn $ pad ++ "-->M" ++ show (idM m)
+	deps <- readRef (dependentsM m)
+	intMapM_ (\some -> case some of { Left (SomeM m') -> printDependentsM (pad++" ") m' ; Right (SomeU t') -> printDependentsU (pad++" ") t' }) deps
+printDependentsU :: (HasIO m,Layer l m r) => String -> U l m r a -> m ()
+printDependentsU pad t = do
+	doIO $ putStrLn $ pad ++ "-->U" ++ show (idU t)
+	deps <- readRef (dependentsU t)
+	intMapM_ (\some -> case some of { Left (SomeM m') -> printDependentsM (pad++" ") m' ; Right (SomeU t') -> printDependentsU (pad++" ") t' }) deps
+
+intMapM_ :: Monad m => (a -> m b) -> IntMap a -> m ()
+intMapM_ f = IntMap.foldl (\m a -> f a >> m) (return ())
