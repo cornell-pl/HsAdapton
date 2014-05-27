@@ -13,11 +13,16 @@ import Debug.Trace
 import System.IO.Unsafe
 import Data.Maybe
 import Control.Monad.Identity
+import Data.List as List
+import Data.Map (Map(..))
+import qualified Data.Map as Map
 import Data.IORef
 
 import Control.Monad.Adapton
-import System.Mem.MemoTable
+import System.Mem.MemoTable (Memo(..),MemoKey(..),HasIO(..))
+import qualified System.Mem.MemoTable as Memo
 import System.Mem.StableName
+import System.Mem.Weak
 import Data.Typeable
 
 data ListM' m r a = NilM | ConsM a (ListM m r a) deriving (Eq,Generic,Typeable)
@@ -38,7 +43,7 @@ instance (Typeable l,Typeable m,Typeable r,Typeable a) => Memo (ListU' l m r a) 
 instance (Eq a,Typeable a,Display l m r a,Layer l m r) => Display l m r (ListU' l m r a) where
 	showL = showL . from
 
--- filter
+-- * filter
 filterInc :: (Eq a,Typeable a,Layer l m r) => (a -> Bool) -> ListM m r a -> l m r (ListU l m r a)
 filterInc p = thunk . filterInc' p
 
@@ -82,6 +87,44 @@ testFilter = run $ do
 	doIO (putStrLn "input: ") >> display mxs
 	inner $ doIO (putStrLn "output: ") >> display tys
 
+-- * length
+
+lengthInc :: (Eq a,Typeable a,Layer l m r) => ListM m r a -> l m r (U l m r Int)
+lengthInc mxs = thunk $ get mxs >>= \xs -> case xs of
+	ConsM x mxs' -> lengthInc mxs' >>= force >>= return . succ
+	NilM -> return 0
+
+lengthMemo :: (Eq a,Typeable a,Layer l m r) => ListM m r a -> l m r (U l m r Int)
+lengthMemo = memo lengthMemo'
+lengthMemo' :: (Eq a,Typeable a,Layer l m r) => (ListM m r a -> l m r (U l m r Int)) -> ListM m r a -> l m r Int
+lengthMemo' rec mxs = get mxs >>= \xs -> case xs of
+	ConsM x mxs' -> rec mxs' >>= force >>= return . succ
+	NilM -> return 0
+
+-- it is safe to memoize even thunks that correspond to changed refs, because they have been always dirtied
+testLength :: IO ()
+testLength = run $ do
+	(mxs :: ListM IO IdRef Int) <- toListM [1,2,3,4]
+	doIO (putStrLn "input: ") >> display mxs
+	tys <- inner $ lengthMemo mxs
+	inner $ doIO (putStrLn "output: ") >> display tys
+
+	ConsM x1 mxs234 <- get mxs
+	xs234 <- get mxs234
+	
+--	let ConsM x2 mxs34 = xs234
+--	xs34 <- get mxs34
+--	let ConsM x3 mxs4 = xs34
+--	xs56 <- toListM' [5,6]
+--	set mxs4 xs56
+	
+	set mxs xs234
+	
+	doIO (putStrLn "input: ") >> display mxs
+	inner $ doIO (putStrLn "output: ") >> display tys
+
+-- * fibonnaci
+
 fib :: Layer l m r => Int -> l m r (U l m r Int)
 fib = memo fib'
 
@@ -92,7 +135,17 @@ fib' memo_fib n = if n <= 1
 		n1 <- memo_fib (n - 1) >>= force
 		n2 <- memo_fib (n - 2) >>= force
 		return (n1 + n2)
-	
+
+testMemo = do
+	let fmemo = Memo.memo False ex
+	print $ fmemo 0
+	print $ fmemo 0
+  where
+	ex :: Int -> Int
+	ex 0 = 100
+	ex 1 = 200
+	ex 2 = 400
+
 test = do
 	let x = 1
 	let p = (x,x)

@@ -146,9 +146,7 @@ instance EqRef r => Memo (U l m r a) where
 	memoKey = return . MemoKey . refId . valueU
 
 memo :: (Eq a,Typeable a,Memo a,Layer l m r,Memo arg) => ((arg -> l m r (U l m r a)) -> arg -> l m r a) -> (arg -> l m r (U l m r a))
-memo f = do
-	let memo_func = memoLazy (thunk . f memo_func)
-	memo_func
+memo f arg = let memo_func = memoLazyM (thunk . f memo_func) in memo_func arg -- it is important to apply the function to the argument here, otherwise new memoized functions are created for new runs
 
 -- with change propagation
 forceInner :: (Memo a,Eq a,Typeable a,Layer Inner m r) => U Inner m r a -> Inner m r a
@@ -161,7 +159,7 @@ forceInner t = do
 			mbv <- search_memo (SomeU t)
 			case mbv of
 				Just value -> castAsThunkValue t value
-				Nothing -> trace "forced at the inner layer" $ do
+				Nothing -> trace ("forced at the inner layer " ++ show (idU t)) $ do
 					inL $ clearDependenciesDependents (idU t) (dependenciesU t)
 					putCallStack (SomeU t : oldstack)
 					value <- readRef (forceU t) >>= \c -> c
@@ -378,12 +376,6 @@ instance InL Outer where
 mapSetM :: (Monad m,Eq b) => (a -> m b) -> Set a -> m (Set b)
 mapSetM f s = liftM Set.fromAscList $ mapM f $ Set.toAscList s
 
-class Monad m => HasIO m where
-	doIO :: IO a -> m a
-
-instance HasIO IO where
-	doIO = id
-
 instance (Ref m r,HasIO m) => HasIO (Inner m r) where
 	doIO m = inL (doIO m)
 
@@ -399,10 +391,10 @@ class (Layer l m r) => Display l m r a where
 	showL :: a -> l m r String
 
 instance (Display l m r a,Eq a,Typeable a,Memo a) => Display l m r (U l m r a) where
-	showL t = force t >>= showL
+	showL t = force t >>= showL >>= \str -> return $ "<u" ++ show (idU t) ++ " " ++ str ++ ">"
 
 instance (Display l m r a,Eq a,Typeable a,Memo a) => Display l m r (M m r a) where
-	showL m = get m >>= showL
+	showL m = get m >>= showL >>= \str -> return $ "<m" ++ show (idM m) ++ " " ++ str ++ ">"
 
 instance Layer l m r => Display l m r (U1 p) where
 	showL U1 = return ""
