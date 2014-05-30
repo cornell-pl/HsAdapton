@@ -15,7 +15,7 @@ module Control.Monad.Adaptive.OrderedList where
 
 import Control.Monad
 import Control.Monad.Adaptive.MonadUtil
-import Control.Monad.Adaptive.Ref
+import Control.Monad.Ref
 import Control.Monad.Adaptive.CircularList hiding (delete,insert,next,update,previous)
 import qualified Control.Monad.Adaptive.CircularList as CircularList
 
@@ -59,10 +59,10 @@ instance Ref m r => Monad (OrderedList m r a) where
 instance Ref m r => Functor (OrderedList m r a) where 
   fmap f m = m >>= return . f
 
-instance Ref m r => Ref (OrderedList m r a) r where
-  newRef v     = inM (newRef v)
-  readRef r    = inM (readRef r)
-  writeRef r v = inM (writeRef r v)
+--instance Ref m r => Ref (OrderedList m r a) r where
+--  newRef v     = inM (newRef v)
+--  readRef r    = inM (readRef r)
+--  writeRef r v = inM (writeRef r v)
 
 mop a o b = op2 o a b
 op2 f a b = op1 f a `ap` b

@@ -6,7 +6,8 @@
 
 module Control.Monad.Adaptive.CircularList where
 
-import Control.Monad.Adaptive.Ref
+import Control.Monad.Ref
+import Control.Monad
 
 newtype CircularList (m :: * -> *) r a = CL { deCL :: r (CircularList m r a, a ,CircularList m r a) }
 
@@ -47,18 +48,18 @@ update l a = do
          set l (p,a,n)
 
 val :: Ref m r => CircularList m r a -> m a
-val l = (\ (p,a,n) -> a) `fmap` get l
+val l = (\ (p,a,n) -> a) `liftM` get l
 
 next :: Ref m r => CircularList m r a -> m (CircularList m r a)
-next l = fmap (\(p,a,n) -> n) (get l)
+next l = liftM (\(p,a,n) -> n) (get l)
 
 previous :: Ref m r => CircularList m r a -> m (CircularList m r a)
-previous l = (\ (p,a,n) -> p) `fmap` get l
+previous l = (\ (p,a,n) -> p) `liftM` get l
 
 insert :: Ref m r => CircularList m r a -> a -> m (CircularList m r a)
 insert l a = do
   (p,b,n) <- get l
-  n' <- CL `fmap` newRef (l,a,n)
+  n' <- CL `liftM` newRef (l,a,n)
   set l (p,b,n')
   nl <- next n'
   (_,nb,nn) <- get nl

@@ -14,6 +14,7 @@ import Control.Monad
 import Data.Hashable
 import Data.Typeable
 import GHC.Base
+import Control.Monad.Trans
 
 import Debug.Trace
 
@@ -44,57 +45,26 @@ instance Eq MemoKey where
 		Nothing -> False
 
 class Memo a where
-	memoKey :: a -> IO MemoKey -- we need the IO to generate stable names
+	memoKey :: a -> MemoKey -- we need the IO to generate stable names
 
 instance Memo Int where
-	memoKey = return . MemoKey
+	memoKey = MemoKey
 instance Memo Bool where
-	memoKey = return . MemoKey
+	memoKey = MemoKey
 instance Memo Char where
-	memoKey = return . MemoKey
+	memoKey = MemoKey
 instance Memo String where
-	memoKey = return . MemoKey
+	memoKey = MemoKey
 instance Memo Float where
-	memoKey = return . MemoKey
+	memoKey = MemoKey
 instance Memo Double where
-	memoKey = return . MemoKey
+	memoKey = MemoKey
 
 -- for any other data type besides primitive types, use this instance
 instance (Eq a,Eq b,Typeable a,Typeable b) => Memo (Either a b) where
-		memoKey = liftM MemoKey . makeStableName
-
---class (Eq (MemoKey a),Hashable (MemoKey a)) => Memo a where
---	type family MemoKey a :: *
---	memoKey :: a -> IO (MemoKey a) -- we need the IO to generate stable names
---
---instance Memo Int where
---	type MemoKey Int = Int
---	memoKey = return
---	
---instance Memo Bool where
---	type MemoKey Bool = Bool
---	memoKey = return
---
---instance Memo Char where
---	type MemoKey Char = Char
---	memoKey = return
---
---instance Memo String where
---	type MemoKey String = String
---	memoKey = return
---
---instance Memo Float where
---	type MemoKey Float = Float
---	memoKey = return
---
---instance Memo Double where
---	type MemoKey Double = Double
---	memoKey = return
---
----- for any other data type besides primitive types, use this instance
---instance Memo (Either a b) where
---	type MemoKey (Either a b) = StableName (Either a b)
---	memoKey = makeStableName
+		memoKey = MemoKey . unsafePerformIO . makeStableName
+instance (Eq a,Eq b,Typeable a,Typeable b) => Memo (a,b) where
+		memoKey = MemoKey . unsafePerformIO . makeStableName
 	
 type SNMap k v = IOHashTable HashTable (MemoKey) v
 
@@ -140,7 +110,7 @@ table_finalizer k tbl = do
 memo' :: Memo a => Bool -> (a -> b) -> MemoTable a b -> Weak (MemoTable a b) -> a -> b
 memo' isStrict f tbl weak_tbl arg = unsafePerformIO $ do
 	let val = f arg
-	sn <- if isStrict then memoKey $! arg else memoKey arg
+	let sn = if isStrict then memoKey $! arg else memoKey arg
 	let not_found = do
 		weak <- mkWeak arg val $ Just $ finalizer arg tbl sn weak_tbl
 		trace ("memo add " ++ show sn) $ insertSNMap arg tbl sn weak
@@ -164,14 +134,14 @@ finalizer k tbl sn weak_tbl = do
 		Just mvar -> removeSNMap k tbl sn
 
 
-memoLazyM :: (HasIO m,Memo a) => (a -> m b) -> a -> m b
+memoLazyM :: (Monad m,Memo a) => (a -> m b) -> a -> m b
 memoLazyM = memoM False
 
-memoStrictM :: (HasIO m,Memo a) => (a -> m b) -> a -> m b
+memoStrictM :: (Monad m,Memo a) => (a -> m b) -> a -> m b
 memoStrictM = memoM True
 
 -- | memoizes a monad function. the difference to @memo@ is that the result @b@ is memoized, rather than the monadic computation @m b@
-memoM :: (HasIO m,Memo a) => Bool -> (a -> m b) -> a -> m b
+memoM :: (Monad m,Memo a) => Bool -> (a -> m b) -> a -> m b
 memoM isStrict (f :: a -> m b) =
 	let (tbl,weak) = unsafePerformIO $ do
 		tbl <- trace "memo new"$ newSNMap (undefined :: a)
@@ -179,30 +149,27 @@ memoM isStrict (f :: a -> m b) =
 		return (tbl,weak)
 	in memoM' isStrict f tbl weak
 
-memoM' :: (HasIO m,Memo a) => Bool -> (a -> m b) -> MemoTable a b -> Weak (MemoTable a b) -> a -> m b
+-- it is assuming that the monad itself is lazy
+memoM' :: (Monad m,Memo a) => Bool -> (a -> m b) -> MemoTable a b -> Weak (MemoTable a b) -> a -> m b
 memoM' isStrict f tbl weak_tbl arg = do
 	val <- f arg -- we need to compute the value within the monad
-	sn <- doIO $ if isStrict then memoKey $! arg else memoKey arg
-	let not_found = doIO $ do
-		weak <- mkWeak arg val $ Just $ finalizer arg tbl sn weak_tbl
-		trace ("memo add " ++ show sn) $ insertSNMap arg tbl sn weak
-		keys <- liftM (map fst) $ HashIO.toList tbl
-		return val
-	keys <- doIO $ liftM (map fst) $ HashIO.toList tbl
-	lkp <- doIO $ trace ("memo search " ++ show sn ++ " in " ++ show keys) $ lookupSNMap arg tbl sn
-	case lkp of
-		Nothing -> not_found
-		Just w -> do
-			maybe_val <- doIO $ deRefWeak w
-			case maybe_val of
-				Nothing -> not_found
-				Just val -> trace "memo hit" $ return val   
-
-class Monad m => HasIO m where
-	doIO :: IO a -> m a
-
-instance HasIO IO where
-	doIO = id
+	let res = unsafePerformIO $ do
+		let sn = if isStrict then memoKey $! arg else memoKey arg
+		let not_found = liftIO $ do
+			weak <- mkWeak arg val $ Just $ finalizer arg tbl sn weak_tbl
+			trace ("memo add " ++ show sn) $ insertSNMap arg tbl sn weak
+			keys <- liftM (map fst) $ HashIO.toList tbl
+			return val
+		keys <- liftIO $ liftM (map fst) $ HashIO.toList tbl
+		lkp <- liftIO $ trace ("memo search " ++ show sn ++ " in " ++ show keys) $ lookupSNMap arg tbl sn
+		case lkp of
+			Nothing -> not_found
+			Just w -> do
+				maybe_val <- liftIO $ deRefWeak w
+				case maybe_val of
+					Nothing -> not_found
+					Just val -> trace "memo hit" $ return val
+	return res
 
 
 

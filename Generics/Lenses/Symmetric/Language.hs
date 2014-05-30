@@ -7,18 +7,8 @@ import qualified Control.Monad.State as State
 import Control.Monad.Trans.Class
 import Control.Monad
 import GHC.InOut
+import Control.Monad.Box
 
-import Data.Functor.Identity
-
-class Monad m => Box f m where
-	box :: c -> m (f c)
-	unbox :: f c -> m c
-	inbox :: f c -> (c -> m c) -> m (f c)
-
-instance Monad m => Box Identity m where
-	box = return . Identity
-	unbox = return . runIdentity
-	inbox (Identity x) f = liftM Identity $ f x
 
 -- * Asymmetric Lenses
 
