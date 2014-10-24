@@ -1,0 +1,45 @@
+name:                 syb-with-class-and-effects
+version:              0.3.7
+license:              BSD3
+license-file:         LICENSE
+author:               Ralf Lammel, Simon Peyton Jones, Jose Pedro Magalhaes
+maintainer:           generics@haskell.org
+homepage:             http://www.cs.uu.nl/wiki/GenericProgramming/SYB
+bug-reports:          http://code.google.com/p/scrapyourboilerplate/issues/list
+synopsis:             Scrap Your Boilerplate
+description:
+    This package contains the generics system described in the
+    /Scrap Your Boilerplate/ papers (see 
+    <http://www.cs.uu.nl/wiki/GenericProgramming/SYB>).
+    It defines the @Data@ class of types permitting folding and unfolding
+    of constructor applications, instances of this class for primitive
+    types, and a variety of traversals.
+
+category:               Generics
+stability:              provisional
+build-type:             Custom
+cabal-version:          >= 1.6
+
+extra-source-files:     tests/*.hs,
+                        README
+
+Library {
+  hs-source-dirs:         src
+  build-depends:          base >= 4.0 && < 5.0, transformers >= 0.4.1.0, ghc-prim, derive >= 2.5.17, containers >= 0.5.5.1, syb-with-class >= 0.6.1.5, syb >= 0.4.1, template-haskell >= 2.9, mtl, haskell-src-exts >= 1.16.0
+  exposed-modules:        Data.WithClass.MData,
+                          Data.WithClass.Derive.MData
+                          Data.WithClass.Derive.DeepTypeable
+                          Data.WithClass.MGenerics
+                          Data.WithClass.MGenerics.Aliases
+                          Data.WithClass.MGenerics.Instances
+                          Data.WithClass.MGenerics.Schemes
+                          Data.WithClass.MGenerics.Text
+                          Data.DeepTypeable
+
+  extensions:             CPP, RankNTypes, ScopedTypeVariables
+
+  if impl(ghc < 6.12) 
+    ghc-options:          -package-name syb-with-class-and-effects
+  
+  ghc-options:            -Wall
+}

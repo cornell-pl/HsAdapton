@@ -1,0 +1,52 @@
+Name:            adapton
+Version:         0.0.1
+License:         BSD3
+License-file:    LICENSE
+Author:          Hugo Pacheco <hpacheco@cs.cornell.edu>
+Maintainer:      Hugo Pacheco <hpacheco@cs.cornell.edu>
+Synopsis:        Demand-driven incremental computation library
+Description:
+	
+Homepage:        
+
+Category: Generics, Lenses
+
+extra-source-files: 
+
+Build-type: Simple
+Cabal-Version:  >= 1.4
+
+Library
+  GHC-Options: -O3 -fforce-recomp
+  Hs-Source-Dirs: .
+  Build-Depends:        random, base >= 4.3 && < 5, mtl >= 2.1.2, template-haskell >= 2.7.0.0, containers >= 0.4.2.1, ghc-prim >= 0.2.0.0, QuickCheck >= 2.7, transformers >= 0.3.0.0, split >= 0.2.2, safe >= 0.3.3, hashtables, primitive, hashable, ref-fd, syb-with-class-and-effects, directory, filepath, process, derive, text, graphviz >= 2999.17.0.1, uuid, deepseq, strict
+  exposed-modules:
+    Data.Strict.List
+    Control.Monad.Incremental.List
+    Control.Monad.Incremental.Tree
+    Control.Monad.Incremental.Adapton
+    Control.Monad.Incremental.Adapton.Algorithm
+    Control.Monad.Incremental.Adapton.Display
+    Control.Monad.Incremental.Adapton.Draw
+    Control.Monad.Incremental.Adapton.Layers
+    Control.Monad.Incremental.Adapton.Memo
+    Control.Monad.Incremental.Adapton.Types
+    Control.Monad.Incremental.LazyNonInc
+    Control.Monad.Incremental.LazyNonInc.Algorithm
+    Control.Monad.Incremental.LazyNonInc.Display
+    Control.Monad.Incremental.LazyNonInc.Layers
+    Control.Monad.Incremental.LazyNonInc.Memo
+    Control.Monad.Incremental.LazyNonInc.Types
+    Control.Monad.Incremental.Display
+    Control.Monad.Incremental.Draw
+    Control.Monad.Incremental.Generics
+    Control.Monad.Incremental
+    Control.Monad.Lazy
+    System.Mem.MemoTable
+    System.Mem.WeakTable
+    System.Mem.WeakSet
+    System.Mem.WeakRef
+  Other-modules: Debug
+
+  extensions: 
+    ViewPatterns, TypeFamilies, TypeOperators, FlexibleContexts, Rank2Types, TemplateHaskell, FlexibleInstances, UndecidableInstances
