@@ -80,19 +80,19 @@ drawnDependents = unsafePerformIO $ newIORef []
 drawnDependencies :: IORef [String]
 drawnDependencies = unsafePerformIO $ newIORef []
 
-checkDrawnDependencies :: MonadIO m => String -> m [a] -> m [a]
+checkDrawnDependencies :: (Layer l inc r m,MonadIO m) => String -> l inc r m [a] -> l inc r m [a]
 checkDrawnDependencies node m = do
-	nodes <- liftIO $ readIORef drawnDependencies
+	nodes <- inL $ liftIO $ readIORef drawnDependencies
 	if node `elem` nodes
 		then return []
-		else liftIO (writeIORef drawnDependencies (node:nodes)) >> m
+		else inL (liftIO (writeIORef drawnDependencies (node:nodes))) >> m
 
-checkDrawnDependents :: MonadIO m => String -> m [a] -> m [a]
+checkDrawnDependents :: (Layer l inc r m,MonadIO m) => String -> l inc r m [a] -> l inc r m [a]
 checkDrawnDependents node m = do
-	nodes <- liftIO $ readIORef drawnDependents
+	nodes <- inL $ liftIO $ readIORef drawnDependents
 	if node `elem` nodes
 		then return []
-		else liftIO (writeIORef drawnDependents (node:nodes)) >> m
+		else inL (liftIO (writeIORef drawnDependents (node:nodes))) >> m
 
 resetDrawnNodes :: MonadIO m => m ()
 resetDrawnNodes = liftIO $ writeIORef drawnDependencies [] >> writeIORef drawnDependents []

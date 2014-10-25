@@ -53,7 +53,7 @@ import Debug
 drawAdaptonProxy :: Proxy r -> Proxy m -> Proxy (DrawDict Adapton r m)
 drawAdaptonProxy r m = Proxy
 
-instance (MonadRef r m,MonadIO m,Eq a,Layer l Adapton r m,MData (DrawDict Adapton r m) (Outer r m) a,Input M l Adapton r m) => Draw Adapton r m (M l Adapton r m a) where
+instance (MonadRef r m,MonadIO m,Eq a,Layer l inc r m,MData (DrawDict inc r m) (Outside inc r m) a,Input M l inc r m) => Draw inc r m (M l inc r m a) where
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idNM $ metaM t
 		let thunkNode = mNode thunkID
@@ -63,7 +63,7 @@ instance (MonadRef r m,MonadIO m,Eq a,Layer l Adapton r m,MData (DrawDict Adapto
 		dependendentEdges <- drawDependents thunkID (dependentsNM $ metaM t)
 		return ([thunkID],DN thunkNode : childrenEdges ++ dependendentEdges ++ SG childrenRank : childrenDot)
 
-instance (Input L l Adapton r m,MonadRef r m,MonadIO m,Eq a,Layer l Adapton r m,MData (DrawDict Adapton r m) (Outer r m) a) => Draw Adapton r m (L l Adapton r m a) where
+instance (Input L l inc r m,MonadRef r m,MonadIO m,Eq a,Layer l inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m (L l inc r m a) where
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idNM $ metaL t
 		isUnevaluated <- isUnevaluatedL t
@@ -78,7 +78,7 @@ instance (Input L l Adapton r m,MonadRef r m,MonadIO m,Eq a,Layer l Adapton r m,
 				return ([thunkID],DN thunkNode : childrenEdges ++ dependentEdges ++ SG childrenRank : childrenDot)
 
 -- we do not draw any dependencies from thunks, since we assume that they have all already been drawn by following the dependents of modifiables
-instance (MonadRef r m,MonadIO m,Eq a,Layer l Adapton r m,Output U l Adapton r m,MData (DrawDict Adapton r m) (Outer r m) a) => Draw Adapton r m (U l Adapton r m a) where
+instance (MonadRef r m,MonadIO m,Eq a,Layer l inc r m,Output U l inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m (U l inc r m a) where
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idNM $ metaU t
 		isDirtyUnevaluated <- isDirtyUnevaluatedU t
@@ -98,35 +98,35 @@ instance (MonadRef r m,MonadIO m,Eq a,Layer l Adapton r m,Output U l Adapton r m
 				return ([thunkID],DN thunkNode : childrenEdges ++ dependentEdges ++ dependencyEdges ++ SG childrenRank : childrenDot)
 			Nothing -> return ([thunkID],[DN thunkNode])
 
-drawDependents :: (MonadRef r m,MonadIO m) => String -> Dependents inc r m -> Outer r m [DotStatement String]
-drawDependents fromID deps = checkDrawnDependents fromID $ liftM (concat . SList.toList) $ WeakSet.mapM' (drawDependent fromID) deps
-drawDependent :: (MonadRef r m,MonadIO m) => String -> Weak (Dependent inc r m) -> Outer r m [DotStatement String]
+drawDependents :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Dependents inc r m -> Outside inc r m [DotStatement String]
+drawDependents fromID deps = checkDrawnDependents fromID $ liftM (concat . SList.toList) $ WeakSet.mapM'' (inL . liftIO) (drawDependent fromID) deps
+drawDependent :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Weak (Dependent inc r m) -> Outside inc r m [DotStatement String]
 drawDependent fromID weak = do
-	mb <- liftIO $ deRefWeak weak
+	mb <- inL $ liftIO $ deRefWeak weak
 	case mb of
 		Just (Dependency (srcMetaW,dirtyW,checkW,tgtMetaW)) -> do
 			let ithunkID = show $ hashUnique $ idNM tgtMetaW
 			let ithunkNode = iuNode ithunkID
 			edges <- drawDependents ithunkID (dependentsNM tgtMetaW)
 			edges' <- drawDependencies ithunkID tgtMetaW -- recursive dependencies
-			isDirty <- readRef dirtyW
+			isDirty <- inL $ readRef dirtyW
 			return $ DN ithunkNode : DE (dependentEdge isDirty fromID ithunkID) : edges ++ edges'
 		Nothing -> 	do
 			let deadNodeID = "DEAD_WEAK "
 			return [DN (deadNode deadNodeID),DE (dependentEdge False fromID deadNodeID)]
 
-drawDependencies :: (MonadRef r m,MonadIO m) => String -> NodeMeta inc r m -> Outer r m [DotStatement String]
+drawDependencies :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> NodeMeta inc r m -> Outside inc r m [DotStatement String]
 drawDependencies toID meta = return [] --checkDrawnDependencies toID $ do
 --	mb <- inL $ applyUDataOp (uDataOpUM meta) Nothing (liftM Just . getDependencies) -- recursive dependents
 --	case mb of
 --		Nothing -> return []
 --		Just deps -> drawDependencies' toID deps
-drawDependencies' :: (MonadRef r m,MonadIO m) => String -> Dependencies inc r m -> Outer r m [DotStatement String]
+drawDependencies' :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Dependencies inc r m -> Outside inc r m [DotStatement String]
 drawDependencies' toID = liftM concat . mapM (drawDependency toID) 
-drawDependency :: (MonadRef r m,MonadIO m) => String -> (Dependency inc r m,IO ()) -> Outer r m [DotStatement String]
+drawDependency :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> (Dependency inc r m,IO ()) -> Outside inc r m [DotStatement String]
 drawDependency toID ((Dependency (srcMeta,dirty,check,tgtMeta)),_) = do
 	let ithunkID = show $ hashUnique $ idNM srcMeta
-	isDirty <- readRef dirty
+	isDirty <- inL $ readRef dirty
 	edges <- drawDependents ithunkID (dependentsNM srcMeta)
 	edges' <- drawDependencies ithunkID srcMeta -- recursive dependencies
 	return $ DE (dependencyEdge isDirty toID ithunkID) : edges ++ edges'

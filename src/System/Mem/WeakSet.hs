@@ -1,8 +1,8 @@
-{-# LANGUAGE BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module System.Mem.WeakSet (
 	  WeakSet(..)
-	, new, purge, insertWeak, mapM_, mapM', mapPurgeM_,toList
+	, new, purge, insertWeak, mapM_, mapM',mapM'', mapPurgeM_,toList
 	) where
 
 -- | Implementation of memo tables using hash tables and weak pointers as presented in http://community.haskell.org/~simonmar/papers/weak.pdf.
@@ -71,6 +71,10 @@ mapIORefM_ f r = readIORef r >>= f >>= writeIORef r
 {-# INLINE mapM' #-}
 mapM' :: MonadIO m => (Weak v -> m a) -> WeakSet v -> m (SList a)
 mapM' f tbl = liftIO (readIORef tbl) >>= SList.mapM f
+
+{-# INLINE mapM'' #-}
+mapM'' :: Monad m => (forall x . IO x -> m x) -> (Weak v -> m a) -> WeakSet v -> m (SList a)
+mapM'' liftIO f tbl = liftIO (readIORef tbl) >>= SList.mapM f
 
 {-# INLINE mapPurgeM_ #-}
 mapPurgeM_ :: MonadIO m => (v -> m ()) -> WeakSet v -> m ()

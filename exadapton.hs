@@ -48,7 +48,7 @@ import Control.Monad.Incremental.Tree
 --import Criterion.Main hiding (run)
 --import Criterion.Types
 
-import Debug
+--import Debug
 
 -- * Generic modifiable lists and list operations
 

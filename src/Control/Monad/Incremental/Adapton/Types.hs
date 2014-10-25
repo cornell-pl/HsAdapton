@@ -219,3 +219,4 @@ mapRefM_ f r = readRef r >>= f >>= writeRef r
 
 --intMapM_ :: Monad m => (a -> m ()) -> IntMap a -> m ()
 --intMapM_ f = IntMap.foldr (\a m -> f a >> m) (return ())
+

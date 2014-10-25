@@ -273,3 +273,15 @@ instance DeepTypeable Outside where
 
 proxyInside = (Proxy::Proxy Inside)
 proxyOutside = (Proxy::Proxy Outside)
+
+-- | A plain thunk type with sharing but is not mutable nor incrementally updated
+newtype T (l :: * -> (* -> *) -> (* -> *) -> * -> *) inc (r :: * -> *) (m :: * -> *) a = T (r (l inc r m a))
+
+instance (Layer l inc r m) => Thunk T l inc r m where
+	new m = liftM T $ inL $ newRef m
+	read (T r) =  do
+		m <- inL $ readRef r
+		x <- m
+		inL $ writeRef r $ return x
+		return x
+
