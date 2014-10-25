@@ -2,7 +2,7 @@
 
 module Control.Monad.Incremental.Adapton.Memo (
 	memoNonRecU, Memo(..), Hashable(..)
-	, GenericQMemoU(..),MemoCtx(..),Sat(..),gmemoNonRecU,proxyMemoCtx
+	, GenericQMemoU(..),MemoCtx(..),Sat(..),gmemoNonRecU,proxyMemoCtx,NewGenericQ(..),NewGenericQMemo(..),NewGenericQMemoU(..)
 	) where
 
 import System.Mem.WeakRef as WeakRef
@@ -33,12 +33,20 @@ import Data.WithClass.MGenerics.Aliases
 
 type GenericQMemoU ctx l inc r m b = GenericQMemo ctx U l inc r m b
 
+-- | An encapsulated generic query
+newtype NewGenericQ ctx m b = NewGenericQ { unNewGenericQ :: GenericQ ctx m b }
+
+type NewGenericQMemo ctx (thunk :: (* -> (* -> *) -> (* -> *) -> * -> *) -> * -> (* -> *) -> (* -> *) -> * -> *) l inc r m b = NewGenericQ (MemoCtx ctx) (l inc r m) (thunk l inc r m b)
+type NewGenericQMemoU ctx l inc r m b = NewGenericQMemo ctx U l inc r m b
+
+-- The Haskell type system is very reluctant to accept this type signature, so we need a newtype to work around it
 gmemoNonRecU :: (MonadRef r m,MonadIO m,Layer Inside inc r m) => Proxy ctx -> GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b
-gmemoNonRecU ctx f = gmemoNonRecU' ctx f (unsafePerformIO $ debug "NewTable!!" $ WeakTable.newFor f)
+gmemoNonRecU ctx f = unNewGenericQ (newGmemoNonRecU ctx (NewGenericQ f)) where
+	newGmemoNonRecU ctx f = gmemoNonRecU' ctx f (unsafePerformIO $ debug "NewTable!!" $ WeakTable.newFor f)
 
 -- | memoizes a generic function on values
-gmemoNonRecU' :: (MonadRef r m,MonadIO m,Layer Inside inc r m) => Proxy ctx -> GenericQMemoU ctx Inside inc r m b -> MemoTable (TypeRep,KeyDynamic) (U Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
-gmemoNonRecU' ctx (GenericQMemo f) tbl = GenericQMemo $ \arg -> do
+gmemoNonRecU' :: (MonadRef r m,MonadIO m,Layer Inside inc r m) => Proxy ctx -> NewGenericQMemoU ctx Inside inc r m b -> MemoTable (TypeRep,KeyDynamic) (U Inside inc r m b) -> NewGenericQMemoU ctx Inside inc r m b
+gmemoNonRecU' ctx (NewGenericQ f) tbl = NewGenericQ $ \arg -> do
 	let (mkWeak,k) = memoKeyCtx dict ctx $! arg
 	let tyk = (typeRepOf arg,keyDynamicCtx dict ctx (proxyOf arg) k)
 	lkp <- debug ("memo search "++show tyk) $ inL $ liftIO $ WeakTable.lookup tbl tyk

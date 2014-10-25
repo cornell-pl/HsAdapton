@@ -256,7 +256,10 @@ memoU :: (MonadIO m,Eq a,Output U Inside inc r m,Memo arg) => ((arg -> Inside in
 memoU f = let memo_func = memoNonRecU (thunk . f memo_func) in memo_func
 
 gmemoQU :: (Eq b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
-gmemoQU ctx f = let memo_func = gmemoNonRecU ctx (f memo_func) in memo_func
+gmemoQU ctx (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b)) =
+	let memo_func :: GenericQMemoU ctx Inside inc r m b
+	    memo_func = gmemoNonRecU ctx (f memo_func)
+	in memo_func
 
 -- * Strict modifiables
 

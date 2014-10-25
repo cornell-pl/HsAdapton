@@ -119,7 +119,10 @@ class (Thunk mod l inc r m,Layer l inc r m) => Output mod l inc r m where
 	
 	-- | fix-point memoization for incremental generic queries
 	gmemoQ :: (Eq b) => Proxy ctx -> (GenericQMemo ctx mod l inc r m b -> GenericQMemo ctx mod l inc r m b) -> GenericQMemo ctx mod l inc r m b
-	gmemoQ ctx f = let memo_func = (f memo_func) in memo_func
+	gmemoQ ctx (f :: GenericQMemo ctx mod l inc r m b -> GenericQMemo ctx mod l inc r m b) =
+		let memo_func :: GenericQMemo ctx mod l inc r m b
+		    memo_func = f memo_func
+		in memo_func
 	{-# INLINE gmemoQ #-}
 
 -- | Input modifiable references (can be directly mutated; are NOT updated for changes on other thunks/modifiables)
@@ -150,7 +153,6 @@ class (Thunk mod l inc r m,Layer l inc r m) => Input mod l inc r m where
 	{-# INLINE modify #-}
 	modify :: (Eq a,Layer Outside inc r m) => mod l inc r m a -> (a -> l inc r m a) -> Outside inc r m ()
 	modify = \m f -> getOutside m >>= overwrite m . f
-	
 
 	{-# INLINE refOutside #-}
 	refOutside :: (Eq a) => a -> Outside inc r m (mod l inc r m a)
@@ -226,7 +228,7 @@ instance Memo (Outside incr r m a) where
 	memoKey m = (MkWeak mkDeadWeak,Neq)
 
 -- | A generic query type with a memoization context
-newtype GenericQMemo ctx (thunk :: (* -> (* -> *) -> (* -> *) -> * -> *) -> * -> (* -> *) -> (* -> *) -> * -> *) l inc r m b = GenericQMemo { unGenericQMemo :: GenericQ (MemoCtx ctx) (l inc r m) (thunk l inc r m b) }
+type GenericQMemo ctx (thunk :: (* -> (* -> *) -> (* -> *) -> * -> *) -> * -> (* -> *) -> (* -> *) -> * -> *) l inc r m b = GenericQ (MemoCtx ctx) (l inc r m) (thunk l inc r m b)
 
 -- | A generic memoization context type
 data MemoCtx ctx a = MemoCtx {

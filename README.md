@@ -10,4 +10,4 @@ To install:
 * cabal install adapton.cabal
 
 To test:
-* ghci exadapton.hs -isrc
+* ghci exadapton.hs

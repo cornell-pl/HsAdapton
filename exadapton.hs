@@ -476,23 +476,23 @@ testNonIncTreeM' s t (chg:chgs) = do
 --	drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
 	testNonIncTreeM' s t chgs
 
-testNonIncU :: (ListLazyNonIncU Inside IORef IO Int -> Inside LazyNonInc IORef IO (LazyNonIncU Inside LazyNonInc IORef IO Int)) -> ([Int],[ListChange Int]) -> Int -> Outside LazyNonInc IORef IO (Double,Double,Double)
-testNonIncU f (xs,chgs) runs = do
-	(scratch,(s,t)) <- timeLazyNonIncOuterT $ do
-		s :: ListLazyNonIncU Inside IORef IO Int <- toListRefInside xs
-		t :: LazyNonIncU Inside LazyNonInc IORef IO Int <- inside $ f s
-		!() <- rnfInc t
-		return (s,t)
-	(dirty,propagate) <- testNonIncU' s t chgs
-	return (scratch,dirty / toEnum runs,propagate / toEnum runs)
-
-testNonIncU' :: ListLazyNonIncU Inside IORef IO Int -> LazyNonIncU Inside LazyNonInc IORef IO Int -> [ListChange Int] -> Outside LazyNonInc IORef IO (Double,Double)
-testNonIncU' s t [] = return (0,0)
-testNonIncU' s t (chg:chgs) = do
-	(dirty,()) <- timeLazyNonIncOuterT $ applyListChange chg s
-	(propagate,()) <- timeLazyNonIncOuterT $ rnfInc t
-	(dirty',propagate') <- testNonIncU' s t chgs
-	return (dirty+dirty',propagate+propagate')
+--testNonIncU :: (ListLazyNonIncU Inside IORef IO Int -> Inside LazyNonInc IORef IO (LazyNonIncU Inside LazyNonInc IORef IO Int)) -> ([Int],[ListChange Int]) -> Int -> Outside LazyNonInc IORef IO (Double,Double,Double)
+--testNonIncU f (xs,chgs) runs = do
+--	(scratch,(s,t)) <- timeLazyNonIncOuterT $ do
+--		s :: ListLazyNonIncU Inside IORef IO Int <- toListRefInside xs
+--		t :: LazyNonIncU Inside LazyNonInc IORef IO Int <- inside $ f s
+--		!() <- rnfInc t
+--		return (s,t)
+--	(dirty,propagate) <- testNonIncU' s t chgs
+--	return (scratch,dirty / toEnum runs,propagate / toEnum runs)
+--
+--testNonIncU' :: ListLazyNonIncU Inside IORef IO Int -> LazyNonIncU Inside LazyNonInc IORef IO Int -> [ListChange Int] -> Outside LazyNonInc IORef IO (Double,Double)
+--testNonIncU' s t [] = return (0,0)
+--testNonIncU' s t (chg:chgs) = do
+--	(dirty,()) <- timeLazyNonIncOuterT $ applyListChange chg s
+--	(propagate,()) <- timeLazyNonIncOuterT $ rnfInc t
+--	(dirty',propagate') <- testNonIncU' s t chgs
+--	return (dirty+dirty',propagate+propagate')
 
 
 applyListChange :: (Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m)
@@ -628,5 +628,5 @@ sumTree :: (MData (MemoCtx NoCtx) (Inside inc r m) (TreeMod mod Inside inc r m I
 sumTree = gsumInc
 
 listifyTree :: (MData (MemoCtx NoCtx) (Inside inc r m) (TreeMod mod Inside inc r m Int),Output U Inside inc r m,MonadIO m) => TreeMod mod Inside inc r m Int -> Inside inc r m (JoinListMod U Inside inc r m Int)
-listifyTree = unGenericQMemo $ listifyInc proxyNoCtx (\(i::Int) -> return True)
+listifyTree = listifyInc proxyNoCtx (\(i::Int) -> return True)
 
