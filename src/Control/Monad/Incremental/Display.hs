@@ -34,6 +34,13 @@ type DisplayS l inc (r :: * -> *) (m :: * -> *) = String -> l inc r m String
 class (Layer l inc r m) => Display l inc r m a where
 	displaysPrec :: a -> DisplayS l inc r m
 
+instance Display Inside inc r m a => Display Inside inc r m (Inside inc r m a) where
+		displaysPrec m rest = m >>= flip displaysPrec rest
+instance Display Outside inc r m a => Display Outside inc r m (Outside inc r m a) where
+	displaysPrec m rest = m >>= flip displaysPrec rest
+instance Display Outside inc r m a => Display Outside inc r m (Inside inc r m a) where
+	displaysPrec m rest = inside m >>= flip displaysPrec rest
+
 instance Layer l inc r m => Display l inc r m Char where
 	displaysPrec i rest = return $ show i++rest
 
