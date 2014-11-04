@@ -1,4 +1,6 @@
-{-# LANGUAGE RankNTypes, MagicHash, UnboxedTuples #-}
+{-# LANGUAGE UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, RankNTypes, MagicHash, UnboxedTuples #-}
+
+-- A class to avoid early finalization of weak pointers.
 
 -- Important note from the documentation of System.Mem.Weak:
 -- Finalizers can be used reliably for types that are created explicitly and have identity, such as IORef and MVar. However, to place a finalizer on one of these types, you should use the specific operation provided for that type, e.g. mkWeakIORef and addMVarFinalizer respectively (the non-uniformity is accidental). These operations attach the finalizer to the primitive object inside the box (e.g. MutVar# in the case of IORef), because attaching the finalizer to the box itself fails when the outer box is optimised away by the compiler.
@@ -11,6 +13,7 @@ import GHC.Weak
 import GHC.Base
 import Control.Monad.Ref
 import System.Mem.Weak as Weak
+import Control.Monad.Reader
 
 mkWeakWithIORefKey :: IORef a -> b -> IO () -> IO (Weak b)
 mkWeakWithIORefKey k@(IORef (STRef r#)) v f = IO $ \s ->
@@ -52,4 +55,9 @@ orMkWeak (MkWeak mkWeak1) (MkWeak mkWeak2) = MkWeak $ \v f -> do
 	mkWeak2 v Nothing -- the first reference cannot be dead unless the second one is, due to the value dependencies
 	return w1
 
+instance (MonadRef r m) => MonadRef r (ReaderT a m) where
+	readRef r = lift $ readRef r
+	newRef x = lift $ newRef x
+	writeRef r x = lift $ writeRef r x
 
+	

@@ -6,6 +6,7 @@ import Control.Monad
 import System.IO.Unsafe
 import Control.Monad.IO.Class
 import Control.Monad.Identity
+import Control.Monad.Reader as Reader
 
 -- | Don't specify non-default instances of this class unless you really really know what you are doing!
 class Monad m => MonadLazy m where
@@ -19,3 +20,7 @@ class Monad m => MonadLazy m where
 instance MonadLazy IO where
 	lazily = unsafeInterleaveIO
 	anytime = return . unsafePerformIO
+
+instance MonadLazy m => MonadLazy (Reader.ReaderT r m) where
+	lazily = Reader.mapReaderT lazily
+	anytime = Reader.mapReaderT anytime

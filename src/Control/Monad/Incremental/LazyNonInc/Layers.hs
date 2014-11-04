@@ -28,9 +28,10 @@ instance (MonadRef r m,WeakRef r) => Incremental LazyNonInc r m where
 	world = LazyNonIncOuter . runLazyNonIncInner
 	{-# INLINE world #-}
 	
-	data IncrementalArgs LazyNonInc = LazyNonIncArgs
+--	data IncrementalArgs LazyNonInc = LazyNonIncArgs
 	
-	runIncremental _ (LazyNonIncOuter m) = m
+--	runIncremental _ (LazyNonIncOuter m) = m
+	runIncremental = runLazyNonIncOuter
 	{-# INLINE runIncremental #-}
 
 instance MonadTrans (Outside LazyNonInc r) where

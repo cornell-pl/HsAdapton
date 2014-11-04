@@ -61,22 +61,22 @@ table_finalizer tbl = do
 	sequence_ [ Weak.finalize w | (_,w) <- pairs ]
 
 {-# INLINE insert #-}
-insert :: (Show k,Eq k,Hashable k) => WeakTable k v -> k -> v -> IO ()
+insert :: (Eq k,Hashable k) => WeakTable k v -> k -> v -> IO ()
 insert tbl k v = System.Mem.WeakTable.insertWith tbl k k v
 
 -- | the key @k@ stores the entry for the value @a@ in the table
-insertWith :: (Show k,Eq k,Hashable k) => WeakTable k v -> a -> k -> v -> IO ()
+insertWith :: (Eq k,Hashable k) => WeakTable k v -> a -> k -> v -> IO ()
 insertWith w_tbl@(WeakTable (tbl,weak_tbl)) a k v = do
 	weak <- Weak.mkWeak a v $ Just $ System.Mem.WeakTable.finalize w_tbl k
 	HashIO.insert tbl k weak
 
-insertWithMkWeak :: (Show k,Eq k,Hashable k) => WeakTable k v -> MkWeak -> k -> v -> IO ()
+insertWithMkWeak :: (Eq k,Hashable k) => WeakTable k v -> MkWeak -> k -> v -> IO ()
 insertWithMkWeak w_tbl@(WeakTable (tbl,weak_tbl)) (MkWeak mkWeak) k v = do
 	weak <- mkWeak v $ Just $ System.Mem.WeakTable.finalize w_tbl k
 	HashIO.insert tbl k weak
 
 -- | @insertWith@ that uses a reference as key
-insertWithRefKey :: (Show k,Eq k,Hashable k,WeakRef r) => WeakTable k v -> r a -> k -> v -> IO ()
+insertWithRefKey :: (Eq k,Hashable k,WeakRef r) => WeakTable k v -> r a -> k -> v -> IO ()
 insertWithRefKey w_tbl@(WeakTable (tbl,weak_tbl)) a k v = do
 	weak <- WeakRef.mkWeakWithRefKey a v $ Just $ System.Mem.WeakTable.finalize w_tbl k
 	HashIO.insert tbl k weak
@@ -87,7 +87,7 @@ insertWithRefKey w_tbl@(WeakTable (tbl,weak_tbl)) a k v = do
 --	HashIO.insert tbl k weak
 --	Weak.addFinalizer a $ System.Mem.WeakTable.finalize w_tbl k
 
-finalize :: (Show k,Eq k,Hashable k) => WeakTable k b -> k -> IO ()
+finalize :: (Eq k,Hashable k) => WeakTable k b -> k -> IO ()
 finalize (WeakTable (tbl,weak_tbl)) k = do
 --	putStrLn $ "finalized " ++ show k
 	r <- Weak.deRefWeak weak_tbl

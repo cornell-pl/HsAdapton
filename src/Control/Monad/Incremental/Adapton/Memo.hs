@@ -52,15 +52,10 @@ gmemoNonRecU' ctx (NewGenericQ f) tbl = NewGenericQ $ \arg -> do
 	lkp <- debug ("memo search "++show tyk) $ inL $ liftIO $ WeakTable.lookup tbl tyk
 	case lkp of
 		Nothing -> do
-			let finalizethunk = WeakTable.finalize tbl tyk
 			thunk <- f arg
-			let thunkmemo = addFinalizerU thunk (liftIO finalizethunk)
 			inL $ liftIO $ WeakTable.insertWithMkWeak tbl mkWeak tyk thunk
-			debug (show tyk ++" => "++show thunk) $ return thunkmemo
-		Just thunk -> debug ("memo hit "++show tyk ++ " " ++ show thunk) $ do
-			let finalizethunk = WeakTable.finalize tbl tyk
-			let thunkmemo = addFinalizerU thunk (liftIO finalizethunk)
-			return thunkmemo
+			debug (show tyk ++" => "++show thunk) $ return thunk
+		Just thunk -> debug ("memo hit "++show tyk ++ " " ++ show thunk) $ return thunk
 
 -- *		
 
@@ -73,19 +68,13 @@ memoNonRecU' :: (MonadRef r m,MonadIO m,Memo a,Layer Inside inc r m) => (a -> In
 memoNonRecU' f tbl arg = do
 		let (mkWeak,k) = memoKey $! arg
 		lkp <- debug ("memo search with key " ++ show k) $ do
---			inL $ liftIO $ WeakTable.debugWeakTable tbl
 			inL $ liftIO $ WeakTable.lookup tbl k
 		case lkp of
 			Nothing -> do
-				let finalizethunk = WeakTable.finalize tbl k
 				thunk <- f arg
-				let thunkmemo = addFinalizerU thunk (liftIO finalizethunk) -- change thunk so that whenever it is modified directly (by set), its memo table entry is removed
 				inL $ liftIO $ WeakTable.insertWithMkWeak tbl mkWeak k thunk
-				debug (show k ++" => "++show thunk) $ return thunkmemo
-			Just thunk -> debug ("memoM hit " ++show k ++ " " ++ show thunk) $ do
-				let finalizethunk = WeakTable.finalize tbl k
-				let thunkmemo = addFinalizerU thunk (liftIO finalizethunk) -- change thunk so that whenever it is modified directly (by set), its memo table entry is removed
-				return thunkmemo
+				debug (show k ++" => "++show thunk) $ return thunk
+			Just thunk -> debug ("memoM hit " ++show k ++ " " ++ show thunk) $ return thunk
 
 instance WeakRef r => Memo (M l inc r m a) where
 	type Key (M l inc r m a) = Unique

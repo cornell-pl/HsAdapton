@@ -19,9 +19,10 @@ Cabal-Version:  >= 1.4
 Library
   GHC-Options: -O3 -fforce-recomp
   Hs-Source-Dirs: src
-  Build-Depends:        random, base >= 4.3 && < 5, mtl >= 2.1.2, template-haskell >= 2.7.0.0, containers >= 0.4.2.1, ghc-prim >= 0.2.0.0, QuickCheck >= 2.7, transformers >= 0.3.0.0, split >= 0.2.2, safe >= 0.3.3, hashtables, primitive, hashable, ref-fd, syb-with-class-and-effects, directory, filepath, process, derive, text, graphviz >= 2999.17.0.1, uuid, deepseq, strict
+  Build-Depends:        stm, abstract-deque, concurrent-extra, time, exceptions, ctrie, random, base >= 4.3 && < 5, mtl >= 2.1.2, template-haskell >= 2.7.0.0, containers >= 0.4.2.1, ghc-prim >= 0.2.0.0, QuickCheck >= 2.7, transformers >= 0.3.0.0, split >= 0.2.2, safe >= 0.3.3, hashtables, primitive, hashable, ref-fd, syb-with-class-and-effects, directory, filepath, process, derive, text, graphviz >= 2999.17.0.1, uuid, deepseq, strict
   exposed-modules:
     Data.Strict.List
+    Data.Strict.Maybe
     Control.Monad.Incremental.List
     Control.Monad.Incremental.Tree
     Control.Monad.Incremental.Adapton
@@ -41,6 +42,12 @@ Library
     Control.Monad.Incremental.Draw
     Control.Monad.Incremental.Generics
     Control.Monad.Incremental
+    Control.Monad.Transactional
+    Control.Monad.Transactional.TxAdapton
+    Control.Monad.Transactional.TxAdapton.Algorithm
+    Control.Monad.Transactional.TxAdapton.Layers
+    Control.Monad.Transactional.TxAdapton.Memo
+    Control.Monad.Transactional.TxAdapton.Types
     Control.Monad.Lazy
     System.Mem.MemoTable
     System.Mem.WeakTable
@@ -49,4 +56,3 @@ Library
   Other-modules: Debug
 
   extensions: 
-    ViewPatterns, TypeFamilies, TypeOperators, FlexibleContexts, Rank2Types, TemplateHaskell, FlexibleInstances, UndecidableInstances

@@ -144,13 +144,14 @@ data LData l inc (r :: * -> *) (m :: * -> *) a =
 
 -- * Common metadata for all kinds of nodes
 
+-- the only mutable information about a node are the dependents
 newtype NodeMeta inc (r :: * -> *) (m :: * -> *) = NodeMeta (
 		Unique
 	,	Dependents inc r m -- list of dependents; we purge the list at finalization time
 	,	m () -- function that dirties the corresponding value (thunks only)
 	,	m () -- function that forgets all the old cached thunk data (thunks only)
 	,   Maybe (Creator inc r m) -- the parent thunk under which the reference was created (modifiables only)
-	,	UDataOp inc r m -- generic polymorphic function over the data (thunks only)
+	,	UDataOp inc r m -- generic polymorphic function over the data (thunks only) (used only for debugging)
 	)
 
 instance Show (NodeMeta inc r m) where

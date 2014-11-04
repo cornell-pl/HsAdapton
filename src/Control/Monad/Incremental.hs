@@ -29,9 +29,10 @@ class (MonadRef r m,WeakRef r
 	
 	world :: Inside inc r m a -> Outside inc r m a
 	
-	data IncrementalArgs inc :: *
+--	data IncrementalArgs inc :: *
 	
-	runIncremental :: IncrementalArgs inc -> Outside inc r m a -> m a
+--	runIncremental :: IncrementalArgs inc -> Outside inc r m a -> m a
+	runIncremental :: Outside inc r m a -> m a
 
 class InLayer l inc r m where
 	inL :: m a -> l inc r m a
@@ -68,7 +69,7 @@ instance (InLayer Inside inc r m,Incremental inc r m) => Layer Inside inc r m wh
 
 deriving instance Typeable Outside
 deriving instance Typeable Inside
-deriving instance Typeable IncrementalArgs
+--deriving instance Typeable IncrementalArgs
 
 -- | A general class for thunks with no assumptions of incrementality. The only expectation is that it supports sharing (if we read the thunk twice the computataion is only performed once)
 class Layer l inc r m => Thunk mod l inc r m where

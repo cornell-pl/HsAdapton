@@ -24,6 +24,7 @@ import Data.DeriveTH                 -- Library for deriving instances for exist
 import Data.DeepTypeable
 import Data.WithClass.Derive.DeepTypeable
 import Language.Haskell.TH.Syntax hiding (lift,Infix,Fixity)
+import Data.Strict.Maybe as Strict
 
 import Debug
 
@@ -35,13 +36,11 @@ $( derive makeDeepTypeableAbstract ''Adapton )
 type Inner = Inside Adapton
 type Outer = Outside Adapton
 
-data SMaybe a = SJust !a | SNothing deriving (Show,Eq,Ord,Typeable)
-
 -- * Callstack used by the @Inner@ and @Outer@ monads
 
-topStackElement :: CallStack inc r m -> Maybe (StackElement inc r m)
-topStackElement (SCons x xs) = if isThunkStackElement x then Just x else topStackElement xs
-topStackElement SNil = Nothing
+topStackThunkElement :: CallStack inc r m -> Maybe (StackElement inc r m)
+topStackThunkElement (SCons x xs) = if isThunkStackElement x then Just x else topStackThunkElement xs
+topStackThunkElement SNil = Nothing
 
 -- make sure that the stack is strict, to fix a memory leak with lazy stacks
 type CallStack inc (r :: * -> *) (m :: * -> *) = SList (StackElement inc r m)
@@ -81,7 +80,7 @@ popStack = atomicModifyIORef' callstack (\(SCons x xs) -> {-debug ("popStack: " 
 -- return the top-most thunk in the stack
 {-# INLINE topThunkStack #-}
 topThunkStack :: IO (Maybe (StackElement inc r m))
-topThunkStack = liftM topStackElement $ readIORef callstack
+topThunkStack = liftM topStackThunkElement $ readIORef callstack
 
 -- * Adapton layers
 
@@ -93,9 +92,10 @@ instance (MonadRef r m,WeakRef r) => Incremental Adapton r m where
 	world = Outer . runInner
 	{-# INLINE world #-}
 	
-	data IncrementalArgs Adapton = AdaptonArgs
+--	data IncrementalArgs Adapton = AdaptonArgs
 	
-	runIncremental _ (Outer m) = m
+--	runIncremental _ (Outer m) = m
+	runIncremental = runOuter
 	{-# INLINE runIncremental #-}
 
 instance MonadTrans (Outside Adapton r) where

@@ -11,6 +11,7 @@ import Control.Monad.Incremental.Adapton.Layers
 import Control.Monad.Incremental.Adapton.Types
 import Control.Monad.Incremental.Adapton.Memo
 import Control.Monad
+import Data.Strict.Maybe as Strict
 import Debug
 import Control.Monad.Ref
 import Data.Unique
@@ -27,239 +28,6 @@ import qualified Data.Strict.List as SList
 import Data.Proxy
 import Data.WithClass.MData
 import Prelude hiding (mod,const,read)
-
--- * Thunks
-
-instance (MonadIO m,Layer Inside inc r m) => Thunk U Inside inc r m where
-	new = thunkU
-	{-# INLINE new #-}
-	newc = constU
-	{-# INLINE newc #-}
-	read = forceInnerU
-	{-# INLINE read #-}
-
-instance (MonadIO m,Layer Outside inc r m) => Thunk U Outside inc r m where
-	new = thunkU
-	{-# INLINE new #-}
-	newc = constU
-	{-# INLINE newc #-}
-	read = forceOuterU
-	{-# INLINE read #-}
-
--- no memoization at the outer layer
-instance (Layer Outside inc r m,MonadRef r m,WeakRef r,MonadIO m) => Output U Outside inc r m where
-	thunk = thunkU
-	{-# INLINE thunk #-}
-	const = constU
-	{-# INLINE const #-}
-	force = forceOuterU
-	{-# INLINE force #-}
-	forceOutside = forceOuterU
-	{-# INLINE forceOutside #-}
-
-instance (Layer Inside inc r m,MonadRef r m,WeakRef r,MonadIO m) => Output U Inside inc r m where
-	thunk = thunkU
-	{-# INLINE thunk #-}
-	const = constU
-	{-# INLINE const #-}
-	force = forceInnerU
-	{-# INLINE force #-}
-	forceOutside = world . forceNoDependentsU
-	{-# INLINE forceOutside #-}
-	memo = memoU
-	{-# INLINE memo #-}
-	gmemoQ = gmemoQU
-	{-# INLINE gmemoQ #-}
-
--- | Creates a new thunk
-thunkU :: (MonadIO m,Layer l inc r m,Layer l1 inc r m) => l1 inc r m a -> l inc r m (U l1 inc r m a)
-thunkU c = inL $ do
-	idU <- liftIO newUnique
-	dta <- newRef (Thunk c)
-	dependentsU <- liftIO $ WeakSet.new
-	wdta <- liftIO $ mkWeakWithRefKey dta dta Nothing -- we use a weak pointer to avoid keeping the thunk alive due to its metadata
-	debug ("thunkU "++show idU) $ return $ U (dta,(NodeMeta (idU,dependentsU,dirtyValue wdta,forgetUData wdta,Nothing,mkUDataOpWeak wdta)))
-
-constU :: (MonadIO m,Layer l inc r m,Layer l1 inc r m) => a -> l inc r m (U l1 inc r m a)
-constU v = inL $ do
-	idU <- liftIO newUnique
-	dta <- newRef (Const v)
-	wdta <- liftIO $ mkWeakWithRefKey dta dta Nothing -- we use a weak pointer to avoid keeping the thunk alive due to its metadata
-	--debug ("constU "++show idU) $
-	return $ U (dta,(NodeMeta (idU,error "no dependents",error "no dirty",forgetUData wdta,Nothing,mkUDataOpWeak wdta)))
-
--- | Force a computation without change propagation
-forceOuterU :: (MonadIO m,Eq a,Layer Outside inc r m) => U Outside inc r m a -> Outside inc r m a
-forceOuterU = error "forceOuter"
-
--- | Force a computation with change propagation
--- NOTE: if we allow @U@ thunks to be modified, then this constant optimization is unsound!
-forceInnerU :: (MonadIO m,Eq a,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a
-forceInnerU = \t -> {-debug ("forceInnerU " ++ show (hashUnique $ idU t)) $ -} do
-	value <- forceNoDependentsU t
-	has <- hasDependenciesU t -- for the case when a thunk is actually a constant computation (what arises frequently in generic code...), we don't need to record dependencies
-	if has
-		then inL $ addDependency (metaU t) (checkU t $! value) t value -- updates dependencies of callers
-		else inL $ writeRef (dataU t) $ Const value -- make it an actual constant
-	return value
-
--- tests if a thunk has no dependencies
-hasDependenciesU :: Layer Inside inc r m => U Inside inc r m a -> Inside inc r m Bool
-hasDependenciesU t = do
-	d <- inL $ readRef (dataU t)
-	case d of
-		Value _ value force dependencies -> liftM (not . null) $ inL $ readRef dependencies
-		Thunk force -> error "cannot test dependencies of unevaluated thunk"
-		Const value -> return False -- constant value
-
-oldvalueU :: (Layer l inc r m,Layer l1 inc r m) => U l1 inc r m a -> l inc r m a
-oldvalueU t = do
-	d <- inL $ readRef (dataU t)
-	case d of
-		Value dirty value force dependencies -> return value
-		Thunk force -> error "no old value available"
-		Const value -> return value
-
--- force that does not record any dependency on other thunks, e.g., (internally) when only displaying the contents or when only repairing
-{-# INLINE forceNoDependentsU #-}
-forceNoDependentsU :: (MonadIO m,Eq a,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a
-forceNoDependentsU = \t -> {-debug ("forceNoDependentsU "++show (idNM $ metaU t)) $ -} do
-	d <- inL $ readRef (dataU t)
-	case d of
-		Value 0# value force dependencies -> return value -- is not dirty
-		Value 1# value force dependencies -> repairInnerU t value force dependencies -- is dirty
-		Thunk force -> inL (newRef []) >>= evaluateInnerU t force --unevaluated thunk
-		Const value -> return value -- constant value
-
--- force that does not return the value nor adds dependencies, but instead checks whether the value has not changed
-checkU :: (MonadIO m,Eq a,Layer Inside inc r m) => U Inside inc r m a -> a -> Inside inc r m Bool
-checkU t oldv = do
-	d <- inL $ readRef (dataU t)
-	case d of
-		Value 0# value force dependencies -> return (oldv==value)
-		Value 1# value force dependencies -> liftM (oldv ==) (repairInnerU t value force dependencies)
-		Thunk _ -> return False -- if the thunk has never been computed
-		Const value -> return False --return (oldv == value) -- assuming that @U@ thunks cannot be mutated, the value for constants cannot change
-
--- used to avoid forcing the current node if none of the dependencies changes
-repairInnerU :: (MonadIO m,Layer Inside inc r m) => U Inside inc r m a -> a -> Inside inc r m a -> r (Dependencies inc r m) -> Inside inc r m a
-repairInnerU t value force dependencies = debug ("repairing thunk "++ show (hashUnique $ idNM $ metaU t)) $
-		inL (readRef dependencies) >>= foldr repair' norepair' . reverse --we need to reverse the dependency list to respect evaluation order
-	where
-	{-# INLINE norepair' #-}
---	norepair' :: (MonadIO m,Layer Inside inc r m) => Inside inc r m a
-	norepair' = inL (writeDirtyValue (dataU t) 0#) >> return value -- if no dependency is dirty, simply return its value
-	{-# INLINE repair' #-}
---	repair' :: (MonadIO m,Layer Inside inc r m) => Dependency inc r m -> Inside inc r m a -> Inside inc r m a
-	repair' (Dependency (srcMetaW,dirtyW,checkW,tgtMetaW),_) m = do
-		isDirty <- inL $ readRef dirtyW
-		if isDirty
-			then do
-				inL $ writeRef dirtyW False -- undirty the dependency
-				ok <- checkW -- checks if the dependency does not need to be re-evaluated (not dirty or the new value is the same as the old one)
-				if ok
-					then debug ("dependency has not changed "++show (idNM $ srcMetaW) ++" "++show (idNM $ tgtMetaW)) m
-					else debug ("dependency has changed"++show (idNM $ srcMetaW) ++" "++show (idNM $ tgtMetaW)) $ inL (clearDependencies dependencies >> newRef []) >>= evaluateInnerU t force -- we create a new dependencies reference to free all the old data that depends on the it
-			else m
-
--- recomputes a node
--- does not clear the dependencies on its own
-{-# INLINE evaluateInnerU #-}
-evaluateInnerU :: (MonadIO m,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a -> r (Dependencies inc r m) -> Inside inc r m a
-evaluateInnerU t force dependencies = debug ("re-evaluatingInnerU " ++ show (hashUnique $ idU t)) $ do
-	inL $ liftIO $ pushStack (metaU t :!: SJust dependencies)
-	value <- force
-	inL $ writeRef (dataU t) $ Value 0# value force dependencies
-	inL $ liftIO popStack
-	return value
-
--- XXX: although the OCaml version merges all kinds of thunks alltogether, in Haskell we have the chance to enforce a nicer role separation, and more specific optimizations that they allow, so @U@ should never allow modifications
---instance (MonadRef r m,WeakRef r,MonadIO m) => Input U Outside inc r m where
---	ref = refOuterU
---	{-# INLINE ref #-}
---	get = forceOuterU
---	{-# INLINE get #-}
---	set = setU
---	{-# INLINE set #-}
---	refOutside = refOuterU
---	{-# INLINE refOutside #-}
---	modOutside = \c -> outside c >>= refOutside
---	{-# INLINE modOutside #-}
---	-- thunks cannot support overwrite
---	
---instance (MonadRef r m,WeakRef r,MonadIO m) => Input U Inside inc r m where
---	ref = refInnerU
---	{-# INLINE ref #-}
---	get = forceInnerU
---	{-# INLINE get #-}
---	set = setU
---	{-# INLINE set #-}
---	getOutside = inside . forceNoDependentsU
---	{-# INLINE getOutside #-}
---	refOutside = refOuterU
---	{-# INLINE refOutside #-}
---	modOutside = \c -> outside c >>= refOutside
---	{-# INLINE modOutside #-}
---	-- thunks cannot support overwrite
-  
---setU :: (Eq a,Layer Outside inc r m,MonadIO m) => U l inc r m a -> a -> Outside inc r m ()
---setU t v' = debug ("changed " ++ show (hashUnique $ idU t)) $ inL $ do
---	mbv <- liftM valueUD $ readRef (dataU t)
---	let value_changed = do
---		forgetUM (metaU t) -- discards the thunk's dependencies and updates its value
---		writeRef (dataU t) $ Const v'
---		dirty (metaU t) -- dirties only dependents
---	case mbv of
---		Just v -> if v==v'
---			then do
---				forgetUM (metaU t) -- discards the thunk's dependencies
---				writeRef (dataU t) $ Const v' -- we are updates the reference twice, but this cost shouldn't be very relevant because setU is not to be called intensively
---			else value_changed
---		otherwise -> value_changed
---
---refOuterU :: (Layer l inc r m,MonadIO m,InLayer Outside inc r m) => a -> Outside inc r m (U l inc r m a)
---refOuterU v = inL $ do
---	idU <- liftIO newUnique
---	dta <- newRef (Const v) 
---	dependentsU <- liftIO $ WeakSet.new
---	return $ U (dta,(NodeMeta (idU,dependentsU,error "nodirty",return (),Nothing,mkEmptyUDataOp)))
---
---refInnerU :: (Eq a,Layer l inc r m,MonadIO m,InLayer Inside inc r m) => a -> Inside inc r m (U l inc r m a)
---refInnerU v = inL $ do
---	idU <- liftIO newUnique
---	dta <- newRef (Const v)
---	dependentsU <- liftIO $ WeakSet.new
---	-- add a reference dependency (they are transitive up to the top-level calling thunk)
---	creator <- mkRefCreator idU
---	return $ U (dta,(NodeMeta (idU,dependentsU,error "nodirty",return (),creator,mkEmptyUDataOp)))
-
--- Nothing = unevaluated, Just True = dirty, Just False = not dirty
-isDirtyUnevaluatedU :: (Layer l inc r m) => U l1 inc r m a -> l inc r m (Maybe Bool)
-isDirtyUnevaluatedU t = do
-	d <- inL $ readRef (dataU t)
-	case d of
-		Thunk force -> return Nothing --unevaluated thunk
-		Const value -> return $ Just False -- constant value
-		Value 1# value force dependencies -> return $ Just True -- dirty
-		Value 0# value force dependencies -> return $ Just False -- dirty
-
-isUnevaluatedU :: (Layer l inc r m) => U l1 inc r m a -> l inc r m Bool
-isUnevaluatedU t = do
-	d <- inL $ readRef (dataU t)
-	case d of
-		Thunk force -> return True --unevaluated thunk
-		otherwise -> return False
-
--- | Explicit memoization for recursive functions, fixpoint
--- Essentially, it is a fixed-point operation returning thunks but in the process of tying the knot it adds memoization.
-memoU :: (MonadIO m,Eq a,Output U Inside inc r m,Memo arg) => ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
-memoU f = let memo_func = memoNonRecU (thunk . f memo_func) in memo_func
-
-gmemoQU :: (Eq b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
-gmemoQU ctx (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b)) =
-	let memo_func :: GenericQMemoU ctx Inside inc r m b
-	    memo_func = gmemoNonRecU ctx (f memo_func)
-	in memo_func
 
 -- * Strict modifiables
 
@@ -334,7 +102,7 @@ refInnerM v = inL $ do
 getInnerM :: (MonadIO m,Eq a,Layer Inside inc r m) => M Inside inc r m a -> Inside inc r m a
 getInnerM = \t -> {-debug ("getInnerM " ++ show (hashUnique $ idNM $ metaM t)) $ -} inL $  do
 	value <- readRef (dataM t)
-	addDependency (metaM t) (inL $ checkM t $! value) t value -- updates dependencies of callers
+	addDependency (metaM t) (inL $ checkM t $! value) -- updates dependencies of callers
 	return value
 
 -- forces a lazy modifiable (encoded as a plain thunk)
@@ -356,7 +124,7 @@ setM t v' = debug ("changed " ++ show (hashUnique $ idNM $ metaM t)) $ inL $ do
 	v <- readRef (dataM t)
 	unless (v == v') $ do
 		writeRef (dataM t) $ v'
-		dirty (metaM t) -- dirties only dependents; dirty also reference dependencies (to avoid reuse for thunks that created this reference)
+		dirty (metaM t) -- dirties only dependents; dirty also parent dependencies (to avoid reuse for thunks that created this reference)
 
 -- * Lazy modifiables
 
@@ -429,7 +197,7 @@ modL m = inL $ do
 getInnerL :: (MonadIO m,Eq a,Layer Inside inc r m) => L Inside inc r m a -> Inside inc r m a
 getInnerL = \t -> {-debug ("getInnerL " ++ show (hashUnique $ idNM $ metaL t)) $ -} do
 	value <- getNoDependentsInnerL t
-	inL $ addDependency (metaL t) (inL $ checkL t $! value) t value -- updates dependencies of callers
+	inL $ addDependency (metaL t) (inL $ checkL t $! value) -- updates dependencies of callers
 	return value
 
 -- forces a lazy modifiable (encoded as a plain thunk)
@@ -539,12 +307,185 @@ isUnforcedL t = do
 		LConst 0# value -> return True
 		LConst 1# value -> return False
 
+-- * Thunks
+
+instance (MonadIO m,Layer Inside inc r m) => Thunk U Inside inc r m where
+	new = thunkU
+	{-# INLINE new #-}
+	newc = constU
+	{-# INLINE newc #-}
+	read = forceInnerU
+	{-# INLINE read #-}
+
+instance (MonadIO m,Layer Outside inc r m) => Thunk U Outside inc r m where
+	new = thunkU
+	{-# INLINE new #-}
+	newc = constU
+	{-# INLINE newc #-}
+	read = forceOuterU
+	{-# INLINE read #-}
+
+-- no memoization at the outer layer
+instance (Layer Outside inc r m,MonadRef r m,WeakRef r,MonadIO m) => Output U Outside inc r m where
+	thunk = thunkU
+	{-# INLINE thunk #-}
+	const = constU
+	{-# INLINE const #-}
+	force = forceOuterU
+	{-# INLINE force #-}
+	forceOutside = forceOuterU
+	{-# INLINE forceOutside #-}
+
+instance (Layer Inside inc r m,MonadRef r m,WeakRef r,MonadIO m) => Output U Inside inc r m where
+	thunk = thunkU
+	{-# INLINE thunk #-}
+	const = constU
+	{-# INLINE const #-}
+	force = forceInnerU
+	{-# INLINE force #-}
+	forceOutside = world . forceNoDependentsU
+	{-# INLINE forceOutside #-}
+	memo = memoU
+	{-# INLINE memo #-}
+	gmemoQ = gmemoQU
+	{-# INLINE gmemoQ #-}
+
+-- | Creates a new thunk
+thunkU :: (MonadIO m,Layer l inc r m,Layer l1 inc r m) => l1 inc r m a -> l inc r m (U l1 inc r m a)
+thunkU c = inL $ do
+	idU <- liftIO newUnique
+	dta <- newRef (Thunk c)
+	dependentsU <- liftIO $ WeakSet.new
+	wdta <- liftIO $ mkWeakWithRefKey dta dta Nothing -- we use a weak pointer to avoid keeping the thunk alive due to its metadata
+	debug ("thunkU "++show idU) $ return $ U (dta,(NodeMeta (idU,dependentsU,dirtyValue wdta,forgetUData wdta,Nothing,mkUDataOpWeak wdta)))
+
+constU :: (MonadIO m,Layer l inc r m,Layer l1 inc r m) => a -> l inc r m (U l1 inc r m a)
+constU v = inL $ do
+	idU <- liftIO newUnique
+	dta <- newRef (Const v)
+	wdta <- liftIO $ mkWeakWithRefKey dta dta Nothing -- we use a weak pointer to avoid keeping the thunk alive due to its metadata
+	--debug ("constU "++show idU) $
+	return $ U (dta,(NodeMeta (idU,error "no dependents",error "no dirty",forgetUData wdta,Nothing,mkUDataOpWeak wdta)))
+
+-- | Force a computation without change propagation
+forceOuterU :: (MonadIO m,Eq a,Layer Outside inc r m) => U Outside inc r m a -> Outside inc r m a
+forceOuterU = error "forceOuter"
+
+-- | Force a computation with change propagation
+-- NOTE: if we allow @U@ thunks to be modified, then this constant optimization is unsound!
+forceInnerU :: (MonadIO m,Eq a,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a
+forceInnerU = \t -> {-debug ("forceInnerU " ++ show (hashUnique $ idU t)) $ -} do
+	value <- forceNoDependentsU t
+	has <- hasDependenciesU t -- for the case when a thunk is actually a constant computation (what arises frequently in generic code...), we don't need to record dependencies
+	if has
+		then inL $ addDependency (metaU t) (checkU t $! value) -- updates dependencies of callers
+		else inL $ writeRef (dataU t) $ Const value -- make it an actual constant
+	return value
+
+-- tests if a thunk has no dependencies
+hasDependenciesU :: Layer Inside inc r m => U Inside inc r m a -> Inside inc r m Bool
+hasDependenciesU t = do
+	d <- inL $ readRef (dataU t)
+	case d of
+		Value _ value force dependencies -> liftM (not . null) $ inL $ readRef dependencies
+		Thunk force -> error "cannot test dependencies of unevaluated thunk"
+		Const value -> return False -- constant value
+
+oldvalueU :: (Layer l inc r m,Layer l1 inc r m) => U l1 inc r m a -> l inc r m a
+oldvalueU t = do
+	d <- inL $ readRef (dataU t)
+	case d of
+		Value dirty value force dependencies -> return value
+		Thunk force -> error "no old value available"
+		Const value -> return value
+
+-- force that does not record any dependency on other thunks, e.g., (internally) when only displaying the contents or when only repairing
+{-# INLINE forceNoDependentsU #-}
+forceNoDependentsU :: (MonadIO m,Eq a,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a
+forceNoDependentsU = \t -> {-debug ("forceNoDependentsU "++show (idNM $ metaU t)) $ -} do
+	d <- inL $ readRef (dataU t)
+	case d of
+		Value 0# value force dependencies -> return value -- is not dirty
+		Value 1# value force dependencies -> repairInnerU t value force dependencies -- is dirty
+		Thunk force -> inL (newRef []) >>= evaluateInnerU t force --unevaluated thunk
+		Const value -> return value -- constant value
+
+-- force that does not return the value nor adds dependencies, but instead checks whether the value has not changed
+checkU :: (MonadIO m,Eq a,Layer Inside inc r m) => U Inside inc r m a -> a -> Inside inc r m Bool
+checkU t oldv = do
+	d <- inL $ readRef (dataU t)
+	case d of
+		Value 0# value force dependencies -> return (oldv==value)
+		Value 1# value force dependencies -> liftM (oldv ==) (repairInnerU t value force dependencies)
+		Thunk _ -> return False -- if the thunk has never been computed
+		Const value -> return False --return (oldv == value) -- assuming that @U@ thunks cannot be mutated, the value for constants cannot change
+
+-- used to avoid forcing the current node if none of the dependencies changes
+repairInnerU :: (MonadIO m,Layer Inside inc r m) => U Inside inc r m a -> a -> Inside inc r m a -> r (Dependencies inc r m) -> Inside inc r m a
+repairInnerU t value force dependencies = debug ("repairing thunk "++ show (hashUnique $ idNM $ metaU t)) $
+		inL (readRef dependencies) >>= foldr repair' norepair' . reverse --we need to reverse the dependency list to respect evaluation order
+	where
+	{-# INLINE norepair' #-}
+--	norepair' :: (MonadIO m,Layer Inside inc r m) => Inside inc r m a
+	norepair' = inL (writeDirtyValue (dataU t) 0#) >> return value -- if no dependency is dirty, simply return its value
+	{-# INLINE repair' #-}
+--	repair' :: (MonadIO m,Layer Inside inc r m) => Dependency inc r m -> Inside inc r m a -> Inside inc r m a
+	repair' (Dependency (srcMetaW,dirtyW,checkW,tgtMetaW),_) m = do
+		isDirty <- inL $ readRef dirtyW
+		if isDirty
+			then do
+				inL $ writeRef dirtyW False -- undirty the dependency
+				ok <- checkW -- checks if the dependency does not need to be re-evaluated (not dirty or the new value is the same as the old one)
+				if ok
+					then debug ("dependency has not changed "++show (idNM $ srcMetaW) ++" "++show (idNM $ tgtMetaW)) m
+					else debug ("dependency has changed"++show (idNM $ srcMetaW) ++" "++show (idNM $ tgtMetaW)) $ inL (clearDependencies dependencies >> newRef []) >>= evaluateInnerU t force -- we create a new dependencies reference to free all the old data that depends on the it
+			else m
+
+-- recomputes a node
+-- does not clear the dependencies on its own
+{-# INLINE evaluateInnerU #-}
+evaluateInnerU :: (MonadIO m,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a -> r (Dependencies inc r m) -> Inside inc r m a
+evaluateInnerU t force dependencies = debug ("re-evaluatingInnerU " ++ show (hashUnique $ idU t)) $ do
+	inL $ liftIO $ pushStack (metaU t :!: SJust dependencies)
+	value <- force
+	inL $ writeRef (dataU t) $ Value 0# value force dependencies
+	inL $ liftIO popStack
+	return value
+
+-- Nothing = unevaluated, Just True = dirty, Just False = not dirty
+isDirtyUnevaluatedU :: (Layer l inc r m) => U l1 inc r m a -> l inc r m (Maybe Bool)
+isDirtyUnevaluatedU t = do
+	d <- inL $ readRef (dataU t)
+	case d of
+		Thunk force -> return Nothing --unevaluated thunk
+		Const value -> return $ Just False -- constant value
+		Value 1# value force dependencies -> return $ Just True -- dirty
+		Value 0# value force dependencies -> return $ Just False -- dirty
+
+isUnevaluatedU :: (Layer l inc r m) => U l1 inc r m a -> l inc r m Bool
+isUnevaluatedU t = do
+	d <- inL $ readRef (dataU t)
+	case d of
+		Thunk force -> return True --unevaluated thunk
+		otherwise -> return False
+
+-- | Explicit memoization for recursive functions, fixpoint
+-- Essentially, it is a fixed-point operation returning thunks but in the process of tying the knot it adds memoization.
+memoU :: (MonadIO m,Eq a,Output U Inside inc r m,Memo arg) => ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
+memoU f = let memo_func = memoNonRecU (thunk . f memo_func) in memo_func
+
+gmemoQU :: (Eq b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
+gmemoQU ctx (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b)) =
+	let memo_func :: GenericQMemoU ctx Inside inc r m b
+	    memo_func = gmemoNonRecU ctx (f memo_func)
+	in memo_func
+
 -- * Auxiliary functions
 
 {-# INLINE addDependency #-}
 -- adds a bidirectional dependency on a thunk
-addDependency :: (Eq a,MonadIO m,MonadRef r m,WeakRef r,Layer Inside inc r m) => NodeMeta inc r m -> Inside inc r m Bool -> mod Inside inc r m a -> a -> m ()
-addDependency calleemeta check callee oldv = do
+addDependency :: (MonadIO m,MonadRef r m,WeakRef r,Layer Inside inc r m) => NodeMeta inc r m -> Inside inc r m Bool -> m ()
+addDependency calleemeta check = do
 	top <- liftIO topThunkStack
 	case top of
 		Just (callermeta :!: SJust callerdependencies) -> debug ("added BX dependency: "++show (hashUnique $ idNM calleemeta) ++ " -> " ++ show (hashUnique $ idNM callermeta)) $ do
@@ -570,17 +511,23 @@ dirtyValue :: (MonadRef r m,MonadIO m) => Weak (r (UData l inc r m a)) -> m ()
 dirtyValue = \wdta -> do
 	mb <- liftIO $ deRefWeak wdta
 	case mb of
-		Just dta -> mapRef (\(Value _ value force dependencies) -> Value 1# value force dependencies) dta
+		Just dta -> dirtyValue' dta
 		Nothing -> return ()
 
+dirtyValue' :: (MonadRef r m,MonadIO m) => r (UData l inc r m a) -> m ()
+dirtyValue' dta = mapRef (\(Value _ value force dependencies) -> Value 1# value force dependencies) dta
+
+-- consider the example: do { t <- thunk (ref e); r <- force t; v <- get r; set r v'; r <- force t; v <- get r }
+--we need to forget the previous execution of the thunk (and therefore ignore the set over the inner reference) so that execution is consistent with re-evaluating from scratch
+-- XXX: we could refine the type system to prevent the modification of references created inside thunks, but that seems overcomplicated just to cut an edge case.
 -- dirtying purges dead weak pointers
 {-# INLINE dirty #-}
 dirty :: (MonadIO m,MonadRef r m) => NodeMeta inc r m -> m ()
 dirty = \umeta -> do
-	dirtyCreator (creatorNM umeta)
+	dirtyCreator (creatorNM umeta) -- if we change a reference that was created inside some memoized thunk, we have to forget all the memoized data for the parent thunk
 	dirtyRecursively (dependentsNM umeta)
 
----- does not remove dead dependencies
+-- does not remove dead dependencies
 dirtyRecursively :: (MonadIO m,MonadRef r m) => Dependents inc r m -> m ()
 dirtyRecursively deps = do
 	WeakSet.mapPurgeM_ dirty' deps -- take the chance to purge eventually dead pointers from dependents to dependencies (since there is no ultimate guarantee that finalizers run)
@@ -593,26 +540,6 @@ dirtyRecursively deps = do
 			writeRef dirty True -- dirty the dependency
 			dirtyUM tgtMeta -- dirty the caller thunk
 			dirtyRecursively (dependentsNM tgtMeta) -- dirty recursively
-
---dirtyRecursively :: (MonadIO m,MonadRef r m) => IORef (Dependents inc r m) -> m ()
---dirtyRecursively r = do
---	deps <- liftIO $ readIORef r
---	deps' <- foldr dirty' (return []) deps
---	liftIO $ writeIORef r deps'
-----	mapRefM_ (foldr dirty' (return [])) -- iterates through all dependents, removing eventually dead relationships from the list
---	where
---	dirty' :: (MonadIO m,MonadRef r m) => Dependent inc r m -> m (Dependents inc r m) -> m (Dependents inc r m)
---	dirty' weak m = do
---			mb <- liftIO $ deRefWeak weak
---			case mb of
---				Just (Dependency (srcMetaW,dirtyW,checkW,tgtMetaW)) -> debug ("dependent "++show (hashUnique $ idNM tgtMetaW)) $ do
---					isDirty <- readRef dirtyW
---					unless isDirty $ do
---						writeRef dirtyW True -- dirty the dependency
---						dirtyUM tgtMetaW -- dirty the caller thunk
---						dirtyRecursively (dependentsNM tgtMetaW) -- dirty recursively
---					liftM (weak:) m --keeps the dependent
---				Nothing -> m -- removes the dependent
 
 -- whenever a reference is changed, remove all the cached data of the parent thunk that created the reference, and dirty recursive thunks that depend on the parent thunk
 dirtyCreator :: (MonadIO m,MonadRef r m) => Maybe (Creator inc r m) -> m ()
@@ -630,14 +557,18 @@ forgetUData :: (MonadRef r m,MonadIO m) => Weak (r (UData l inc r m a)) -> m ()
 forgetUData wdta = do
 	mb <- liftIO $ deRefWeak wdta
 	case mb of
-		Just dta -> do
-			d <- readRef dta
-			case d of
-				Value dirty value force dependencies -> clearDependencies dependencies >> writeRef dta (Thunk force)
-				otherwise -> return ()
+		Just dta -> forgetUData' dta
 		Nothing -> return ()
 
+forgetUData' :: (MonadRef r m,MonadIO m) => r (UData l inc r m a) -> m ()
+forgetUData' dta = do
+	d <- readRef dta
+	case d of
+		Value dirty value force dependencies -> clearDependencies dependencies >> writeRef dta (Thunk force)
+		otherwise -> return ()
+
 {-# INLINE mkRefCreator #-}
+-- if the parent is a reference, we don't need to remember it because no dirtying will be necessary
 mkRefCreator :: (WeakRef r,MonadIO m) => Unique -> m (Maybe (Creator inc r m))
 mkRefCreator = \idU -> liftIO $ do
 	top <- topStack
