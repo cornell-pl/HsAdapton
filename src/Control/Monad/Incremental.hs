@@ -27,11 +27,11 @@ class (MonadRef r m,WeakRef r
 	data Outside inc (r :: * -> *) (m :: * -> *) a :: *
 	data Inside inc (r :: * -> *) (m :: * -> *) a :: *
 	
+	-- lifts a computation at the inner layer to one at the outer layer
 	world :: Inside inc r m a -> Outside inc r m a
+	-- unlifts a computation at the outer layer to one at the inner layer. This function is not to be used normally, as it is unsafe for many IC idioms.
+	unsafeWorld :: Outside inc r m a -> Inside inc r m a
 	
---	data IncrementalArgs inc :: *
-	
---	runIncremental :: IncrementalArgs inc -> Outside inc r m a -> m a
 	runIncremental :: Outside inc r m a -> m a
 
 class InLayer l inc r m where

@@ -7,6 +7,8 @@ import System.IO.Unsafe
 import Control.Monad.IO.Class
 import Control.Monad.Identity
 import Control.Monad.Reader as Reader
+import Control.Monad.State.Lazy as State
+import Control.Monad.State.Strict as StateS
 
 -- | Don't specify non-default instances of this class unless you really really know what you are doing!
 class Monad m => MonadLazy m where
@@ -24,3 +26,11 @@ instance MonadLazy IO where
 instance MonadLazy m => MonadLazy (Reader.ReaderT r m) where
 	lazily = Reader.mapReaderT lazily
 	anytime = Reader.mapReaderT anytime
+	
+instance MonadLazy m => MonadLazy (State.StateT r m) where
+	lazily = State.mapStateT lazily
+	anytime = State.mapStateT anytime
+
+instance MonadLazy m => MonadLazy (StateS.StateT r m) where
+	lazily = StateS.mapStateT lazily
+	anytime = StateS.mapStateT anytime
