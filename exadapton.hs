@@ -218,9 +218,6 @@ exNonInc' = do
 	m' <- inside $ force t
 	inside $ display m'
 
-proxyIORef = Proxy :: Proxy IORef
-proxyIO = Proxy :: Proxy IO
-
 data TreeChange a where
 	TreeChg :: (forall mod l inc r m . (
 			Eq (TreeMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m
@@ -318,9 +315,9 @@ testM f (xs,chgs) runs = do
 	(scratch,(s,t)) <- timeOuterT $ do
 		s :: ListM Inside IORef IO Int <- toListRefInside xs
 		t :: ListU Inside IORef IO Int <- inside $ f s
---		drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
+		drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
 		!() <- rnfInc t
---		drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
+		drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
 		return (s,t)
 	(dirty,propagate) <- testM' s t chgs
 	return (scratch,dirty / toEnum runs,propagate / toEnum runs)
@@ -329,9 +326,9 @@ testM' :: ListM Inside IORef IO Int -> ListU Inside IORef IO Int -> [ListChange 
 testM' s t [] = return (0,0)
 testM' s t (chg:chgs) = do
 	(dirty,()) <- timeOuterT $ applyListChange chg s
---	drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
+	drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
 	(propagate,()) <- timeOuterT $ rnfInc t
---	drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
+	drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
 	(dirty',propagate') <- testM' s t chgs
 	return (dirty+dirty',propagate+propagate')
 
@@ -532,37 +529,39 @@ applyTreeChange (TreeChg f) xs = f xs
 ----	print res3
 --	print res4
 
---main = do
---	let size = 10^2
---	let runs = 100
---	gen <- genListPairs size runs
-----	res1 <- runOuter $ testL (filterInc p) gen (runs * 2)
---	res2 <- runOuter $ testM (mapInc return >=> quicksortInc2 compare) gen (runs * 2) -- >> mergePDFsInto "filterInc.pdf"
-----	res3 <- runLazyNonIncOuter $ testNonIncL (filterInc2 p) gen (runs * 2)
---	res4 <- runLazyNonIncOuter $ testNonIncM (mapInc return >=> quicksortInc2 compare) gen (runs * 2)
-----	print res1
---	print res2
-----	print res3
+main = do
+	let size = 5
+	let runs = 2
+	gen <- genListPairs size runs
+	let inc_func = mapInc return >=> quicksortInc compare
+--	let inc_func = filterInc (even)
+--	res1 <- runOuter $ testL inc_func gen (runs * 2)
+	res2 <- runOuter $ testM inc_func gen (runs * 2) >> mergePDFsInto "filterInc.pdf"
+--	res3 <- runLazyNonIncOuter $ testNonIncL inc_func gen (runs * 2)
+--	res4 <- runLazyNonIncOuter $ testNonIncM inc_func gen (runs * 2)
+--	print res1
+	print res2
+--	print res3
 --	print res4
 
 
 
-main = runOuter $ do
-	(mxs :: ListMod L Inside Adapton IORef IO (String,Int)) <- inside $ toListRef [("a",5),("b",4),("c",3)]
---	(mys :: ListMod M Inside Adapton IORef IO (String,Int)) <- inside $ toListRef [("c",3),("b",3),("d",2)]
---	(uxs :: ListMod U Inside Adapton IORef IO (String,Int)) <- inside $ mapInc return mxs
---	(uys :: ListMod U Inside Adapton IORef IO (String,Int)) <- inside $ mapInc return mys
-	
-	inL $ liftIO $ putStrLn "\n\n"
-	
-	(txs :: ListMod L Inside Adapton IORef IO (String,Int)) <- inside $ copyInc proxyNoCtx mxs
-	
-	inL $ liftIO $ putStrLn "\n\n"
-	
-	drawToPDF proxyAdapton proxyIORef proxyIO (Merge mxs txs) "copy.pdf"
-	
-	modifyListModAt mxs 1 $ \(ConsMod y mys') -> return $ ConsMod ("c",5) mys'
-	
+--main = runOuter $ do
+--	(mxs :: ListMod L Inside Adapton IORef IO (String,Int)) <- inside $ toListRef [("a",5),("b",4),("c",3)]
+----	(mys :: ListMod M Inside Adapton IORef IO (String,Int)) <- inside $ toListRef [("c",3),("b",3),("d",2)]
+----	(uxs :: ListMod U Inside Adapton IORef IO (String,Int)) <- inside $ mapInc return mxs
+----	(uys :: ListMod U Inside Adapton IORef IO (String,Int)) <- inside $ mapInc return mys
+--	
+--	inL $ liftIO $ putStrLn "\n\n"
+--	
+--	(txs :: ListMod L Inside Adapton IORef IO (String,Int)) <- inside $ copyInc proxyNoCtx mxs
+--	
+--	inL $ liftIO $ putStrLn "\n\n"
+--	
+--	drawToPDF proxyAdapton proxyIORef proxyIO (Merge mxs txs) "copy.pdf"
+--	
+--	modifyListModAt mxs 1 $ \(ConsMod y mys') -> return $ ConsMod ("c",5) mys'
+--	
 --	display txs
 	
 --	drawToPDF proxyAdapton proxyIORef proxyIO (Merge mxs txs) "copy.pdf"

@@ -20,8 +20,8 @@ class Monad m => MonadLazy m where
 	anytime = id
 
 instance MonadLazy IO where
-	lazily = unsafeInterleaveIO
-	anytime = return . unsafePerformIO
+--	lazily = unsafeInterleaveIO
+--	anytime = return . unsafePerformIO
 
 instance MonadLazy m => MonadLazy (Reader.ReaderT r m) where
 	lazily = Reader.mapReaderT lazily

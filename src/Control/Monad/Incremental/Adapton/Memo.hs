@@ -16,7 +16,7 @@ import Data.Unique
 import Control.Monad.IO.Class
 import Debug
 import Control.Concurrent
-import System.Mem.Weak
+import System.Mem.Weak as Weak
 import qualified System.Mem.WeakTable as WeakTable
 import Control.Monad.Incremental
 import Control.Monad.Ref

@@ -114,7 +114,7 @@ instance (Draw inc r m a) => Sat (DrawDict inc r m a) where
 
 drawPDF :: Draw inc r m a => Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m ()
 drawPDF inc r m v = do
---	inL $ liftIO $ performGC >> performMajorGC >> threadDelay 2000000
+	inL $ liftIO $ performGC >> threadDelay 2000000
 	dir <- inL $ liftIO $ getTemporaryDirectory
 	filename <- inL $ liftIO $ liftM toString $ nextUUIDSafe
 	let pdfFile = dir </> addExtension filename "pdf"
@@ -123,7 +123,10 @@ drawPDF inc r m v = do
 	inL $ liftIO $ putStrLn $ "drew " ++ filename ++ ".pdf"
 
 mergePDFsInto :: (MonadRef r m,MonadIO m,Layer Outside inc r m) => FilePath -> Outside inc r m ()
-mergePDFsInto pdfFile = inL $ liftIO $ do
+mergePDFsInto = inL . liftIO . mergePDFsInto'
+	
+mergePDFsInto' :: FilePath -> IO ()
+mergePDFsInto' pdfFile = do
 	pdfs <- atomicModifyIORef' tempPDFs (\pdfs -> ([],pdfs))
 	system $ "pdftk " ++ unwords (reverse pdfs) ++ " cat output " ++ pdfFile
 	return ()

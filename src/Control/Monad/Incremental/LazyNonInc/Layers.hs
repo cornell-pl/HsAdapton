@@ -27,10 +27,10 @@ instance (MonadRef r m,WeakRef r) => Incremental LazyNonInc r m where
 	
 	world = LazyNonIncOuter . runLazyNonIncInner
 	{-# INLINE world #-}
+	-- actually not unsafe in this case
+	unsafeWorld = LazyNonIncInner . runLazyNonIncOuter
+	{-# INLINE unsafeWorld #-}
 	
---	data IncrementalArgs LazyNonInc = LazyNonIncArgs
-	
---	runIncremental _ (LazyNonIncOuter m) = m
 	runIncremental = runLazyNonIncOuter
 	{-# INLINE runIncremental #-}
 

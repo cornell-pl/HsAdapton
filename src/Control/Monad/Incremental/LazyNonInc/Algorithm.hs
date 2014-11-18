@@ -46,9 +46,9 @@ forceLazyNonIncU (LazyNonIncU rc) = do
 	c <- inL $ readRef rc
 	c
 
-setLazyNonIncU :: (Layer l inc r m) => LazyNonIncU l inc r m a -> a -> Outside inc r m ()
-setLazyNonIncU (LazyNonIncU rc) a = inL $ do
-	writeRef rc (return a)
+--setLazyNonIncU :: (Layer l inc r m) => LazyNonIncU l inc r m a -> a -> Outside inc r m ()
+--setLazyNonIncU (LazyNonIncU rc) a = inL $ do
+--	writeRef rc (return a)
 
 refLazyNonIncL :: (Layer l inc r m) => a -> l inc r m (LazyNonIncL l inc r m a)
 refLazyNonIncL a = modLazyNonIncL (return a)

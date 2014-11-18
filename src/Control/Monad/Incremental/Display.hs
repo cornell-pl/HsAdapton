@@ -29,13 +29,16 @@ displayAs str x = (displaysPrec x "") >>= inL . liftIO . putStrLn . (str++)
 display :: (MonadIO m,Layer l inc r m,Display l inc r m a) => a -> l inc r m ()
 display x = (displaysPrec x "") >>= inL . liftIO . putStrLn
 
+showInc :: (Layer l inc r m,Display l inc r m a) => a -> l inc r m String
+showInc x = displaysPrec x ""
+
 type DisplayS l inc (r :: * -> *) (m :: * -> *) = String -> l inc r m String
 
 class (Layer l inc r m) => Display l inc r m a where
 	displaysPrec :: a -> DisplayS l inc r m
 
 instance Display Inside inc r m a => Display Inside inc r m (Inside inc r m a) where
-		displaysPrec m rest = m >>= flip displaysPrec rest
+	displaysPrec m rest = m >>= flip displaysPrec rest
 instance Display Outside inc r m a => Display Outside inc r m (Outside inc r m a) where
 	displaysPrec m rest = m >>= flip displaysPrec rest
 instance Display Outside inc r m a => Display Outside inc r m (Inside inc r m a) where

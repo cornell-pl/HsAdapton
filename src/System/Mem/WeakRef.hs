@@ -1,6 +1,6 @@
 {-# LANGUAGE UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, RankNTypes, MagicHash, UnboxedTuples #-}
 
--- A class to avoid early finalization of weak pointers.
+-- A class for precise finalization of weak pointers.
 
 -- Important note from the documentation of System.Mem.Weak:
 -- Finalizers can be used reliably for types that are created explicitly and have identity, such as IORef and MVar. However, to place a finalizer on one of these types, you should use the specific operation provided for that type, e.g. mkWeakIORef and addMVarFinalizer respectively (the non-uniformity is accidental). These operations attach the finalizer to the primitive object inside the box (e.g. MutVar# in the case of IORef), because attaching the finalizer to the box itself fails when the outer box is optimised away by the compiler.
@@ -22,8 +22,6 @@ mkWeakWithIORefKey k@(IORef (STRef r#)) v f = IO $ \s ->
 -- | class to create weak pointers with references (that typically (IORef,STRef) have unique addresses) as keys
 class WeakRef r where
 	mkWeakWithRefKey :: r a -> b -> Maybe (IO ()) -> IO (Weak b)
-	mkWeakWithRefKey = \k v f -> mkWeak k v f
-	{-# INLINE mkWeakWithRefKey #-}
 
 instance WeakRef IORef where
 	mkWeakWithRefKey = \r v mb -> mkWeakWithIORefKey r v (maybe (return ()) id mb)
@@ -41,7 +39,7 @@ mkDeadWeak v f = do
 	
 newtype MkWeak = MkWeak { unMkWeak :: forall v . v -> Maybe (IO ()) -> IO (Weak v) }
 
--- | Creates a weak reference that is only alive as long as two keys are
+-- | Creates a weak reference that is alive as long as two keys are
 andMkWeak :: MkWeak -> MkWeak -> MkWeak
 andMkWeak (MkWeak mkWeak1) (MkWeak mkWeak2) = MkWeak $ \v f -> do
 	w1 <- mkWeak1 v f

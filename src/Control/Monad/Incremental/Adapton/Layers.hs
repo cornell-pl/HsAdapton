@@ -91,6 +91,8 @@ instance (MonadRef r m,WeakRef r) => Incremental Adapton r m where
 	
 	world = Outer . runInner
 	{-# INLINE world #-}
+	unsafeWorld = Inner . runOuter
+	{-# INLINE unsafeWorld #-}
 	
 --	data IncrementalArgs Adapton = AdaptonArgs
 	

@@ -100,6 +100,10 @@ instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepTy
       dataTypeOf ctx x = return ty where
             ty = mkDataType "Todo.ListMod'" [mkConstr ty "NilMod" [] Prefix,mkConstr ty "ConsMod" [] Prefix]
 
+-- a simpler version where input and output thunks are the same
+takeInc' :: (Eq a,Eq (ListMod thunk l inc r m a),Memo (ListMod thunk l inc r m a),Output thunk l inc r m) => Int -> ListMod thunk l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+takeInc' = takeInc
+
 -- | take
 takeInc :: (Eq a,Eq (ListMod thunk l inc r m a),Memo (ListMod mod l inc r m a),Output thunk l inc r m,Eq (ListMod mod l inc r m a),Thunk mod l inc r m) => Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 takeInc = memo2 $ \recur i mxs -> case i of
@@ -113,6 +117,15 @@ filterInc :: (Thunk mod l inc r m,Eq (ListMod thunk l inc r m a),MonadIO m,Memo 
 	=> (a -> Bool) -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 filterInc p = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
 	ConsMod x mxs -> if p x
+		then liftM (ConsMod x) $ recur mxs
+		else recur mxs >>= force
+	NilMod -> return NilMod
+	
+-- | filter
+filterWithKeyInc :: (Thunk mod l inc r m,Eq (ListMod thunk l inc r m a),MonadIO m,Memo (ListMod mod l inc r m a),Eq a,Eq (ListMod mod l inc r m a),Output thunk l inc r m)
+	=> (a -> a -> Bool) -> a -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+filterWithKeyInc cmp k = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
+	ConsMod x mxs -> if cmp k x
 		then liftM (ConsMod x) $ recur mxs
 		else recur mxs >>= force
 	NilMod -> return NilMod
@@ -172,18 +185,19 @@ partitionInc p = memo $ \recur mxs -> force mxs >>= \xs -> case xs of
 -- | quicksort
 quicksortInc :: (Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
 	=> (a -> a -> Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
-quicksortInc cmp mxs = const NilMod >>= (quicksortInc' cmp) mxs
-  where
-	quicksortInc' :: (Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
-		=> (a -> a -> Ordering) -> ListMod mod l inc r m a -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
-	quicksortInc' cmp = memo2 (\recur mxs rest -> force mxs >>= \xs -> case xs of
+quicksortInc cmp (mxs :: ListMod mod l inc r m a) = do
+	let filter_left = filterWithKeyInc (\k y -> cmp y k == LT)
+	let filter_right = filterWithKeyInc (\k y -> cmp y k /= LT)
+	(nil :: ListMod mod l inc r m a) <- const NilMod
+	let quicksortInc' = memo2 $ \recur mxs rest -> force mxs >>= \xs -> case xs of
 		ConsMod x mxs' -> do
-			left <- filterInc (\y -> cmp y x == LT) mxs'
-			right <- filterInc (\y -> cmp y x /= LT) mxs'
+			left <- filter_left x mxs'
+			right <- filter_right x mxs'
 			tright <- thunk $ liftM (ConsMod x) $ recur right rest
 			recur left tright >>= force
 --			recur right rest >>= const . ConsMod x >>= recur left >>= force
-		NilMod -> force rest)
+		NilMod -> force rest
+	quicksortInc' mxs nil
 
 -- | quicksort with partition (this IC version is actually slower than using two filters)
 quicksortInc2 :: (Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
@@ -198,6 +212,19 @@ quicksortInc2 cmp mxs = const NilMod >>= (quicksortInc2' cmp) mxs
 			tright <- thunk $ liftM (ConsMod x) $ recur right rest
 			recur left tright >>= force
 		NilMod -> force rest)
+
+quicksortInc3 :: (Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
+	=> (a -> a -> Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+quicksortInc3 cmp (mxs :: ListMod mod l inc r m a) = do
+	(nil :: ListMod mod l inc r m a) <- const NilMod
+	let quicksortInc' = memo2 $ \recur mxs rest -> force mxs >>= \xs -> case xs of
+		ConsMod x mxs' -> do
+			left <- filterInc (\y -> cmp y x == LT) mxs'
+			right <- filterInc (\y -> cmp y x /= LT) mxs'
+			tright <- thunk $ liftM (ConsMod x) $ recur right rest
+			recur left tright >>= force
+		NilMod -> force rest
+	quicksortInc' mxs nil
 
 -- | mergesort
 mergesortInc :: (Memo (ListMod mod l inc r m (ListMod mod l inc r m a)),Memo a,Memo (mod l inc r m (ListMod' mod l inc r m a)),MonadIO m,Hashable (ListMod mod l inc r m (ListMod mod l inc r m a)),Eq (ListMod mod l inc r m (ListMod mod l inc r m a)),Output mod l inc r m,Eq (ListMod mod l inc r m a),Eq a)

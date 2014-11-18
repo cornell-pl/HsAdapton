@@ -1,8 +1,8 @@
-{-# LANGUAGE Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE TypeOperators, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module System.Mem.WeakSet (
 	  WeakSet(..)
-	, new, fromWeakSList, purge, insertWeak, mapM_, mapM',mapM'', mapPurgeM_,toList,toWeakSList,modifyWeak,mapPurgeM,copy,toListPurge
+	, new, fromWeakSList, purge, insertWeak, mapM_, mapM',mapM'', mapPurgeM_,toList,toWeakSList,modifyWeak,mapPurgeM,copy,copyWithKey,toListPurge
 	) where
 
 -- | Implementation of memo tables using hash tables and weak pointers as presented in http://community.haskell.org/~simonmar/papers/weak.pdf.
@@ -15,6 +15,7 @@ module System.Mem.WeakSet (
 import Prelude hiding (lookup,mapM_)
 import qualified Prelude
 
+import System.Mem.WeakRef
 import System.Mem.Weak (Weak(..))
 import qualified System.Mem.Weak as Weak
 import System.IO.Unsafe
@@ -30,26 +31,30 @@ import System.Mem.WeakRef (WeakRef(..))
 import qualified System.Mem.WeakRef as WeakRef
 import Data.Strict.List (SList(..))
 import qualified Data.Strict.List as SList
+import Data.Strict.Tuple as STuple
 
 import Debug
 
 -- ** weak set
 
-newtype WeakSet v = WeakSet (WeakSet' v,Weak (WeakSet' v))
+newtype WeakSet v = WeakSet (WeakSet' v :!: Weak (WeakSet' v))
 type WeakSet' v = IORef (SList (Weak v))
+
+weak :: WeakSet v -> Weak (WeakSet' v)
+weak (WeakSet (_ :!: w)) = w
 
 fromWeakSList :: MonadIO m => SList (Weak v) -> m (WeakSet v)
 fromWeakSList sxs = liftIO $ do
 	xs <- newIORef sxs
-	weak_xs <- Weak.mkWeak xs xs $ Just $ weakset_finalizer xs
-	return $ WeakSet (xs,weak_xs)
+	weak_xs <- mkWeakIORef xs $ weakset_finalizer xs
+	return $ WeakSet (xs :!: weak_xs)
 
 {-# INLINE new #-}
 new :: IO (WeakSet v)
 new = do
 	xs <- newRef SNil
-	weak_xs <- Weak.mkWeak xs xs $ Just $ weakset_finalizer xs
-	return $ WeakSet (xs,weak_xs)
+	weak_xs <- mkWeakIORef xs $ weakset_finalizer xs
+	return $ WeakSet (xs :!: weak_xs)
 
 weakset_finalizer :: WeakSet' v -> IO ()
 weakset_finalizer set = do
@@ -58,7 +63,11 @@ weakset_finalizer set = do
 
 {-# INLINE purge #-}
 purge :: WeakSet v -> IO ()
-purge (WeakSet (_,w_set)) = do
+purge (WeakSet (_ :!: w_set)) = purgeWeak w_set
+
+{-# INLINE purgeWeak #-}
+purgeWeak :: Weak (WeakSet' v) -> IO ()
+purgeWeak w_set = do
 	mb <- Weak.deRefWeak w_set
 	case mb of
 		Nothing -> return ()
@@ -74,11 +83,11 @@ purge (WeakSet (_,w_set)) = do
 -- | Insert a given weak reference and adds no finalizer to the provided argument
 {-# INLINE insertWeak #-}
 insertWeak :: MonadIO m => WeakSet v -> Weak v -> m ()
-insertWeak (WeakSet (tbl,_)) weak = liftIO $ modifyIORef tbl (SCons weak)
+insertWeak (WeakSet (tbl :!: _)) weak = liftIO $ modifyIORef tbl (SCons weak)
 
 {-# INLINE mapM_ #-}
 mapM_ :: MonadIO m => (v -> m ()) -> WeakSet v -> m ()
-mapM_ f (WeakSet (tbl,_)) = liftIO (readIORef tbl) >>= SList.mapM_ g where
+mapM_ f (WeakSet (tbl :!: _)) = liftIO (readIORef tbl) >>= SList.mapM_ g where
 	{-# INLINE g #-}
 	g weak = do
 		mbv <- liftIO $ Weak.deRefWeak weak
@@ -92,15 +101,15 @@ mapIORefM_ f r = readIORef r >>= f >>= writeIORef r
 
 {-# INLINE mapM' #-}
 mapM' :: MonadIO m => (Weak v -> m a) -> WeakSet v -> m (SList a)
-mapM' f (WeakSet (tbl,_)) = liftIO (readIORef tbl) >>= SList.mapM f
+mapM' f (WeakSet (tbl :!: _)) = liftIO (readIORef tbl) >>= SList.mapM f
 
 {-# INLINE mapM'' #-}
 mapM'' :: Monad m => (forall x . IO x -> m x) -> (Weak v -> m a) -> WeakSet v -> m (SList a)
-mapM'' liftIO f (WeakSet (tbl,_)) = liftIO (readIORef tbl) >>= SList.mapM f
+mapM'' liftIO f (WeakSet (tbl :!: _)) = liftIO (readIORef tbl) >>= SList.mapM f
 
 {-# INLINE mapPurgeM_ #-}
 mapPurgeM_ :: MonadIO m => (v -> m ()) -> WeakSet v -> m ()
-mapPurgeM_ f (WeakSet (tbl,_)) = do
+mapPurgeM_ f (WeakSet (tbl :!: _)) = do
 	xs <- liftIO (readIORef tbl)
 	xs' <- SList.foldM step SNil xs
 	liftIO $ writeIORef tbl xs'
@@ -115,7 +124,7 @@ mapPurgeM_ f (WeakSet (tbl,_)) = do
 
 {-# INLINE mapPurgeM #-}
 mapPurgeM :: MonadIO m => (v -> Weak v -> m (Weak v)) -> WeakSet v -> m ()
-mapPurgeM f (WeakSet (tbl,_)) = do
+mapPurgeM f (WeakSet (tbl :!: _)) = do
 	xs <- liftIO (readIORef tbl)
 	xs' <- SList.foldM step SNil xs
 	liftIO $ writeIORef tbl xs'
@@ -129,10 +138,10 @@ mapPurgeM f (WeakSet (tbl,_)) = do
 			Nothing -> return xs
 
 toWeakSList :: MonadIO m => WeakSet v -> m (SList (Weak v))
-toWeakSList (WeakSet (tbl,_)) = liftIO $ readIORef tbl
+toWeakSList (WeakSet (tbl :!: _)) = liftIO $ readIORef tbl
 
 toList :: MonadIO m => WeakSet v -> m [v]
-toList (WeakSet (tbl,_)) = toList' =<< liftIO (readIORef tbl)
+toList (WeakSet (tbl :!: _)) = toList' =<< liftIO (readIORef tbl)
 	where
 	toList' SNil = return []
 	toList' (SCons w xs) = do
@@ -142,7 +151,7 @@ toList (WeakSet (tbl,_)) = toList' =<< liftIO (readIORef tbl)
 			Just x -> liftM (x:) $ toList' xs
 
 toListPurge :: MonadIO m => WeakSet v -> m [v]
-toListPurge (WeakSet (tbl,_)) = do
+toListPurge (WeakSet (tbl :!: _)) = do
 	set <- liftIO $ readIORef tbl
 	(set',xs) <- toList' set
 	liftIO $ writeIORef tbl set'
@@ -157,8 +166,33 @@ toListPurge (WeakSet (tbl,_)) = do
 				(xs',lst') <- toList' xs
 				return (SCons w xs',x:lst')
 	
-modifyWeak :: MonadIO m => WeakSet v -> (SList (Weak v) -> SList (Weak v)) -> m ()
-modifyWeak (WeakSet (tbl,_)) f = liftIO $ atomicModifyIORef' tbl (\xs -> (f xs,()))
+modifyWeak :: MonadIO m => WeakSet v -> (SList (Weak v) -> m (SList (Weak v))) -> m ()
+modifyWeak (WeakSet (tbl :!: _)) f = do
+	xs <- liftIO $ readIORef tbl
+	xs' <- f xs
+	liftIO $ writeIORef tbl xs'
 
 copy :: MonadIO m => WeakSet v -> m (WeakSet v)
 copy s = toWeakSList s >>= fromWeakSList
+
+copyWithKey :: MonadIO m => (v -> MkWeak) -> WeakSet v -> m (WeakSet v)
+copyWithKey getKey s = do
+	xs <- toWeakSList s
+	s' <- liftIO $ newIORef (error "no content")
+	weak_s' <- liftIO $ mkWeakIORef s' $ return () -- the copy has no finalization, because if the copy dies we don't want it to kill the weak pointers of the original set
+	let weakset' = WeakSet (s' :!: weak_s')
+	
+	let addFinalizers slist w = do
+		mb <- Weak.deRefWeak w
+		case mb of
+			Nothing -> return slist
+			Just x -> do
+				let MkWeak mkWeak = getKey x
+				mkWeak () (Just $ purgeWeak weak_s')
+				return $ SCons w slist
+	xs' <- liftIO $ SList.foldM addFinalizers SNil xs
+	
+	liftIO $ writeIORef s' xs'
+
+	return weakset'
+

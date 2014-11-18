@@ -17,6 +17,7 @@ import System.Mem.MemoTable hiding (memo)
 import Data.WithClass.MGenerics.Aliases
 import Language.Haskell.TH.Syntax
 import Control.Monad
+import Data.IORef
 
 -- | General class for incremental computation libraries
 class (MonadRef r m,WeakRef r
@@ -288,3 +289,5 @@ instance (Layer l inc r m) => Thunk T l inc r m where
 		inL $ writeRef r $ return x
 		return x
 
+proxyIORef = Proxy :: Proxy IORef
+proxyIO = Proxy :: Proxy IO

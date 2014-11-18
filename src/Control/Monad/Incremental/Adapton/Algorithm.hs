@@ -426,10 +426,8 @@ repairInnerU t value force dependencies = debug ("repairing thunk "++ show (hash
 		inL (readRef dependencies) >>= foldr repair' norepair' . reverse --we need to reverse the dependency list to respect evaluation order
 	where
 	{-# INLINE norepair' #-}
---	norepair' :: (MonadIO m,Layer Inside inc r m) => Inside inc r m a
 	norepair' = inL (writeDirtyValue (dataU t) 0#) >> return value -- if no dependency is dirty, simply return its value
 	{-# INLINE repair' #-}
---	repair' :: (MonadIO m,Layer Inside inc r m) => Dependency inc r m -> Inside inc r m a -> Inside inc r m a
 	repair' (Dependency (srcMetaW,dirtyW,checkW,tgtMetaW),_) m = do
 		isDirty <- inL $ readRef dirtyW
 		if isDirty
@@ -470,9 +468,9 @@ isUnevaluatedU t = do
 		otherwise -> return False
 
 -- | Explicit memoization for recursive functions, fixpoint
--- Essentially, it is a fixed-point operation returning thunks but in the process of tying the knot it adds memoization.
-memoU :: (MonadIO m,Eq a,Output U Inside inc r m,Memo arg) => ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
-memoU f = let memo_func = memoNonRecU (thunk . f memo_func) in memo_func
+-- A fixed-point operation returning thunks that in the process of tying the knot adds memoization.
+memoU :: (MonadIO m,Eq a,Layer Outside inc r m,Memo arg) => ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
+memoU f = let memo_func = memoNonRecU (thunkU . f memo_func) in memo_func
 
 gmemoQU :: (Eq b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
 gmemoQU ctx (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b)) =

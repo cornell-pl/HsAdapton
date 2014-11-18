@@ -8,6 +8,9 @@ import Data.Typeable
 -- | A strict list datatype
 data SList a = SCons !a !(SList a) | SNil deriving (Show,Eq,Ord,Typeable)
 
+head :: SList a -> a
+head (SCons x _) = x
+
 foldM :: Monad m => (a -> b -> m a) -> a -> SList b -> m a
 foldM f a SNil = return a
 foldM f a (SCons b bs) = a `f` b >>= \a' -> foldM f a' bs

@@ -8,7 +8,7 @@ module System.Mem.WeakTable (
 	, insert
 	, insertWith, insertWithRefKey, insertWithMkWeak
 	, delete
-	, finalize
+	, finalize,finalizeEntry
 	, mapM_
 	, mapMGeneric_
 	, debugWeakTable
@@ -52,8 +52,15 @@ new = do
 newFor :: (Eq k,Hashable k) => a -> IO (WeakTable k v)
 newFor a = do
 	tbl <- HashIO.new
-	weak_tbl <- Weak.mkWeak tbl tbl $ Just $ table_finalizer tbl
+	weak_tbl <- Weak.mkWeak a tbl $ Just $ table_finalizer tbl
 	return $ WeakTable (tbl,weak_tbl)
+
+finalize :: (Eq k,Hashable k) => WeakTable k v -> IO ()
+finalize w_tbl@(WeakTable (tbl,weak_tbl)) = do
+	mb <- Weak.deRefWeak weak_tbl
+	case mb of
+		Nothing -> return ()
+		Just weak_tbl' -> table_finalizer weak_tbl'
 
 table_finalizer :: (Eq k,Hashable k) => WeakTable' k v -> IO ()
 table_finalizer tbl = do
@@ -67,18 +74,18 @@ insert tbl k v = System.Mem.WeakTable.insertWith tbl k k v
 -- | the key @k@ stores the entry for the value @a@ in the table
 insertWith :: (Eq k,Hashable k) => WeakTable k v -> a -> k -> v -> IO ()
 insertWith w_tbl@(WeakTable (tbl,weak_tbl)) a k v = do
-	weak <- Weak.mkWeak a v $ Just $ System.Mem.WeakTable.finalize w_tbl k
+	weak <- Weak.mkWeak a v $ Just $ System.Mem.WeakTable.finalizeEntry w_tbl k
 	HashIO.insert tbl k weak
 
 insertWithMkWeak :: (Eq k,Hashable k) => WeakTable k v -> MkWeak -> k -> v -> IO ()
 insertWithMkWeak w_tbl@(WeakTable (tbl,weak_tbl)) (MkWeak mkWeak) k v = do
-	weak <- mkWeak v $ Just $ System.Mem.WeakTable.finalize w_tbl k
+	weak <- mkWeak v $ Just $ System.Mem.WeakTable.finalizeEntry w_tbl k
 	HashIO.insert tbl k weak
 
 -- | @insertWith@ that uses a reference as key
 insertWithRefKey :: (Eq k,Hashable k,WeakRef r) => WeakTable k v -> r a -> k -> v -> IO ()
 insertWithRefKey w_tbl@(WeakTable (tbl,weak_tbl)) a k v = do
-	weak <- WeakRef.mkWeakWithRefKey a v $ Just $ System.Mem.WeakTable.finalize w_tbl k
+	weak <- WeakRef.mkWeakWithRefKey a v $ Just $ System.Mem.WeakTable.finalizeEntry w_tbl k
 	HashIO.insert tbl k weak
 
 -- | Insert a given weak reference and adds a finalizer to the provided argument
@@ -87,8 +94,8 @@ insertWithRefKey w_tbl@(WeakTable (tbl,weak_tbl)) a k v = do
 --	HashIO.insert tbl k weak
 --	Weak.addFinalizer a $ System.Mem.WeakTable.finalize w_tbl k
 
-finalize :: (Eq k,Hashable k) => WeakTable k b -> k -> IO ()
-finalize (WeakTable (tbl,weak_tbl)) k = do
+finalizeEntry :: (Eq k,Hashable k) => WeakTable k b -> k -> IO ()
+finalizeEntry (WeakTable (tbl,weak_tbl)) k = do
 --	putStrLn $ "finalized " ++ show k
 	r <- Weak.deRefWeak weak_tbl
 	case r of
