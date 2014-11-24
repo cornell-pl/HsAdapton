@@ -29,14 +29,15 @@ import qualified Data.HashTable.ST.Basic as HashST
 import Control.Monad.IO.Class
 import Control.Monad.Ref
 import Control.Monad.Lazy
-import System.Mem.WeakRef
+import System.Mem.WeakKey
+import System.Mem.WeakTable as WeakTable
 import Data.Unique
 import Control.Monad
 import Control.Monad.Trans
 import Data.Strict.List as Strict
 import Data.Strict.Maybe as Strict
 import Data.Strict.Tuple
-import Unsafe.Coerce
+import qualified Unsafe.Coerce as Unsafe
 import Control.Monad.Catch
 import Control.Monad.Fix
 
@@ -110,13 +111,11 @@ instance Monad m => InLayer Inside TxAdapton r m where
 newTxMLog :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxM l1 TxAdapton r m a -> l TxAdapton r m ()
 newTxMLog m = do
 	txlogs <- readTxLog
-	wm <- inL $ liftIO $ mkWeakTxM txlogs m
-	inL $ liftIO $ HashIO.insert (txLogBuff $ Strict.head txlogs) (idTxNM $ metaTxM m) (DynTxM Nothing wm New)
+	inL $ liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxM m) (idTxNM $ metaTxM m) (DynTxM Nothing m New)
 newTxULog :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m ()
 newTxULog u = do
-	txlogs <- readTxLog
-	wu <- inL $ liftIO $ mkWeakTxU txlogs u
-	inL $ liftIO $ HashIO.insert (txLogBuff $ Strict.head txlogs) (idTxNM $ metaTxU u) (DynTxU Nothing wu New)
+	txlogs <- readTxLog	
+	inL $ liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) (idTxNM $ metaTxU u) (DynTxU Nothing u New)
 
 -- reads a value from a transactional variable
 -- uses @unsafeCoerce@ since we know that the types match
@@ -125,10 +124,10 @@ readTxMValue m@(TxM (r,_)) = do
 	tbl <- readTxLog
 	dyntxvar <- inL $ bufferTxM m Read tbl
 	case dyntxvar of
-		DynTxM (Just (BuffTxM (v,_))) _ _ -> return $ unsafeCoerce v
+		DynTxM (Just (BuffTxM (v,_))) _ _ -> return $ coerce v
 		DynTxM Nothing wm _ -> do
 			v <- inL $ readRef r
-			return $ unsafeCoerce v
+			return $ coerce v
 
 writeTxMValue :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxM l1 TxAdapton r m a -> a -> l TxAdapton r m ()
 writeTxMValue m v' = do
@@ -141,20 +140,20 @@ readTxUValue u@(TxU (r,_)) = do
 	tbl <- readTxLog
 	dyntxvar <- inL $ bufferTxU u Read tbl
 	case dyntxvar of
-		DynTxU (Just (BuffTxU (v,_))) _ _ -> return $ unsafeCoerce v
+		DynTxU (Just (BuffTxU (v,_))) _ _ -> return $ coerce v
 		DynTxU Nothing wu _ -> do
 			v <- inL $ readRef r
-			return $ unsafeCoerce v
+			return $ coerce v
 
-evalTxUValue :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m (TxUData l1 TxAdapton r m a)
-evalTxUValue u@(TxU (r,_)) = do
-	tbl <- readTxLog
-	dyntxvar <- inL $ bufferTxU u Eval tbl
-	case dyntxvar of
-		DynTxU (Just (BuffTxU (v,_))) _ _ -> return $ unsafeCoerce v
-		DynTxU Nothing wu _ -> do
-			v <- inL $ readRef r
-			return $ unsafeCoerce v
+--evalTxUValue :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m (TxUData l1 TxAdapton r m a)
+--evalTxUValue u@(TxU (r,_)) = do
+--	tbl <- readTxLog
+--	dyntxvar <- inL $ bufferTxU u Eval tbl
+--	case dyntxvar of
+--		DynTxU (Just (BuffTxU (v,_))) _ _ -> return $ coerce v
+--		DynTxU Nothing wu _ -> do
+--			v <- inL $ readRef r
+--			return $ coerce v
 
 writeTxUValue :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> TxUData l1 TxAdapton r m a -> TxStatus -> l TxAdapton r m ()
 writeTxUValue t dta' status = do
@@ -186,7 +185,7 @@ txLock = unsafePerformIO $ Lock.new
 
 -- a map with commit times of committed transactions and their performed changes
 {-# NOINLINE doneTxs #-}
-doneTxs :: MVar (Map UTCTime (TxWrite r m))
+doneTxs :: MVar (Map UTCTime (TxUnmemo r m,TxWrite r m))
 doneTxs = unsafePerformIO $ newMVar Map.empty
 
 -- we need to acquire a lock, but this should be minimal
@@ -197,7 +196,14 @@ startTx = modifyMVarMasked runningTxs (\xs -> getCurrentTime >>= \t -> return (t
 restartTx :: TxLayer Outside r m => Outside TxAdapton r m a -> Outside TxAdapton r m a
 restartTx m = do
 	time <- inL $ liftIO $ startTx
+	txlogs <- readTxLog
+	inL $ liftIO $ restartMemoTx txlogs
 	Reader.local (\(_ :!: stack :!: logs) -> (time :!: stack :!: logs)) m
+
+restartMemoTx :: TxLogs r m -> IO ()
+restartMemoTx = Strict.mapM_ restartMemoTx' where
+	restartMemoTx' (TxLog (uid :!: buff :!: memos)) = writeIORef memos []
+	
 
 -- updating a modifiable may propagate to multiple thunks; they are all logged
 type TxWrite r m = (Set Unique,TxWrite' r m)
@@ -205,21 +211,21 @@ type TxWrite' r m = Outside TxAdapton r m ()
 
 -- Nothing = success
 -- Just = some conflicting changes that happened simultaneously to the current tx
-checkTx :: Monad m => TxLog r m -> [(UTCTime,TxWrite r m)] -> IO (Maybe (TxWrite' r m))
-checkTx txlog wrts = liftM concatMaybesM $ Prelude.mapM (checkTx' txlog) wrts
+checkTx :: Monad m => TxLog r m -> [(UTCTime,(TxUnmemo r m,TxWrite r m))] -> IO (Maybe (TxUnmemo r m,TxWrite' r m))
+checkTx txlog wrts = liftM concatMaybesTxM $ Prelude.mapM (checkTx' txlog) wrts
 
 -- checks if the current txlog is consistent with a sequence of concurrent modifications
-checkTx' :: TxLog r m -> (UTCTime,TxWrite r m) -> IO (Maybe (TxWrite' r m))
-checkTx' txlog (txtime,(writtenIDs,writeOp)) = do
+checkTx' :: TxLog r m -> (UTCTime,(TxUnmemo r m,TxWrite r m)) -> IO (Maybe (TxUnmemo r m,TxWrite' r m))
+checkTx' txlog (txtime,(unmemo,(writtenIDs,writeOp))) = do
 	ok <- Foldable.foldlM (\b uid -> liftM (b &&) $ checkTx'' txlog uid) True writtenIDs
-	if ok then return Nothing else return $ Just writeOp
+	if ok then return Nothing else return $ Just (unmemo,writeOp)
 
 -- if the current tx uses a variable that has been written to before, there is a conflict
 -- note that we also consider write-write conflicts, since we don't log written but not read variables differently from read-then-written ones
 -- True = no conflict
 checkTx'' :: TxLog r m -> Unique -> IO Bool
 checkTx'' txlog uid = do
-	mb <- HashIO.lookup (txLogBuff txlog) uid
+	mb <- WeakTable.lookup (txLogBuff txlog) uid
 	case mb of
 		Nothing -> return True
 		-- news should never appear!
@@ -234,6 +240,13 @@ concatMaybesM (Nothing:xs) = concatMaybesM xs
 concatMaybesM (Just chg:xs) = case concatMaybesM xs of
 	Nothing -> Just chg
 	Just chgs -> Just (chg >> chgs)
+
+concatMaybesTxM :: Monad m => [Maybe (TxUnmemo r m,TxWrite' r m)] -> Maybe (TxUnmemo r m,TxWrite' r m)
+concatMaybesTxM [] = Nothing
+concatMaybesTxM (Nothing:xs) = concatMaybesTxM xs
+concatMaybesTxM (Just (unmemo,chg):xs) = case concatMaybesTxM xs of
+	Nothing -> Just (unmemo,chg)
+	Just (unmemos,chgs) -> Just (\txlog -> unmemo txlog >> unmemos txlog,chg >> chgs)
 
 
 wakeUpWaits :: TxLayer Outside r m => Outside TxAdapton r m () -> TxNodeMeta r m -> m (TxWake m)

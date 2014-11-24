@@ -23,7 +23,7 @@ import Control.Monad
 import Control.Monad.IO.Class
 import System.Mem.StableName
 import System.IO.Unsafe
-import System.Mem.WeakRef
+import System.Mem.WeakKey
 import System.Mem.Weak as Weak
 
 -- * standard lists

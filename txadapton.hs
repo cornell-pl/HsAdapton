@@ -106,15 +106,16 @@ readDB_TxAdapton :: ListMod TxM Inside TxAdapton IORef IO Int -> IO ()
 readDB_TxAdapton db = do
 	replicateM_ 0 $ do
 		(time,(topk,topk_thunk)) <- timeItT $ atomicallyTxMsg "read" $ do
-			(topk_thunk :: ListMod TxU Inside TxAdapton IORef IO Int) <- inside $ topkInc 3 db
+			(topk_thunk :: ListMod TxU Inside TxAdapton IORef IO Int) <- topkI db
 			topk <- inside $ showInc topk_thunk
-			drawPDF proxyTxAdapton proxyIORef proxyIO (Merge db topk_thunk)
+--			drawPDF proxyTxAdapton proxyIORef proxyIO (Merge db topk_thunk)
 			return (topk,topk_thunk)
 		writeChan debugChan $ "top3: " ++ topk ++ " in " ++ show time
-		atomically $ drawPDF proxyTxAdapton proxyIORef proxyIO (Merge db topk_thunk)
+--		atomically $ drawPDF proxyTxAdapton proxyIORef proxyIO (Merge db topk_thunk)
 		threadDelay 1000000
 
-mapI = inside . mapInc return
+--mapI = inside . mapInc return
+topkI = inside . topkInc 3
 
 -- an infinite loop that changes the database
 changeDB_TxAdapton :: Int -> ListMod TxM Inside TxAdapton IORef IO Int -> IO ()
@@ -125,7 +126,7 @@ changeDB_TxAdapton size db = do
 		(time,(topk,topk_thunk)) <- timeItT $ atomicallyTxMsg "change" $ do
 			setListModAt db p $ \(ConsMod x mxs) -> return $ ConsMod i mxs
 			drawPDF proxyTxAdapton proxyIORef proxyIO db
-			(topk_thunk :: ListMod TxU Inside TxAdapton IORef IO Int) <- mapI db --topkInc 3 db
+			(topk_thunk :: ListMod TxU Inside TxAdapton IORef IO Int) <- topkI db
 			topk <- inside $ showInc topk_thunk
 			drawPDF proxyTxAdapton proxyIORef proxyIO (Merge db topk_thunk)
 			return (topk,topk_thunk)
@@ -157,7 +158,7 @@ loop_Adapton size db = replicateM_ 4 $ do
 		drawPDF proxyAdapton proxyIORef proxyIO db
 		
 		inL $ liftIO $ putStrLn $ "added to db " ++ show i
-		(topk :: ListMod U Inside Adapton IORef IO Int) <- inside $ topkInc 3 db
+		(topk :: ListMod U Inside Adapton IORef IO Int) <- topkII db
 		inside $ displayAs "top3: " topk
 		
 		drawPDF proxyAdapton proxyIORef proxyIO (Merge db topk)
@@ -166,6 +167,9 @@ loop_Adapton size db = replicateM_ 4 $ do
 
 timeOuterT :: Outer r IO a -> Outer r IO (Double,a)
 timeOuterT (Outer m) = Outer $ timeItT m
+
+--mapII = inside . mapInc return
+topkII = inside . topkInc 3
 
 main = main_TxAdapton
 

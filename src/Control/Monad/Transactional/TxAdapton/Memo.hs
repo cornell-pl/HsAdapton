@@ -6,7 +6,7 @@ module Control.Monad.Transactional.TxAdapton.Memo (
 
 --	, GenericQMemoU(..),MemoCtx(..),Sat(..),gmemoNonRecU,proxyMemoCtx,NewGenericQ(..),NewGenericQMemo(..),NewGenericQMemoU(..)
 
-import System.Mem.WeakRef as WeakRef
+import System.Mem.WeakKey as WeakKey
 import System.Mem.WeakTable as WeakTable
 import System.Mem.MemoTable
 import Data.Hashable
@@ -31,6 +31,7 @@ import Data.Dynamic
 import Control.Concurrent.Map as CMap
 import Data.WithClass.MGenerics.Aliases
 import Data.IORef
+import System.Mem.Weak as Weak
 
 import qualified Data.HashTable.IO as HashIO
 import qualified Data.HashTable.ST.Basic as HashST
@@ -73,14 +74,10 @@ import qualified Data.HashTable.ST.Basic as HashST
 memoNonRecTxU :: (Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
 memoNonRecTxU f = do
 	let !tbls = unsafePerformIO $ do
-		!ori_tbl <- debug "newMemo!!!" $ WeakTable.newFor f
-		!buff_tbls <- newCMapFor f
+		!buff_tbls <- CMap.empty
+		!ori_tbl <- WeakTable.newFor f
 		return $! (ori_tbl,buff_tbls)
 	memoNonRecTxU' f $! tbls
-
-{-# NOINLINE newCMapFor #-}
-newCMapFor :: a -> IO (CMap.Map k v)
-newCMapFor x = CMap.empty
 
 memoNonRecTxU' :: (Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> TxMemoTable r m (Key a) b -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
 memoNonRecTxU' f tbls@(ori_tbl,buff_tbls) arg = do
@@ -131,23 +128,22 @@ insertMemoTx tbls@(ori_tbl,buff_tbls) mkWeak k thunk = do
 
 			-- add the buffered memotable to the txlog's list
 			atomicModifyIORef' (txLogMemo txlog) (\xs -> (DynTxMemoTable tbls:xs,()))
-	
-	
+
 
 instance WeakRef r => Memo (TxM l inc r m a) where
 	type Key (TxM l inc r m a) = Unique
 	{-# INLINE memoKey #-}
-	memoKey t = (MkWeak $ WeakRef.mkWeakWithRefKey (dataTxM t),idTxNM $ metaTxM t)
+	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataTxM t),idTxNM $ metaTxM t)
                                  
 instance WeakRef r => Memo (TxU l inc r m a) where
 	type Key (TxU l inc r m a) = Unique
 	{-# INLINE memoKey #-}
-	memoKey t = (MkWeak $ WeakRef.mkWeakWithRefKey (dataTxU t),idTxNM $ metaTxU t)
+	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataTxU t),idTxNM $ metaTxU t)
 
---instance WeakRef r => Memo (TxL l inc r m a) where
+--instance WeakKey r => Memo (TxL l inc r m a) where
 --	type Key (L l inc r m a) = Unique
 --	{-# INLINE memoKey #-}
---	memoKey t = (MkWeak $ WeakRef.mkWeakWithRefKey (dataL t),idNM $ metaL t)
+--	memoKey t = (MkWeak $ WeakKey.mkWeakKey (dataL t),idNM $ metaL t)
 
 
 

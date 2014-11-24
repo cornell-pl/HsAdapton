@@ -13,7 +13,7 @@ import Safe
 import Control.Monad.Incremental.Adapton.Types
 import Control.Monad.IO.Class --we should avoid using IO, and use State monads instead of global variables, though that is evidently slower...
 import Data.Typeable
-import System.Mem.WeakRef
+import System.Mem.WeakKey
 import Control.Monad.Lazy
 import Control.Monad.Trans
 import Data.Strict.Tuple
@@ -25,6 +25,7 @@ import Data.DeepTypeable
 import Data.WithClass.Derive.DeepTypeable
 import Language.Haskell.TH.Syntax hiding (lift,Infix,Fixity)
 import Data.Strict.Maybe as Strict
+import Control.Applicative
 
 import Debug
 
@@ -86,8 +87,8 @@ topThunkStack = liftM topStackThunkElement $ readIORef callstack
 
 instance (MonadRef r m,WeakRef r) => Incremental Adapton r m where
 	
-	newtype Outside Adapton r m a = Outer { runOuter :: m a } deriving (Monad,MonadIO,MonadRef r,MonadLazy) 
-	newtype Inside Adapton r m a = Inner { runInner :: m a } deriving (Monad,MonadIO,MonadRef r,MonadLazy)
+	newtype Outside Adapton r m a = Outer { runOuter :: m a } deriving (Functor,Applicative,Monad,MonadIO,MonadRef r,MonadLazy) 
+	newtype Inside Adapton r m a = Inner { runInner :: m a } deriving (Functor,Applicative,Monad,MonadIO,MonadRef r,MonadLazy)
 	
 	world = Outer . runInner
 	{-# INLINE world #-}

@@ -15,7 +15,7 @@ module System.Mem.WeakSet (
 import Prelude hiding (lookup,mapM_)
 import qualified Prelude
 
-import System.Mem.WeakRef
+import System.Mem.WeakKey
 import System.Mem.Weak (Weak(..))
 import qualified System.Mem.Weak as Weak
 import System.IO.Unsafe
@@ -27,8 +27,8 @@ import GHC.Base
 import Control.Monad.Trans
 import Data.Unique
 import Control.Monad.Ref
-import System.Mem.WeakRef (WeakRef(..))
-import qualified System.Mem.WeakRef as WeakRef
+import System.Mem.WeakKey (WeakKey(..))
+import qualified System.Mem.WeakKey as WeakKey
 import Data.Strict.List (SList(..))
 import qualified Data.Strict.List as SList
 import Data.Strict.Tuple as STuple

@@ -39,7 +39,7 @@ import System.IO
 import System.Directory
 import System.IO.Unsafe
 import System.Mem
-import System.Mem.WeakRef
+import System.Mem.WeakKey
 
 import Data.WithClass.MData
 

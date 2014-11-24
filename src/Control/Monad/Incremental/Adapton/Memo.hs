@@ -5,7 +5,7 @@ module Control.Monad.Incremental.Adapton.Memo (
 	, GenericQMemoU(..),MemoCtx(..),Sat(..),gmemoNonRecU,proxyMemoCtx,NewGenericQ(..),NewGenericQMemo(..),NewGenericQMemoU(..)
 	) where
 
-import System.Mem.WeakRef as WeakRef
+import System.Mem.WeakKey as WeakKey
 import System.Mem.WeakTable as WeakTable
 import System.Mem.MemoTable
 import Data.Hashable
@@ -79,17 +79,17 @@ memoNonRecU' f tbl arg = do
 instance WeakRef r => Memo (M l inc r m a) where
 	type Key (M l inc r m a) = Unique
 	{-# INLINE memoKey #-}
-	memoKey t = (MkWeak $ WeakRef.mkWeakWithRefKey (dataM t),idNM $ metaM t)
+	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataM t),idNM $ metaM t)
                                  
 instance WeakRef r => Memo (U l inc r m a) where
 	type Key (U l inc r m a) = Unique
 	{-# INLINE memoKey #-}
-	memoKey t = (MkWeak $ WeakRef.mkWeakWithRefKey (dataU t),idU t)
+	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataU t),idU t)
 
 instance WeakRef r => Memo (L l inc r m a) where
 	type Key (L l inc r m a) = Unique
 	{-# INLINE memoKey #-}
-	memoKey t = (MkWeak $ WeakRef.mkWeakWithRefKey (dataL t),idNM $ metaL t)
+	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataL t),idNM $ metaL t)
 
 
 

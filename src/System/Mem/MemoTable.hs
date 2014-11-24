@@ -7,7 +7,7 @@ module System.Mem.MemoTable where
 
 import System.Mem.WeakTable as WeakTable
 import System.Mem.Weak as Weak
-import System.Mem.WeakRef as WeakRef
+import System.Mem.WeakKey as WeakKey
 import System.Mem.StableName
 import System.IO.Unsafe
 import Data.HashTable.IO as HashIO

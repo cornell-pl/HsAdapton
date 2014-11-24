@@ -17,7 +17,7 @@ import Language.Haskell.TH.Syntax hiding (lift,Infix,Fixity)
 
 import System.Mem.StableName
 import System.IO.Unsafe
-import System.Mem.WeakRef
+import System.Mem.WeakKey
 import System.Mem.Weak as Weak
 import Prelude hiding (mod,const,read)
 

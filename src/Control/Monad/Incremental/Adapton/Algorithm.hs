@@ -19,7 +19,7 @@ import System.Mem.Weak
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
 import System.Mem.MemoTable
-import System.Mem.WeakRef
+import System.Mem.WeakKey
 import Data.IORef
 import qualified System.Mem.WeakSet as WeakSet
 import Data.Strict.Tuple (Pair(..))
@@ -356,14 +356,14 @@ thunkU c = inL $ do
 	idU <- liftIO newUnique
 	dta <- newRef (Thunk c)
 	dependentsU <- liftIO $ WeakSet.new
-	wdta <- liftIO $ mkWeakWithRefKey dta dta Nothing -- we use a weak pointer to avoid keeping the thunk alive due to its metadata
+	wdta <- liftIO $ mkWeakRefKey dta dta Nothing -- we use a weak pointer to avoid keeping the thunk alive due to its metadata
 	debug ("thunkU "++show idU) $ return $ U (dta,(NodeMeta (idU,dependentsU,dirtyValue wdta,forgetUData wdta,Nothing,mkUDataOpWeak wdta)))
 
 constU :: (MonadIO m,Layer l inc r m,Layer l1 inc r m) => a -> l inc r m (U l1 inc r m a)
 constU v = inL $ do
 	idU <- liftIO newUnique
 	dta <- newRef (Const v)
-	wdta <- liftIO $ mkWeakWithRefKey dta dta Nothing -- we use a weak pointer to avoid keeping the thunk alive due to its metadata
+	wdta <- liftIO $ mkWeakRefKey dta dta Nothing -- we use a weak pointer to avoid keeping the thunk alive due to its metadata
 	--debug ("constU "++show idU) $
 	return $ U (dta,(NodeMeta (idU,error "no dependents",error "no dirty",forgetUData wdta,Nothing,mkUDataOpWeak wdta)))
 
@@ -490,7 +490,7 @@ addDependency calleemeta check = do
 			dirtyW <- newRef False 
 			let dependencyW = Dependency (calleemeta,dirtyW,check,callermeta)
 			let weakset = dependentsNM calleemeta
-			weak <- liftIO $ mkWeakWithRefKey callerdependencies dependencyW (Just $ WeakSet.purge weakset) -- the dependency lives as long as the dependencies reference lives, that in turn lives as long as the caller thunk itself lives
+			weak <- liftIO $ mkWeakRefKey callerdependencies dependencyW (Just $ WeakSet.purge weakset) -- the dependency lives as long as the dependencies reference lives, that in turn lives as long as the caller thunk itself lives
 			mapRef ((dependencyW,finalize weak):) callerdependencies
 			liftIO $ WeakSet.insertWeak weakset weak
 		otherwise -> debug ("nostack "++show (hashUnique $ idNM calleemeta)) $ return ()
@@ -572,7 +572,7 @@ mkRefCreator = \idU -> liftIO $ do
 	top <- topStack
 	case top of
 		Just (callermeta :!: SJust callerdependencies) -> do
-			weak <- mkWeakWithRefKey callerdependencies callermeta Nothing -- the parent reference should live as long as the creator's dependencies
+			weak <- mkWeakRefKey callerdependencies callermeta Nothing -- the parent reference should live as long as the creator's dependencies
 			{-debug (show (hashUnique idU) ++ "refparent " ++ show (hashUnique $ idNM callermeta)) $ -}
 			return $ Just weak
 		otherwise -> {-debug (show (hashUnique idU) ++ "refparent NONE") $ -}return Nothing

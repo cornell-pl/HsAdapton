@@ -8,7 +8,7 @@ import Data.WithClass.MGenerics.Schemes
 import Data.WithClass.MData
 import Control.Monad.IO.Class
 import System.Mem.MemoTable
-import System.Mem.WeakRef
+import System.Mem.WeakKey
 import Control.Monad.Incremental.List
 import Control.Monad
 

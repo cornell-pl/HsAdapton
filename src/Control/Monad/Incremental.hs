@@ -8,7 +8,7 @@ import Data.Typeable
 import Data.WithClass.MGenerics.Text
 import Data.WithClass.MData
 import Prelude hiding (mod,const,read)
-import System.Mem.WeakRef
+import System.Mem.WeakKey
 import System.Mem.MemoTable (Memo(..))
 import System.Mem.Weak as Weak
 import Data.Hashable

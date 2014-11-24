@@ -23,7 +23,7 @@ import Prelude hiding (mod,const)
 import qualified Prelude
 import Control.Monad.Trans
 import Data.Unique
-import System.Mem.WeakRef as WeakRef
+import System.Mem.WeakKey as WeakKey
 import System.Mem.Weak as Weak
 import System.Mem.WeakTable as WeakTable
 

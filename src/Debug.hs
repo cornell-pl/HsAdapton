@@ -9,7 +9,7 @@ import qualified Data.HashTable.IO as HashIO
 import qualified Data.HashTable.ST.Basic as HashST
 import System.IO.Unsafe
 import System.Mem.Weak
-import System.Mem.WeakRef
+import System.Mem.WeakKey
 import Control.Monad.IO.Class
 import Data.Unique
 import Control.Monad.Ref
@@ -20,8 +20,8 @@ import Data.UUID
 import Data.UUID.V1
 
 debug :: String -> a -> a
---debug str = id
-debug str x = trace str x
+debug str = id
+--debug str x = trace str x
 
 --type RefDB = HashIO.IOHashTable HashST.HashTable UUID (IO ())
 --
@@ -29,11 +29,11 @@ debug str x = trace str x
 --refDB :: RefDB
 --refDB = unsafePerformIO $ HashIO.new
 --
---newRefDB :: (MonadRef r m,WeakRef r,MonadIO m) => a -> String -> m (r a)
+--newRefDB :: (MonadRef r m,WeakKey r,MonadIO m) => a -> String -> m (r a)
 --newRefDB v msg = do newRef v
 ----	r <- newRef v
 ----	uid <- liftIO $ nextUUIDSafe
-----	w <- liftIO $ mkWeakRef r (HashIO.delete refDB uid >> putStrLn (msg ++" has died"))
+----	w <- liftIO $ mkWeakKey r (HashIO.delete refDB uid >> putStrLn (msg ++" has died"))
 ----	liftIO $ HashIO.insert refDB uid $ do
 ----		mb <- deRefWeak w
 ----		case mb of

@@ -52,7 +52,7 @@ Library
     System.Mem.MemoTable
     System.Mem.WeakTable
     System.Mem.WeakSet
-    System.Mem.WeakRef
+    System.Mem.WeakKey
   Other-modules: Debug
 
   extensions: 

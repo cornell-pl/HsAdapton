@@ -9,7 +9,7 @@ import Control.Monad.Incremental.Adapton.Types hiding (MData)
 import Control.Monad.Ref
 import System.Mem.WeakSet as WeakSet
 import Control.Monad.Trans
-import System.Mem.WeakRef
+import System.Mem.WeakKey
 
 import Control.Monad
 import Control.Monad.IO.Class
