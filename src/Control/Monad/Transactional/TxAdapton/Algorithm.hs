@@ -104,7 +104,8 @@ refOuterTxM v = do
 	dependentsU <- inL $ liftIO $ WeakSet.new
 	-- since the ref will never be reused, we don't need to worry about it's creator
 	waitQ <- inL $ liftIO newQ
-	let m = TxM (dta,(TxNodeMeta (idU,dependentsU,error "nodirty",\tbl -> return (),bufferTxM $! m,Nothing,waitQ)))
+	lck <- inL $ liftIO Lock.new
+	let m = TxM (dta,(TxNodeMeta (idU,dependentsU,error "nodirty",\tbl -> return (),bufferTxM $! m,Nothing,waitQ,lck)))
 	newTxMLog m
 	return m
 
@@ -116,7 +117,8 @@ refInnerTxM v = do
 	-- add a reference dependency (they are transitive up to the top-level calling thunk)
 	creator <- mkRefCreatorTx idU
 	waitQ <- inL $ liftIO newQ
-	let m = TxM (dta,(TxNodeMeta (idU,dependentsU,error "nodirty",\tbl -> return (),bufferTxM $! m,creator,waitQ)))
+	lck <- inL $ liftIO Lock.new
+	let m = TxM (dta,(TxNodeMeta (idU,dependentsU,error "nodirty",\tbl -> return (),bufferTxM $! m,creator,waitQ,lck)))
 	newTxMLog m
 	return m
 
@@ -199,7 +201,8 @@ thunkTxU c = do
 	dta <- inL $ newRef (TxThunk c)
 	dependentsU <- inL $ liftIO $ WeakSet.new
 	waitQ <- inL $ liftIO $ newQ
-	let u = TxU (dta,(TxNodeMeta (idU,dependentsU,changeDirtyValueTx True Write $! u,forgetUDataTx $! u,bufferTxU $! u,Nothing,waitQ)))
+	lck <- inL $ liftIO Lock.new
+	let u = TxU (dta,(TxNodeMeta (idU,dependentsU,changeDirtyValueTx True Write $! u,forgetUDataTx $! u,bufferTxU $! u,Nothing,waitQ,lck)))
 	newTxULog u
 	return u
 
@@ -208,7 +211,8 @@ constTxU v = do
 	idU <- inL $ liftIO newUnique
 	dta <- inL $ newRef (TxConst v)
 	waitQ <- inL $ liftIO $ newQ
-	let u = TxU (dta,(TxNodeMeta (idU,error "no dependents",error "no dirty",forgetUDataTx $! u,bufferTxU $! u,Nothing,waitQ)))
+	lck <- inL $ liftIO Lock.new
+	let u = TxU (dta,(TxNodeMeta (idU,error "no dependents",error "no dirty",forgetUDataTx $! u,bufferTxU $! u,Nothing,waitQ,lck)))
 	newTxULog u
 	return u
 
@@ -401,7 +405,7 @@ dirtyRecursivelyTx tbl meta = do
 			dirtyTxNM (tgtMetaTxW d) tbl
 			dirtyRecursivelyTx tbl (tgtMetaTxW d)
 
--- inserts or updates a new dependency in a dependency list
+-- inserts or updates a dependency in a dependency list
 insertTxDependency :: MonadRef r m => Unique -> (TxDependency r m,IO ()) -> TxDependencies r m -> m ()
 insertTxDependency did d rds = mapRef updateTxDependency rds where
 	updateTxDependency [] = [d]
@@ -527,7 +531,7 @@ atomicallyTxMsg msg stm = runIncremental try where
 		-- run the tx
 		x <- stm `Catch.catches` [Catch.Handler catchInvalid ,Catch.Handler catchRetry ,Catch.Handler catchSome]
 		-- tries to commit the current tx, otherwise repairs it incrementally
-		success <- atomicTx $ validateAndCommitTopTx False
+		success <- validateAndCommitTopTx False
 		if success
 			then do
 				debugTx $ "finished tx " ++ msg
@@ -541,7 +545,7 @@ atomicallyTxMsg msg stm = runIncremental try where
 	catchRetry BlockedOnRetry = do
 		debugTx "caught BlockedOnRetry"
 		-- if the retry was invoked on an inconsistent state, we incrementally repair and run again, otherwise we place the tx in the waiting queue
-		mbsuccess <- atomicTx $ validateAndRetryTopTx
+		mbsuccess <- validateAndRetryTopTx
 		case mbsuccess of
 			Just lck -> do -- retried txs are always in a consistent state, because we apply all affecting updates before releasing the lock
 				-- wait for the lock to be released (whenever some variables that it depends on are changed)
@@ -553,7 +557,7 @@ atomicallyTxMsg msg stm = runIncremental try where
 	catchSome (e::SomeException) = do
 	 	debugTx "caught SomeException"
 		-- we still need to validate on exceptions, otherwise repair incrementally; transaction-local allocations still get committed
-		success <- atomicTx $ validateAndCommitTopTx True
+		success <- validateAndCommitTopTx True
 		if success then throwM e else restartTx $ do
 			debugTx "SomeException: retrying invalid tx "
 			try
@@ -572,14 +576,14 @@ retryTx = inL $ liftIO $ throwIO BlockedOnRetry
 orElseTx :: TxLayer Outside r m => Outside TxAdapton r m a -> Outside TxAdapton r m a -> Outside TxAdapton r m a
 orElseTx stm1 stm2 = do1 `Catch.catches` [Catch.Handler catchInvalid,Catch.Handler catchSome]
 	where
-	try1 = do { x <- stm1; atomicTx (validateAndCommitNestedTx Nothing); return x }
-	try2 = do { x <- stm2; atomicTx (validateAndCommitNestedTx Nothing); return x }
+	try1 = do { x <- stm1; validateAndCommitNestedTx Nothing; return x }
+	try2 = do { x <- stm2; validateAndCommitNestedTx Nothing; return x }
 	do1 = inL (liftIO emptyTxLog) >>= \txlog1 -> startNestedTx txlog1 (try1 `Catch.catch` catchRetry1)
 	do2 = inL (liftIO emptyTxLog) >>= \txlog2 -> startNestedTx txlog2 (try2 `Catch.catch` catchRetry2)
-	catchRetry1 BlockedOnRetry = atomicTx validateAndRetryNestedTx >> do2
-	catchRetry2 BlockedOnRetry = atomicTx validateAndRetryNestedTx >> throwM BlockedOnRetry
+	catchRetry1 BlockedOnRetry = validateAndRetryNestedTx >> do2
+	catchRetry2 BlockedOnRetry = validateAndRetryNestedTx >> throwM BlockedOnRetry
 	catchInvalid (e::InvalidTx) = throwM e
-	catchSome (e::SomeException) = atomicTx (validateAndCommitNestedTx (Just e)) >> throwM e
+	catchSome (e::SomeException) = validateAndCommitNestedTx (Just e) >> throwM e
 
 -- appends a freshly created txlog for the inner tx
 startNestedTx txlog = Reader.local (\(starttime :!: stack :!: txlogs) -> (starttime :!: stack :!: SCons txlog txlogs))
@@ -620,7 +624,7 @@ commitTopTx onlyAllocs starttime txlog = do
 -- returns a bool stating whether the transaction was committed or needs to be incrementally repaired
 -- no exceptions should be raised inside this block
 validateAndCommitTopTx :: TxLayer Outside r m => Bool -> Outside TxAdapton r m Bool
-validateAndCommitTopTx onlyAllocs = do
+validateAndCommitTopTx onlyAllocs = atomicTx $ do
 	txenv@(starttime :!: callstack :!: SCons txlog SNil) <- Reader.ask
 	mbsuccess <- inL $ validateTxs starttime callstack (SCons txlog SNil)
 	case mbsuccess of
@@ -637,7 +641,7 @@ validateAndCommitTopTx onlyAllocs = do
 			return False
 
 validateAndCommitNestedTx :: TxLayer Outside r m => Maybe SomeException -> Outside TxAdapton r m ()
-validateAndCommitNestedTx mbException = do
+validateAndCommitNestedTx mbException = atomicTx $ do
 	txenv@(starttime :!: callstack :!: txlogs@(SCons txlog1 (SCons txlog2 _))) <- Reader.ask
 	case mbException of
 		Just e -> do -- only merge allocations with the parent, since validation will be performed by the top-level tx
@@ -664,14 +668,14 @@ validateAndCommitNestedTx mbException = do
 
 -- validates a transaction and places it into the waiting queue for retrying
 validateAndRetryTopTx :: TxLayer Outside r m => Outside TxAdapton r m (Maybe Lock)
-validateAndRetryTopTx = do
+validateAndRetryTopTx = atomicTx $ do
 	txenv@(starttime :!: callstack :!: SCons txlog SNil) <- Reader.ask
 	-- validates the current and enclosing txs up the tx tree
 	mbsuccess <- inL $ validateTxs starttime callstack (SCons txlog SNil)
 	case mbsuccess of
 		Nothing -> do
-			lck <- inL $ liftIO $ Lock.newAcquired
-			inL $ retryTxLog (Just lck) txenv -- wait on changes to retry
+			lck <- inL $ liftIO $ Lock.newAcquired -- sets the lock as acquired
+			inL $ retryTxLog (Just lck) txenv -- wait on changes to retry (only registers waits, does not actually wait)
 			return $ Just lck
 		Just conflicts -> do
 			-- delete the running tx; it will get a new timestamp once it is retried
@@ -685,7 +689,7 @@ validateAndRetryTopTx = do
 -- validates a nested transaction and merges its log with its parent, so that the parent
 -- note that merging discards the tx's writes
 validateAndRetryNestedTx :: TxLayer Outside r m => Outside TxAdapton r m ()
-validateAndRetryNestedTx = do
+validateAndRetryNestedTx = atomicTx $ do
 	txenv@(starttime :!: callstack :!: txlogs@(SCons txlog1 (SCons txlog2 _))) <- Reader.ask
 	mbsuccess <- inL $ validateTxs starttime callstack txlogs
 	case mbsuccess of
@@ -705,10 +709,13 @@ validateAndRetryNestedTx = do
 
 -- runs transaction-specific code atomically in respect to a global state
 atomicTx :: (TxLayer Outside r m) => Outside TxAdapton r m a -> Outside TxAdapton r m a
-atomicTx = withLockTx txLock
+atomicTx m = do
+	txlogs <- readTxLog
+	lcks <- inL $ liftIO $ acquireWriteLocks txlogs
+	withLocksTx lcks m
 
-withLockTx :: (TxLayer l r m) => Lock -> l TxAdapton r m a -> l TxAdapton r m a
-withLockTx = liftA2 Catch.bracket_ (inL . liftIO . acquire) (inL . liftIO . release)
+withLocksTx :: (TxLayer l r m) => [Lock] -> l TxAdapton r m a -> l TxAdapton r m a
+withLocksTx = liftA2 Catch.bracket_ (inL . liftIO . Control.Monad.mapM_ acquire) (inL . liftIO . Control.Monad.mapM_ release)
 
 throwM e = debug ("throwing exception") $ Catch.throwM e
 

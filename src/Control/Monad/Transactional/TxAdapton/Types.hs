@@ -35,7 +35,7 @@ import qualified Unsafe.Coerce as Unsafe
 import Control.Monad.Reader (Reader(..),ReaderT(..),MonadReader(..))
 import qualified Control.Monad.Reader as Reader
 import Control.Monad.Catch
-import Control.Concurrent.Lock
+import Control.Concurrent.Lock as Lock
 import Control.Concurrent.MVar
 import Control.Monad
 import System.Mem.WeakKey
@@ -108,6 +108,16 @@ isNewDynTxVar t = dynTxStatus t == New
 isWriteDynTxVar :: DynTxVar r m -> Bool
 isWriteDynTxVar t = dynTxStatus t == Write
 
+-- acquires a set of locks for variables to which a txlog intends to write
+acquireWriteLocks :: TxLogs r m -> IO [Lock]
+acquireWriteLocks = Strict.foldM acquireWriteLocks' []
+	where
+	acquireWriteLocks' :: [Lock] -> TxLog r m -> IO [Lock]
+	acquireWriteLocks' lcks txlog = WeakTable.foldM (\xs (_,tvar) -> return $ dynTxVarLock tvar : xs) lcks $ txLogBuff txlog
+
+releaseLocks :: [Lock] -> IO ()
+releaseLocks = Control.Monad.mapM_ Lock.release
+
 -- we use a lock-free map since multiple threads may be accessing it to register/unregister new txlogs
 -- a persistent memo table and a family of buffered (transaction-local) memo tables indexed by a buffered tx log
 -- note that added entries to the memotable are always New (hence we have TxU and not BuffTxU in buffered tables)
@@ -171,7 +181,7 @@ type TxDependencies r m = r [(TxDependency r m,IO ())]
 newtype TxDependency (r :: * -> *) (m :: * -> *) = TxDependency (
 		TxNodeMeta r m -- the metadata of the source node
 	,	r Bool -- dirty flag
-	,	Inside TxAdapton r m Bool -- a checking condition with the previously seen value of the source node;
+	,	Inside TxAdapton r m Bool -- a checking condition with the previously seen value of the source node
 	,	TxNodeMeta r m -- the metadata of the target node
 	,   r Bool -- original/buffered flag
 	,	MkWeak -- parent dependencies list
@@ -223,17 +233,19 @@ newtype TxNodeMeta (r :: * -> *) (m :: * -> *) = TxNodeMeta (
 	,   TxStatus -> TxLogs r m -> m (DynTxVar r m) -- function that writes a buffered copy of the original data to a transaction log
 	,   Maybe (TxCreator r m) -- the parent thunk under which the reference was created (modifiables only)
 	,   WaitQueue r m -- a sequence of wake-up actions for txs that are waiting on further updates to this node (modifiables only)
+	,   Lock -- a lock for writes to this variable
 	)
 
 type TxLogs r m = SList (TxLog r m)
 
-idTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait)) = uid
-dependentsTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait)) = deps
-dirtyTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait)) = dirty
-forgetTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait)) = forget
-bufferTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait)) = buffer
-creatorTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait)) = creator
-waitTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait)) = wait
+idTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = uid
+dependentsTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = deps
+dirtyTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = dirty
+forgetTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = forget
+bufferTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = buffer
+creatorTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = creator
+waitTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = wait
+lockTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = lck
 
 -- a wait queue of tx locks and environments
 -- it does not need to be thread-safe, because we only push and pop elements inside validation/commit phases
@@ -255,6 +267,10 @@ type TxWake m = (m (),IO ())
 
 type TxCreator r m = WTxNodeMeta r m
 type WTxNodeMeta r m = Weak (TxNodeMeta r m)
+
+dynTxVarLock :: DynTxVar r m -> Lock
+dynTxVarLock (DynTxM _ m _) = lockTxNM $ metaTxM m
+dynTxVarLock (DynTxU _ u _) = lockTxNM $ metaTxU u
 
 dynTxVarDependents :: MonadIO m => DynTxVar r m -> m (TxDependents r m)
 dynTxVarDependents (DynTxM (Just (BuffTxM (_,deps))) _ _) = return deps
@@ -403,10 +419,6 @@ changeTxU u mbChgDta status txlogs = do
 
 coerce :: a -> b
 coerce x = Unsafe.unsafeCoerce x
---coerce :: (Typeable a,Typeable b) => a -> b
---coerce x = case (cast x) of
---	Nothing -> error "failed coercing"
---	Just y -> y
 
 -- finds a buffered entry in a any depth of a nested tx log
 findTxLogEntry :: TxLogs r m -> Unique -> IO (Maybe (DynTxVar r m))
