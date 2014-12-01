@@ -270,7 +270,7 @@ repairInnerTxU t value force = do
 		isDirty <- inL $ readRef (dirtyTxW d)
 		if isDirty
 			then do
-				txdependents <- inL $ getTxDependents tbl (srcMetaTxW d) Eval
+				txdependents <- inL $ getTxDependents tbl (srcMetaTxW d) Write
 				inL $ changeTxDependency txdependencies txdependents d False
 				ok <- checkTxW d
 				if ok then m else inL (clearDependenciesTx txdependencies >> newRef []) >>= evaluateInnerTxU t force
@@ -441,12 +441,12 @@ commitDynTxVar onlyAllocs (DynTxU (Just (BuffTxU (txudta,txrdependents))) u txst
 	deps <- WeakSet.toWeakSList txrdependents
 	WeakSet.modifyWeak (dependentsTxNM $ metaTxU u) $ \_ -> return deps
 	case txstatus of
-		Eval -> return ((Set.empty,return ()),(return (),return ()))
+		Eval -> return ((Map.singleton (idTxNM $ metaTxU u) False,return ()),(return (),return ()))
 		Write -> if onlyAllocs
-			then return ((Set.empty,return ()),(return (),return ()))
+			then return ((Map.empty,return ()),(return (),return ()))
 			else do
 				wakes <- wakeUpWaits (return ()) (metaTxU u)
-				return ((Set.singleton $ idTxNM $ metaTxU u,return ()),wakes) -- the thunk didn't change directly, so no correction action is due
+				return ((Map.singleton (idTxNM $ metaTxU u) True,return ()),wakes) -- the thunk didn't change directly, so no correction action is due
 commitDynTxVar onlyAllocs (DynTxU Nothing u New) = do
 	-- in this case we simply need to mark the dependencies of the variable as original
 	dta <- readRef (dataTxU u)
@@ -454,20 +454,20 @@ commitDynTxVar onlyAllocs (DynTxU Nothing u New) = do
 		TxValue dirty value force dependencies -> do
 			markOriginalTxDependencies dependencies
 		otherwise -> return ()
-	return ((Set.empty,return ()),(return (),return ()))
+	return ((Map.empty,return ()),(return (),return ()))
 commitDynTxVar onlyAllocs (DynTxM (Just (BuffTxM (value,txrdependents))) m txstatus@(isEvalOrWrite -> True)) = do
 	-- commit the buffered data to the original modifiable (this is not atomic! in this case we have Eval-Read conflicts!)
 	writeRef (dataTxM m) value
 	deps <- WeakSet.toWeakSList txrdependents
 	WeakSet.modifyWeak (dependentsTxNM $ metaTxM m) $ \_ -> return deps
 	case txstatus of
-		Eval -> return ((Set.empty,return ()),(return (),return ()))
+		Eval -> return ((Map.singleton (idTxNM $ metaTxM m) False,return ()),(return (),return ()))
 		Write -> if onlyAllocs
-			then return ((Set.empty,return ()),(return (),return ()))
+			then return ((Map.empty,return ()),(return (),return ()))
 			else do
 				wakes <- wakeUpWaits (setTxM m value) (metaTxM m)
-				return ((Set.singleton $ idTxNM $ metaTxM m,setTxM m value),wakes) -- store an operation that will correct the modifiable and propagate to its dependents
-commitDynTxVar onlyAllocs _ = return ((Set.empty,return ()),(return (),return ()))
+				return ((Map.singleton (idTxNM $ metaTxM m) True,setTxM m value),wakes) -- store an operation that will correct the modifiable and propagate to its dependents
+commitDynTxVar onlyAllocs _ = return ((Map.empty,return ()),(return (),return ()))
 
 -- applies a buffered log to the global state
 -- note that we report changes as a whole, since dependent output thunks don't report modifications on their own
@@ -476,7 +476,7 @@ commitTxLog onlyAllocs txlog = do
 	-- commits transaction-local memo tables
 	txunmemo <- liftIO $ commitTxLogMemoTables txlog
 	-- commits buffered modifiable/thunk data
-	(writes,wakes) <- WeakTable.foldM (\((xs,ops),(buffs,wakes)) (uid,dyntxvar) -> commitDynTxVar onlyAllocs dyntxvar >>= \((x,op),(buff,wake)) -> return ((xs `Set.union` x,ops >> op),(buffs >> buff,wakes >> wake))) ((Set.empty,return ()),(return (),return ())) (txLogBuff txlog)
+	(writes,wakes) <- WeakTable.foldM (\((xs,ops),(buffs,wakes)) (uid,dyntxvar) -> commitDynTxVar onlyAllocs dyntxvar >>= \((x,op),(buff,wake)) -> return ((xs `Map.union` x,ops >> op),(buffs >> buff,wakes >> wake))) ((Map.empty,return ()),(return (),return ())) (txLogBuff txlog)
 	-- finalize the whole buffered table
 	liftIO $ WeakTable.finalize (txLogBuff txlog)
 	return ((txunmemo,writes),wakes)

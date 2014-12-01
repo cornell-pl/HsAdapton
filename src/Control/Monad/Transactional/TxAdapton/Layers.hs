@@ -206,33 +206,32 @@ restartMemoTx = Strict.mapM_ restartMemoTx' where
 	
 
 -- updating a modifiable may propagate to multiple thunks; they are all logged
-type TxWrite r m = (Set Unique,TxWrite' r m)
+type TxWrite r m = (Map Unique Bool,TxWrite' r m)
 type TxWrite' r m = Outside TxAdapton r m ()
 
+-- checks if the current txlog is consistent with a sequence of concurrent modifications
 -- Nothing = success
 -- Just = some conflicting changes that happened simultaneously to the current tx
-checkTx :: Monad m => TxLog r m -> [(UTCTime,(TxUnmemo r m,TxWrite r m))] -> IO (Maybe (TxUnmemo r m,TxWrite' r m))
-checkTx txlog wrts = liftM concatMaybesTxM $ Prelude.mapM (checkTx' txlog) wrts
-
--- checks if the current txlog is consistent with a sequence of concurrent modifications
-checkTx' :: TxLog r m -> (UTCTime,(TxUnmemo r m,TxWrite r m)) -> IO (Maybe (TxUnmemo r m,TxWrite' r m))
-checkTx' txlog (txtime,(unmemo,(writtenIDs,writeOp))) = do
-	ok <- Foldable.foldlM (\b uid -> liftM (b &&) $ checkTx'' txlog uid) True writtenIDs
-	if ok then return Nothing else return $ Just (unmemo,writeOp)
-
 -- if the current tx uses a variable that has been written to before, there is a conflict
 -- note that we also consider write-write conflicts, since we don't log written but not read variables differently from read-then-written ones
 -- True = no conflict
-checkTx'' :: TxLog r m -> Unique -> IO Bool
-checkTx'' txlog uid = do
-	mb <- WeakTable.lookup (txLogBuff txlog) uid
-	case mb of
-		Nothing -> return True
-		-- news should never appear!
-		Just (DynTxM buff m New) -> error "new variables should't have been written to!"
-		Just (DynTxU buff m New) -> error "new variables should't have been written to!"
-		-- reads, evals and writes are conflicting
-		Just tvar -> return False
+checkTx :: Monad m => TxLog r m -> [(UTCTime,(TxUnmemo r m,TxWrite r m))] -> IO (Maybe (TxUnmemo r m,TxWrite' r m))
+checkTx txlog wrts = liftM concatMaybesTxM $ Prelude.mapM (checkTx' txlog) wrts
+	where
+	checkTx' txlog (txtime,(unmemo,(writtenIDs,writeOp))) = do
+		ok <- Map.foldrWithKey (\uid isWrite mb -> mb >>= \b -> checkTxWrite txlog uid isWrite >>= \b1 -> return $ b && b1) (return True) writtenIDs
+		if ok then return Nothing else return $ Just (unmemo,writeOp)
+	checkTxWrite txlog uid isWrite = do
+		mb <- WeakTable.lookup (txLogBuff txlog) uid
+		case mb of
+			Nothing -> return True
+			Just tvar -> if isWrite
+				then return False
+				else do
+					-- for Eval-Eval cases we ignore the current Eval
+					when (dynTxStatus tvar == Eval) $ WeakTable.finalizeEntry (txLogBuff txlog) uid
+					-- Eval-Eval and Eval-Read are not conflicts
+					return (dynTxStatus tvar <= Eval)
 
 concatMaybesM :: Monad m => [Maybe (m a)] -> Maybe (m a)
 concatMaybesM [] = Nothing

@@ -4,7 +4,7 @@ module Control.Monad.Transactional.TxAdapton.Types where
 
 import Control.Monad.Incremental
 import Control.Monad.Transactional
-import Control.Concurrent.Map as CMap
+import qualified Control.Concurrent.Map as CMap
 import Control.Monad.Incremental.Adapton.Types
 import Data.Concurrent.Deque.Class as Queue
 import Data.Concurrent.Deque.Reference.DequeInstance
@@ -484,6 +484,10 @@ unwriteDynTxVar tvar = tvar
 dynTxStatus :: DynTxVar r m -> TxStatus
 dynTxStatus (DynTxU _ _ s) = s
 dynTxStatus (DynTxM _ _ s) = s
+
+dynTxId :: DynTxVar r m -> Unique
+dynTxId (DynTxU _ u _) = idTxNM $ metaTxU u
+dynTxId (DynTxM _ m _) = idTxNM $ metaTxM m
 
 -- gets a buffered dependents set, generating a new Eval if needed
 getTxDependents :: MonadIO m => TxLogs r m -> TxNodeMeta r m -> TxStatus -> m (TxDependents r m)
