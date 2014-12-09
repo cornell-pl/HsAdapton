@@ -33,7 +33,9 @@ class Incremental inc r m => Transactional inc r m where
 	throw :: Exception e => e -> STxM inc r m a
 	catch :: Exception e => STxM inc r m a -> (e -> STxM inc r m a) -> STxM inc r m a
 
-
+instance Transactional inc r m => MonadPlus (STxM inc r m) where
+	mzero = retry
+	mplus = orElse
 
 
 

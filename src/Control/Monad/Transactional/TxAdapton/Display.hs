@@ -9,23 +9,24 @@ import Control.Monad.Transactional.TxAdapton.Layers
 
 import Control.Monad.Lazy
 import Control.Monad.Trans
+import Control.Monad
 
 -- * Display
 
 instance (MonadLazy (Outside TxAdapton r m),Eq a,Display Outside TxAdapton r m a,Input TxM l TxAdapton r m) => Display Outside TxAdapton r m (TxM l TxAdapton r m a) where
-	displaysPrec m rest = getOutside m >>= \x -> lazily $ displaysPrec x rest
+	displaysPrec m rest = getOutside m >>= \x -> lazily $ liftM (\x -> "<" ++ (show $ idTxNM $ metaTxM m) ++ " " ++ x) $ displaysPrec x ('>':rest)
 	{-# INLINE displaysPrec #-}
 
 instance (MonadLazy (Inside TxAdapton r m),Eq a,Display Inside TxAdapton r m a,Input TxM Inside TxAdapton r m) => Display Inside TxAdapton r m (TxM Inside TxAdapton r m a) where
-	displaysPrec m rest = get m >>= \x -> lazily $ displaysPrec x rest
+	displaysPrec m rest = get m >>= \x -> lazily $ liftM (\x -> "<" ++ (show $ idTxNM $ metaTxM m) ++ " " ++ x) $ displaysPrec x ('>':rest)
 	{-# INLINE displaysPrec #-}
 	
 instance (MonadLazy (Outside TxAdapton r m),Eq a,Display Outside TxAdapton r m a,Output TxU l TxAdapton r m) => Display Outside TxAdapton r m (TxU l TxAdapton r m a) where
-	displaysPrec m rest = forceOutside m >>= \x -> lazily $ displaysPrec x rest
+	displaysPrec m rest = forceOutside m >>= \x -> lazily $ liftM (\x -> "<" ++ (show $ idTxNM $ metaTxU m) ++ " " ++ x) $ displaysPrec x ('>':rest)
 	{-# INLINE displaysPrec #-}
 
 instance (MonadLazy (Inside TxAdapton r m),Eq a,Display Inside TxAdapton r m a,Output TxU Inside TxAdapton r m) => Display Inside TxAdapton r m (TxU Inside TxAdapton r m a) where
-	displaysPrec m rest = force m >>= \x -> lazily $ displaysPrec x rest
+	displaysPrec m rest = force m >>= \x -> lazily $ liftM (\x -> "<" ++ (show $ idTxNM $ metaTxU m) ++ " " ++ x) $ displaysPrec x ('>':rest)
 	{-# INLINE displaysPrec #-}
 
 --instance (MonadLazy (Outside inc r m),Eq a,Display Outside inc r m a,Input L l inc r m) => Display Outside inc r m (L l inc r m a) where

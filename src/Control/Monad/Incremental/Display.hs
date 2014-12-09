@@ -108,6 +108,10 @@ instance Layer l inc r m => NFDataInc l inc r m Int where
 	rnfInc = return . rnf
 	{-# INLINE rnfInc #-}
 
+instance Layer l inc r m => NFDataInc l inc r m String where
+	rnfInc = return . rnf
+	{-# INLINE rnfInc #-}
+
 
 
 

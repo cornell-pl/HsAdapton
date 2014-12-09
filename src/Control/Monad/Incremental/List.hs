@@ -114,18 +114,18 @@ takeInc = memo2 $ \recur i mxs -> case i of
 
 -- | filter
 filterInc :: (Thunk mod l inc r m,Eq (ListMod thunk l inc r m a),MonadIO m,Memo (ListMod mod l inc r m a),Eq a,Eq (ListMod mod l inc r m a),Output thunk l inc r m)
-	=> (a -> Bool) -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+	=> (a -> l inc r m Bool) -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 filterInc p = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
-	ConsMod x mxs -> if p x
+	ConsMod x mxs -> p x >>= \b -> if b
 		then liftM (ConsMod x) $ recur mxs
 		else recur mxs >>= force
 	NilMod -> return NilMod
 	
 -- | filter
 filterWithKeyInc :: (Thunk mod l inc r m,Eq (ListMod thunk l inc r m a),MonadIO m,Memo (ListMod mod l inc r m a),Eq a,Eq (ListMod mod l inc r m a),Output thunk l inc r m)
-	=> (a -> a -> Bool) -> a -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+	=> (a -> a -> l inc r m Bool) -> a -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 filterWithKeyInc cmp k = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
-	ConsMod x mxs -> if cmp k x
+	ConsMod x mxs -> cmp k x >>= \b -> if b
 		then liftM (ConsMod x) $ recur mxs
 		else recur mxs >>= force
 	NilMod -> return NilMod
@@ -171,11 +171,12 @@ fold1Inc f mxs = do
 		NilMod -> return NilMod)
 
 -- | partition
-partitionInc :: (Eq (ListMod mod l inc r m a),Memo (ListMod mod l inc r m a),Eq a,Output mod l inc r m) => (a -> Bool) -> ListMod mod l inc r m a -> l inc r m (mod l inc r m (ListMod mod l inc r m a,ListMod mod l inc r m a))
+partitionInc :: (Eq (ListMod mod l inc r m a),Memo (ListMod mod l inc r m a),Eq a,Output mod l inc r m)
+	=> (a -> l inc r m Bool) -> ListMod mod l inc r m a -> l inc r m (mod l inc r m (ListMod mod l inc r m a,ListMod mod l inc r m a))
 partitionInc p = memo $ \recur mxs -> force mxs >>= \xs -> case xs of
 	ConsMod x mxs' -> do
 		(left,right) <- recur mxs' >>= force
-		if p x
+		p x >>= \b -> if b
 			then const (ConsMod x left) >>= \left' -> return (left',right)
 			else const (ConsMod x right) >>= \right' -> return (left,right')
 	NilMod -> do
@@ -184,10 +185,10 @@ partitionInc p = memo $ \recur mxs -> force mxs >>= \xs -> case xs of
 
 -- | quicksort
 quicksortInc :: (Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
-	=> (a -> a -> Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 quicksortInc cmp (mxs :: ListMod mod l inc r m a) = do
-	let filter_left = filterWithKeyInc (\k y -> cmp y k == LT)
-	let filter_right = filterWithKeyInc (\k y -> cmp y k /= LT)
+	let filter_left = filterWithKeyInc (\k y -> liftM (==LT) $ cmp y k)
+	let filter_right = filterWithKeyInc (\k y -> liftM (/=LT) $ cmp y k)
 	(nil :: ListMod mod l inc r m a) <- const NilMod
 	let quicksortInc' = memo2 $ \recur mxs rest -> force mxs >>= \xs -> case xs of
 		ConsMod x mxs' -> do
@@ -201,26 +202,26 @@ quicksortInc cmp (mxs :: ListMod mod l inc r m a) = do
 
 -- | quicksort with partition (this IC version is actually slower than using two filters)
 quicksortInc2 :: (Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
-	=> (a -> a -> Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 quicksortInc2 cmp mxs = const NilMod >>= (quicksortInc2' cmp) mxs
   where
 	quicksortInc2' :: (Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
-		=> (a -> a -> Ordering) -> ListMod mod l inc r m a -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+		=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 	quicksortInc2' cmp = memo2 (\recur mxs rest -> force mxs >>= \xs -> case xs of
 		ConsMod x mxs' -> do
-			(left,right) <- partitionInc (\y -> cmp y x == LT) mxs' >>= force
+			(left,right) <- partitionInc (\y -> liftM (==LT) $ cmp y x) mxs' >>= force
 			tright <- thunk $ liftM (ConsMod x) $ recur right rest
 			recur left tright >>= force
 		NilMod -> force rest)
 
 quicksortInc3 :: (Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
-	=> (a -> a -> Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 quicksortInc3 cmp (mxs :: ListMod mod l inc r m a) = do
 	(nil :: ListMod mod l inc r m a) <- const NilMod
 	let quicksortInc' = memo2 $ \recur mxs rest -> force mxs >>= \xs -> case xs of
 		ConsMod x mxs' -> do
-			left <- filterInc (\y -> cmp y x == LT) mxs'
-			right <- filterInc (\y -> cmp y x /= LT) mxs'
+			left <- filterInc (\y -> liftM (==LT) $ cmp y x) mxs'
+			right <- filterInc (\y -> liftM (/=LT) $ cmp y x) mxs'
 			tright <- thunk $ liftM (ConsMod x) $ recur right rest
 			recur left tright >>= force
 		NilMod -> force rest
@@ -228,7 +229,7 @@ quicksortInc3 cmp (mxs :: ListMod mod l inc r m a) = do
 
 -- | mergesort
 mergesortInc :: (Memo (ListMod mod l inc r m (ListMod mod l inc r m a)),Memo a,Memo (mod l inc r m (ListMod' mod l inc r m a)),MonadIO m,Hashable (ListMod mod l inc r m (ListMod mod l inc r m a)),Eq (ListMod mod l inc r m (ListMod mod l inc r m a)),Output mod l inc r m,Eq (ListMod mod l inc r m a),Eq a)
-	=> (a -> a -> Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 mergesortInc cmp mxs = do
 	nil <- const NilMod
 	memo (\_ mxs -> force mxs >>= \xs -> case xs of
@@ -241,24 +242,26 @@ mergesortInc cmp mxs = do
 
 -- | merges two sorted lists
 mergeInc :: (Memo (mod l inc r m (ListMod' mod l inc r m a)),Eq a,Output mod l inc r m,Eq (ListMod mod l inc r m a))
-	=> (a -> a -> Ordering) -> ListMod mod l inc r m a -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 mergeInc cmp = memo2 $ \recur mxs mys -> force mxs >>= \xs -> force mys >>= \ys -> case (xs,ys) of
-	(ConsMod x mxs',ConsMod y mys') -> if cmp x y == LT
+	(ConsMod x mxs',ConsMod y mys') -> cmp x y >>= \b -> if b == LT
 		then liftM (ConsMod x) $ recur mxs' mys
 		else liftM (ConsMod y) $ recur mxs mys'
 	(mxs',NilMod) -> return mxs'
 	(NilMod,mys') -> return mys'
 
 -- | insertion sort (slower IC...)
-isortInc :: (Eq a,Eq (ListMod mod l inc r m a),Memo a,Memo (mod l inc r m (ListMod' mod l inc r m a)),Output mod l inc r m) => (a -> a -> Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+isortInc :: (Eq a,Eq (ListMod mod l inc r m a),Memo a,Memo (mod l inc r m (ListMod' mod l inc r m a)),Output mod l inc r m)
+	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 isortInc cmp = memo $ \recur mxs -> force mxs >>= \xs -> case xs of
 	ConsMod x' mxs' -> recur mxs' >>= insertInc cmp x' >>= force
 	NilMod -> return NilMod
 
 -- | insert an element into a sorted list
-insertInc :: (Eq a,Eq (ListMod mod l inc r m a),Memo a,Memo (mod l inc r m (ListMod' mod l inc r m a)),Output mod l inc r m) => (a -> a -> Ordering) -> a -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+insertInc :: (Eq a,Eq (ListMod mod l inc r m a),Memo a,Memo (mod l inc r m (ListMod' mod l inc r m a)),Output mod l inc r m)
+	=> (a -> a -> l inc r m Ordering) -> a -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 insertInc cmp = memo2 $ \recur x mys -> force mys >>= \ys -> case ys of
-	ConsMod y mys' -> if cmp x y == LT
+	ConsMod y mys' -> cmp x y >>= \b -> if b == LT
 		then return $ ConsMod x mys
 		else liftM (ConsMod y) $ recur x mys'
 	NilMod -> liftM (ConsMod x) $ const NilMod
@@ -302,10 +305,10 @@ mergeMapInc :: (Eq (ListMod mod l inc r m (ListMod mod l inc r m (k, v))),Hashab
 mergeMapInc cmp mrg mxs mys = do
 	let samekey (kx,vx) (ky,vy) = kx == ky
 	let mrg' (kx,vx) (ky,vy) = liftM (kx,) $ mrg vx vy
-	mxys' <- intersectionByInc samekey mrg' mxs mys >>= quicksortInc cmp
+	mxys' <- intersectionByInc samekey mrg' mxs mys >>= quicksortInc (\x y -> return $ cmp x y)
 	mxs' <- differenceByInc samekey mxs mxys'
 	mys' <- differenceByInc samekey mys mxys'
-	mergeInc cmp mxys' mxs' >>= mergeInc cmp mys'
+	mergeInc (\x y -> return $ cmp x y) mxys' mxs' >>= mergeInc (\x y -> return $ cmp x y) mys'
 
 -- | merge two sorted key-value lists with a merging function for values with the same key
 --mergeMapInc2 :: (Memo k,Memo v,Memo (ListMod mod l inc r m (k,v)),Eq k,Eq v,Output mod l inc r m,Eq (ListMod mod l inc r m (k,v)))

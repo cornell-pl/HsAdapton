@@ -85,10 +85,10 @@ insertWith w_tbl@(WeakTable (tbl :!: weak_tbl)) a k v = do
 	weak <- Weak.mkWeak a v $ Just $ System.Mem.WeakTable.finalizeEntry' weak_tbl k
 	HashIO.insert tbl k weak
 
-insertWithMkWeak :: (Eq k,Hashable k) => WeakTable k v -> MkWeak -> k -> v -> IO ()
+insertWithMkWeak :: (MonadIO m,Eq k,Hashable k) => WeakTable k v -> MkWeak -> k -> v -> m ()
 insertWithMkWeak w_tbl@(WeakTable (tbl :!: weak_tbl)) (MkWeak mkWeak) k v = do
-	weak <- mkWeak v $ Just $ System.Mem.WeakTable.finalizeEntry' weak_tbl k
-	HashIO.insert tbl k weak
+	weak <- liftIO $ mkWeak v $ Just $ System.Mem.WeakTable.finalizeEntry' weak_tbl k
+	liftIO $ HashIO.insert tbl k weak
 
 -- | @insertWith@ that uses a reference as key
 insertWithRefKey :: (Eq k,Hashable k,WeakRef r) => WeakTable k v -> r a -> k -> v -> IO ()
@@ -106,12 +106,12 @@ finalizeEntry' weak_tbl k = do
 		Nothing -> return ()
 		Just tbl -> HashIO.delete tbl k
 
-lookup :: (Eq k,Hashable k) => WeakTable k v -> k -> IO (Maybe v)
+lookup :: (MonadIO m,Eq k,Hashable k) => WeakTable k v -> k -> m (Maybe v)
 lookup (WeakTable (tbl :!: weak_tbl)) k = do
-	w <- HashIO.lookup tbl k
+	w <- liftIO $ HashIO.lookup tbl k
 	case w of
 		Nothing -> return Nothing
-		Just r -> Weak.deRefWeak r
+		Just r -> liftIO $ Weak.deRefWeak r
 
 delete :: (Eq k,Hashable k) => WeakTable k v -> k -> IO ()
 delete (WeakTable (tbl :!: _)) k = HashIO.delete tbl k

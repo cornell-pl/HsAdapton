@@ -2,7 +2,7 @@
 
 module System.Mem.WeakSet (
 	  WeakSet(..)
-	, new, fromWeakSList, purge, insertWeak, mapM_, mapM',mapM'', mapPurgeM_,toList,toWeakSList,modifyWeak,mapPurgeM,copy,copyWithKey,toListPurge
+	, new, fromWeakSList, mergeWeak, mergeWithKey, purge, insertWeak, mapM_, mapM',mapM'', mapPurgeM_,toList,toWeakSList,modifyWeak,mapPurgeM,copy,copyWithKey,toListPurge
 	) where
 
 -- | Implementation of memo tables using hash tables and weak pointers as presented in http://community.haskell.org/~simonmar/papers/weak.pdf.
@@ -22,6 +22,7 @@ import System.IO.Unsafe
 import Data.IORef
 import Control.Monad hiding (mapM_)
 import Data.Hashable
+import qualified Data.Foldable as Foldable
 
 import GHC.Base
 import Control.Monad.Trans
@@ -59,7 +60,7 @@ new = do
 weakset_finalizer :: WeakSet' v -> IO ()
 weakset_finalizer set = do
 	xs <- readIORef set
-	SList.mapM_ Weak.finalize xs
+	Foldable.mapM_ Weak.finalize xs
 
 {-# INLINE purge #-}
 purge :: WeakSet v -> IO ()
@@ -71,7 +72,7 @@ purgeWeak w_set = do
 	mb <- Weak.deRefWeak w_set
 	case mb of
 		Nothing -> return ()
-		Just set -> mapIORefM_ (SList.foldM (\xs w -> purge' xs w) SNil) set
+		Just set -> mapIORefM_ (Foldable.foldlM (\xs w -> purge' xs w) SNil) set
   where
 	{-# INLINE purge' #-}
 	purge' = \xs w -> do
@@ -87,7 +88,7 @@ insertWeak (WeakSet (tbl :!: _)) weak = liftIO $ modifyIORef tbl (SCons weak)
 
 {-# INLINE mapM_ #-}
 mapM_ :: MonadIO m => (v -> m ()) -> WeakSet v -> m ()
-mapM_ f (WeakSet (tbl :!: _)) = liftIO (readIORef tbl) >>= SList.mapM_ g where
+mapM_ f (WeakSet (tbl :!: _)) = liftIO (readIORef tbl) >>= Foldable.mapM_ g where
 	{-# INLINE g #-}
 	g weak = do
 		mbv <- liftIO $ Weak.deRefWeak weak
@@ -111,7 +112,7 @@ mapM'' liftIO f (WeakSet (tbl :!: _)) = liftIO (readIORef tbl) >>= SList.mapM f
 mapPurgeM_ :: MonadIO m => (v -> m ()) -> WeakSet v -> m ()
 mapPurgeM_ f (WeakSet (tbl :!: _)) = do
 	xs <- liftIO (readIORef tbl)
-	xs' <- SList.foldM step SNil xs
+	xs' <- Foldable.foldlM step SNil xs
 	liftIO $ writeIORef tbl xs'
   where
 	step xs weak = do
@@ -126,7 +127,7 @@ mapPurgeM_ f (WeakSet (tbl :!: _)) = do
 mapPurgeM :: MonadIO m => (v -> Weak v -> m (Weak v)) -> WeakSet v -> m ()
 mapPurgeM f (WeakSet (tbl :!: _)) = do
 	xs <- liftIO (readIORef tbl)
-	xs' <- SList.foldM step SNil xs
+	xs' <- Foldable.foldlM step SNil xs
 	liftIO $ writeIORef tbl xs'
   where
 	step xs weak = do
@@ -190,9 +191,28 @@ copyWithKey getKey s = do
 				let MkWeak mkWeak = getKey x
 				mkWeak () (Just $ purgeWeak weak_s')
 				return $ SCons w slist
-	xs' <- liftIO $ SList.foldM addFinalizers SNil xs
+	xs' <- liftIO $ Foldable.foldlM addFinalizers SNil xs
 	
 	liftIO $ writeIORef s' xs'
 
 	return weakset'
 
+mergeWithKey :: MonadIO m => (v -> MkWeak) -> WeakSet v -> WeakSet v -> m ()
+mergeWithKey getKey weakset'@(WeakSet (s' :!: weak_s')) s = do
+	xs <- toWeakSList s
+	
+	let addFinalizers w = do
+		mb <- Weak.deRefWeak w
+		case mb of
+			Nothing -> return ()
+			Just x -> do
+				let MkWeak mkWeak = getKey x
+				mkWeak () (Just $ purgeWeak weak_s')
+				insertWeak weakset' w
+	liftIO $ Foldable.mapM_ addFinalizers xs
+
+-- adds the entries of the second weakset to the first weakset
+mergeWeak :: MonadIO m => WeakSet v -> WeakSet v -> m ()
+mergeWeak wset newwset = do
+	deps <- toWeakSList newwset
+	Foldable.mapM_ (insertWeak wset) deps

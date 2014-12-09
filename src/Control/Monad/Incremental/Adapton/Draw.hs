@@ -46,6 +46,7 @@ import Data.WithClass.MData
 import Data.IntMap (IntMap(..))
 import qualified Data.IntMap as IntMap
 import Data.List as List
+import qualified Data.Foldable as Foldable
 import qualified Data.Strict.List as SList
 
 import Debug
@@ -99,7 +100,7 @@ instance (MonadRef r m,MonadIO m,Eq a,Layer l inc r m,Output U l inc r m,MData (
 			Nothing -> return ([thunkID],[DN thunkNode])
 
 drawDependents :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Dependents inc r m -> Outside inc r m [DotStatement String]
-drawDependents fromID deps = checkDrawnDependents fromID $ liftM (concat . SList.toList) $ WeakSet.mapM'' (inL . liftIO) (drawDependent fromID) deps
+drawDependents fromID deps = checkDrawnDependents fromID $ liftM (concat . Foldable.toList) $ WeakSet.mapM'' (inL . liftIO) (drawDependent fromID) deps
 drawDependent :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Weak (Dependent inc r m) -> Outside inc r m [DotStatement String]
 drawDependent fromID weak = do
 	mb <- inL $ liftIO $ deRefWeak weak

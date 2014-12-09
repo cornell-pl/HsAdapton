@@ -111,11 +111,11 @@ instance Monad m => InLayer Inside TxAdapton r m where
 newTxMLog :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxM l1 TxAdapton r m a -> l TxAdapton r m ()
 newTxMLog m = do
 	txlogs <- readTxLog
-	inL $ liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxM m) (idTxNM $ metaTxM m) (DynTxM Nothing m New)
+	inL $ liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxM m) (idTxNM $ metaTxM m) (DynTxM Nothing Nothing m New)
 newTxULog :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m ()
 newTxULog u = do
 	txlogs <- readTxLog	
-	inL $ liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) (idTxNM $ metaTxU u) (DynTxU Nothing u New)
+	inL $ liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) (idTxNM $ metaTxU u) (DynTxU Nothing Nothing u New)
 
 -- reads a value from a transactional variable
 -- uses @unsafeCoerce@ since we know that the types match
@@ -124,8 +124,8 @@ readTxMValue m@(TxM (r,_)) = do
 	tbl <- readTxLog
 	dyntxvar <- inL $ bufferTxM m Read tbl
 	case dyntxvar of
-		DynTxM (Just (BuffTxM (v,_))) _ _ -> return $ coerce v
-		DynTxM Nothing wm _ -> do
+		DynTxM (Just (BuffTxM (v,_))) _ _ _ -> return $ coerce v
+		DynTxM Nothing _ wm _ -> do
 			v <- inL $ readRef r
 			return $ coerce v
 
@@ -140,35 +140,16 @@ readTxUValue u@(TxU (r,_)) = do
 	tbl <- readTxLog
 	dyntxvar <- inL $ bufferTxU u Read tbl
 	case dyntxvar of
-		DynTxU (Just (BuffTxU (v,_))) _ _ -> return $ coerce v
-		DynTxU Nothing wu _ -> do
+		DynTxU (Just (BuffTxU (v,_))) _ _ _ -> return $ coerce v
+		DynTxU Nothing _ wu _ -> do
 			v <- inL $ readRef r
 			return $ coerce v
-
---evalTxUValue :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m (TxUData l1 TxAdapton r m a)
---evalTxUValue u@(TxU (r,_)) = do
---	tbl <- readTxLog
---	dyntxvar <- inL $ bufferTxU u Eval tbl
---	case dyntxvar of
---		DynTxU (Just (BuffTxU (v,_))) _ _ -> return $ coerce v
---		DynTxU Nothing wu _ -> do
---			v <- inL $ readRef r
---			return $ coerce v
 
 writeTxUValue :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> TxUData l1 TxAdapton r m a -> TxStatus -> l TxAdapton r m ()
 writeTxUValue t dta' status = do
 	tbl <- readTxLog
 	inL $ changeTxU t (Just $ \dta -> return dta') status tbl
 	return ()
-
-readTxStack :: TxLayer l r m => l TxAdapton r m (TxCallStack r m)
-readTxStack = liftM (\(x :!: y :!: z) -> y) $ Reader.ask
-
-readTxLog :: TxLayer l r m => l TxAdapton r m (TxLogs r m)
-readTxLog = liftM (\(x :!: y :!: z) -> z) $ Reader.ask
-
-readTxTime :: TxLayer l r m => l TxAdapton r m (UTCTime)
-readTxTime = liftM (\(x :!: y :!: z) -> x) $ Reader.ask
 
 -- ** Transactions
 
@@ -193,45 +174,51 @@ startTx :: IO UTCTime
 startTx = modifyMVarMasked runningTxs (\xs -> getCurrentTime >>= \t -> return (t:xs,t))
 
 -- restarts a tx with a new starting time
-restartTx :: TxLayer Outside r m => Outside TxAdapton r m a -> Outside TxAdapton r m a
-restartTx m = do
-	time <- inL $ liftIO $ startTx
+restartTx :: TxLayer Outside r m => UTCTime -> Outside TxAdapton r m a -> Outside TxAdapton r m a
+restartTx newtime m = do
 	txlogs <- readTxLog
-	inL $ liftIO $ restartMemoTx txlogs
-	Reader.local (\(_ :!: stack :!: logs) -> (time :!: stack :!: logs)) m
+--	inL $ liftIO $ restartMemoTx txlogs
+	Reader.local (\(_ :!: stack :!: logs) -> (newtime :!: stack :!: logs)) m
 
-restartMemoTx :: TxLogs r m -> IO ()
-restartMemoTx = Strict.mapM_ restartMemoTx' where
-	restartMemoTx' (TxLog (uid :!: buff :!: memos)) = writeIORef memos []
-	
+--restartMemoTx :: TxLogs r m -> IO ()
+--restartMemoTx = Strict.mapM_ restartMemoTx' where
+--	restartMemoTx' (TxLog (uid :!: buff :!: memos)) = writeIORef memos []
+
+resetTx :: TxLayer Outside r m => Outside TxAdapton r m a -> Outside TxAdapton r m a
+resetTx m = do
+	now <- inL $ liftIO $ startTx
+	stack <- inL $ liftIO $ newIORef SNil
+	tbl <- inL $ liftIO emptyTxLog
+	Reader.local (\_ -> (now :!: stack :!: SCons tbl SNil)) m
 
 -- updating a modifiable may propagate to multiple thunks; they are all logged
-type TxWrite r m = (Map Unique Bool,TxWrite' r m)
-type TxWrite' r m = Outside TxAdapton r m ()
+-- a mapping from identifiers to a boolean that indicates whether it has been written (True) or evaluated (False)
+type TxWrite r m = (Map Unique Bool,TxRepair' r m)
 
 -- checks if the current txlog is consistent with a sequence of concurrent modifications
 -- Nothing = success
--- Just = some conflicting changes that happened simultaneously to the current tx
+-- Just = some conflicting changes happened simultaneously to the current tx
 -- if the current tx uses a variable that has been written to before, there is a conflict
 -- note that we also consider write-write conflicts, since we don't log written but not read variables differently from read-then-written ones
--- True = no conflict
-checkTx :: Monad m => TxLog r m -> [(UTCTime,(TxUnmemo r m,TxWrite r m))] -> IO (Maybe (TxUnmemo r m,TxWrite' r m))
-checkTx txlog wrts = liftM concatMaybesTxM $ Prelude.mapM (checkTx' txlog) wrts
-	where
-	checkTx' txlog (txtime,(unmemo,(writtenIDs,writeOp))) = do
-		ok <- Map.foldrWithKey (\uid isWrite mb -> mb >>= \b -> checkTxWrite txlog uid isWrite >>= \b1 -> return $ b && b1) (return True) writtenIDs
-		if ok then return Nothing else return $ Just (unmemo,writeOp)
+checkTx :: MonadIO m => TxLog r m -> [(UTCTime,(TxUnmemo r m,TxWrite r m))] -> m (Maybe (TxRepair' r m))
+checkTx txlog wrts = liftM concatMaybesM $ Prelude.mapM (checkTx' txlog) wrts where
+	checkTx' :: MonadIO m => TxLog r m -> (UTCTime,(TxUnmemo r m,TxWrite r m)) -> m (Maybe (TxRepair' r m))
+	checkTx' txlog (txtime,(unmemo,(writtenIDs,repair))) = do
+		ok <- Map.foldrWithKey (\uid isWrite mb1 -> checkTxWrite txlog uid isWrite >>= \b2 -> liftM (&& b2) mb1) (return True) writtenIDs
+		if ok
+			then return Nothing
+			else return $ Just (inL (liftIO $ unmemo txlog) >> repair)
+	-- True = no conflict
 	checkTxWrite txlog uid isWrite = do
-		mb <- WeakTable.lookup (txLogBuff txlog) uid
+		mb <- liftIO $ WeakTable.lookup (txLogBuff txlog) uid
 		case mb of
 			Nothing -> return True
-			Just tvar -> if isWrite
-				then return False
-				else do
-					-- for Eval-Eval cases we ignore the current Eval
-					when (dynTxStatus tvar == Eval) $ WeakTable.finalizeEntry (txLogBuff txlog) uid
-					-- Eval-Eval and Eval-Read are not conflicts
-					return (dynTxStatus tvar <= Eval)
+			Just tvar -> do
+				-- if there was a previous @Eval@ or @Write@ on a buffered variable we discard buffered content but keep buffered dependents
+				unbufferDynTxVar False txlog tvar
+				-- Write-XXX are always conflicts
+				-- Eval-Eval and Eval-Read are not conflicts
+				return $ (not isWrite) && (dynTxStatus tvar /= Write)
 
 concatMaybesM :: Monad m => [Maybe (m a)] -> Maybe (m a)
 concatMaybesM [] = Nothing
@@ -240,24 +227,16 @@ concatMaybesM (Just chg:xs) = case concatMaybesM xs of
 	Nothing -> Just chg
 	Just chgs -> Just (chg >> chgs)
 
-concatMaybesTxM :: Monad m => [Maybe (TxUnmemo r m,TxWrite' r m)] -> Maybe (TxUnmemo r m,TxWrite' r m)
-concatMaybesTxM [] = Nothing
-concatMaybesTxM (Nothing:xs) = concatMaybesTxM xs
-concatMaybesTxM (Just (unmemo,chg):xs) = case concatMaybesTxM xs of
-	Nothing -> Just (unmemo,chg)
-	Just (unmemos,chgs) -> Just (\txlog -> unmemo txlog >> unmemos txlog,chg >> chgs)
-
-
-wakeUpWaits :: TxLayer Outside r m => Outside TxAdapton r m () -> TxNodeMeta r m -> m (TxWake m)
-wakeUpWaits upd meta = liftIO $ wakeQueue $ waitTxNM meta
+wakeUpWaits :: TxLayer Outside r m => TxNodeMeta r m -> m Wakes
+wakeUpWaits meta = liftIO $ wakeQueue $ waitTxNM meta
   where
 	wakeQueue q = do
 		mb <- tryPopR q
 		case mb of
-			Just (txenv,lck) -> do
-				(writes,wakes) <- wakeQueue q
-				return (Reader.runReaderT (runTxOuter upd) txenv >> writes,tryRelease lck >> wakes)
-			Nothing -> return (return (),return ())
+			Just lck -> do
+				wakes <- wakeQueue q
+				return $ Map.insert (idTxNM meta) lck wakes
+			Nothing -> return Map.empty
 
 
 

@@ -9,8 +9,11 @@ import Control.Monad.Incremental.Adapton.Types
 import Data.Concurrent.Deque.Class as Queue
 import Data.Concurrent.Deque.Reference.DequeInstance
 import Data.Time.Clock
+import Control.Concurrent.Chan
+import System.IO.Unsafe
 import Control.Monad.Fix
 
+import Data.Maybe
 import Data.Unique
 import Data.Typeable
 import Data.DeepTypeable
@@ -42,6 +45,8 @@ import System.Mem.WeakKey
 import System.Mem.MemoTable
 import Data.Hashable
 import System.Mem.WeakTable as WeakTable
+import Data.Set as Set
+import Data.List as List
 
 data TxAdapton deriving Typeable
 
@@ -98,8 +103,8 @@ emptyTxLog = do
 -- write = Just original
 -- new = Nothing new
 data DynTxVar r m where
-	DynTxU :: (Eq a,TxLayer l r m) => Maybe (BuffTxU l r m a) -> TxU l TxAdapton r m a -> TxStatus -> DynTxVar r m
-	DynTxM :: (Eq a,TxLayer l r m) => Maybe (BuffTxM l r m a) -> TxM l TxAdapton r m a -> TxStatus -> DynTxVar r m
+	DynTxU :: (Eq a,TxLayer l r m) => Maybe (BuffTxU l r m a) -> Maybe (TxDependents r m) -> TxU l TxAdapton r m a -> TxStatus -> DynTxVar r m
+	DynTxM :: (Eq a,TxLayer l r m) => Maybe (BuffTxM l r m a) -> Maybe (TxDependents r m) -> TxM l TxAdapton r m a -> TxStatus -> DynTxVar r m
 --	DynTxL :: Maybe (BuffTxL l inc r m a) -> TxL l inc r m a -> TxStatus -> DynTxVar r m
 
 isNewDynTxVar :: DynTxVar r m -> Bool
@@ -108,15 +113,20 @@ isNewDynTxVar t = dynTxStatus t == New
 isWriteDynTxVar :: DynTxVar r m -> Bool
 isWriteDynTxVar t = dynTxStatus t == Write
 
--- acquires a set of locks for variables to which a txlog intends to write
-acquireWriteLocks :: TxLogs r m -> IO [Lock]
-acquireWriteLocks = Strict.foldM acquireWriteLocks' []
-	where
-	acquireWriteLocks' :: [Lock] -> TxLog r m -> IO [Lock]
-	acquireWriteLocks' lcks txlog = WeakTable.foldM (\xs (_,tvar) -> return $ dynTxVarLock tvar : xs) lcks $ txLogBuff txlog
-
-releaseLocks :: [Lock] -> IO ()
-releaseLocks = Control.Monad.mapM_ Lock.release
+-- returns a set of locks for variables to which a txlog intends to write (@Eval@ and Write@) and to read from (@Read@)
+txLocks :: TxLogs r m -> IO (Map Unique (Lock,Bool))
+txLocks = Foldable.foldrM getLocks Map.empty where
+	getLocks :: TxLog r m -> Map Unique (Lock,Bool) -> IO (Map Unique (Lock,Bool))
+	getLocks txlog lcks = WeakTable.foldM add lcks (txLogBuff txlog) where
+		add xs (uid,tvar)
+		 	| isWriteLock tvar = return $ Map.insertWith merge uid (dynTxVarLock tvar,True) xs -- write
+			| dynTxStatus tvar == New = return xs
+			| otherwise = return $ Map.insertWith merge uid (dynTxVarLock tvar,False) xs -- read
+	merge (lck,b1) (_,b2) = (lck,max b1 b2)
+	isWriteLock :: DynTxVar r m -> Bool
+	isWriteLock (DynTxU _ (Just txdeps) _ Read) = True
+	isWriteLock (DynTxM _ (Just txdeps) _ Read) = True
+	isWriteLock tvar = isEvalOrWrite (dynTxStatus tvar)
 
 -- we use a lock-free map since multiple threads may be accessing it to register/unregister new txlogs
 -- a persistent memo table and a family of buffered (transaction-local) memo tables indexed by a buffered tx log
@@ -144,7 +154,7 @@ commitTxMemoTable (ori_tbl,buff_tbls) txlog = do
 			let unmemo otherlog = do
 				mb <- CMap.lookup otherlog buff_tbls
 				case mb of
-					Just other_tbl -> Strict.mapM_ (WeakTable.finalizeEntry other_tbl) entries
+					Just other_tbl -> Foldable.mapM_ (WeakTable.finalizeEntry other_tbl) entries
 					Nothing -> return ()
 			return unmemo
 		Nothing -> return emptyTxUnmemo
@@ -176,7 +186,7 @@ newtype BuffTxU (l :: * -> (* -> *) -> (* -> *) -> * -> *) (r :: * -> *) (m :: *
 
 newtype BuffTxM (l :: * -> (* -> *) -> (* -> *) -> * -> *) (r :: * -> *) (m :: * -> *) a = BuffTxM { unBuffTxM :: (a,TxDependents r m) }
 
-type TxDependencies r m = r [(TxDependency r m,IO ())]
+type TxDependencies r m = r [(TxDependency r m,Weak (TxDependency r m))]
 -- bool says whether the dependency is original or buffered
 newtype TxDependency (r :: * -> *) (m :: * -> *) = TxDependency (
 		TxNodeMeta r m -- the metadata of the source node
@@ -232,9 +242,14 @@ newtype TxNodeMeta (r :: * -> *) (m :: * -> *) = TxNodeMeta (
 	,	TxLogs r m -> m () -- function that forgets all the old cached thunk data (thunks only)
 	,   TxStatus -> TxLogs r m -> m (DynTxVar r m) -- function that writes a buffered copy of the original data to a transaction log
 	,   Maybe (TxCreator r m) -- the parent thunk under which the reference was created (modifiables only)
-	,   WaitQueue r m -- a sequence of wake-up actions for txs that are waiting on further updates to this node (modifiables only)
+	,   WaitQueue -- a sequence of wake-up actions for txs that are waiting on further updates to this node (modifiables only)
 	,   Lock -- a lock for writes to this variable
 	)
+
+-- (a new starttime,repairing actions over an invalid environment)
+type Repair = (UTCTime,Set Unique)
+type TxRepair r m = (UTCTime,TxRepair' r m)
+type TxRepair' r m = Outside TxAdapton r m ()
 
 type TxLogs r m = SList (TxLog r m)
 
@@ -249,12 +264,11 @@ lockTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = lck
 
 -- a wait queue of tx locks and environments
 -- it does not need to be thread-safe, because we only push and pop elements inside validation/commit phases
-type WaitQueue r m = Deque Nonthreadsafe Nonthreadsafe SingleEnd SingleEnd Grow Safe (TxEnv r m,Lock)
+type WaitQueue = Deque Nonthreadsafe Nonthreadsafe SingleEnd SingleEnd Grow Safe Lock
 
 -- | registers a new wait on modifications of a node when a lock is provided
-enqueueWait :: MonadIO m => TxEnv r m -> Maybe Lock -> TxNodeMeta r m -> m ()
-enqueueWait txenv Nothing meta = return ()
-enqueueWait txenv (Just lck) meta = liftIO $ pushL (waitTxNM meta) (txenv,lck)
+enqueueWait :: MonadIO m => Lock -> TxNodeMeta r m -> m ()
+enqueueWait lck meta = liftIO $ pushL (waitTxNM meta) lck
 
 -- the same tx may depend on various modifiables, so we need to account for multiple wakeups
 tryRelease :: Lock -> IO ()
@@ -263,40 +277,41 @@ tryRelease lck = do
 	if isLocked then release lck else return ()
 
 -- a tx wakeup pair (update buffered data,release locks)
-type TxWake m = (m (),IO ())
+--type TxWake m = (m (),IO ())
+--type TxWake = IO ()
+type Wakes = Map Unique Lock
 
 type TxCreator r m = WTxNodeMeta r m
 type WTxNodeMeta r m = Weak (TxNodeMeta r m)
 
 dynTxVarLock :: DynTxVar r m -> Lock
-dynTxVarLock (DynTxM _ m _) = lockTxNM $ metaTxM m
-dynTxVarLock (DynTxU _ u _) = lockTxNM $ metaTxU u
+dynTxVarLock (DynTxM _ _ m _) = lockTxNM $ metaTxM m
+dynTxVarLock (DynTxU _ _ u _) = lockTxNM $ metaTxU u
 
+-- merge the original dependents on top of the buffered ones (overriding buffered content)
 dynTxVarDependents :: MonadIO m => DynTxVar r m -> m (TxDependents r m)
-dynTxVarDependents (DynTxM (Just (BuffTxM (_,deps))) _ _) = return deps
-dynTxVarDependents (DynTxU (Just (BuffTxU (_,deps))) _ _) = return deps
-dynTxVarDependents (DynTxM Nothing m _) = do
-	return $ dependentsTxNM $ metaTxM m
-dynTxVarDependents (DynTxU Nothing u _) = do
-	return $ dependentsTxNM $ metaTxU u
+dynTxVarDependents (DynTxM (Just (BuffTxM (_,deps))) _ _ _) = return deps
+dynTxVarDependents (DynTxU (Just (BuffTxU (_,deps))) _ _ _) = return deps
+dynTxVarDependents (DynTxM Nothing mbtxdeps m _) = do
+	case mbtxdeps of
+		Just txdeps -> do
+			WeakSet.mergeWeak txdeps (dependentsTxNM $ metaTxM m)
+			return txdeps
+		Nothing -> return $ dependentsTxNM $ metaTxM m
+dynTxVarDependents (DynTxU Nothing mbtxdeps u _) = do
+	case mbtxdeps of
+		Just txdeps -> do
+			WeakSet.mergeWeak txdeps (dependentsTxNM $ metaTxU u)
+			return txdeps
+		Nothing -> return $ dependentsTxNM $ metaTxU u
 
-dynTxVarDependencies :: (MonadIO m,MonadRef r m) => DynTxVar r m -> m (TxDependencies r m)
-dynTxVarDependencies (DynTxU (Just (BuffTxU (TxValue dirty value force dependencies,_))) _ _) = return dependencies
-dynTxVarDependencies (DynTxU Nothing u _) = do
+dynTxVarDependencies :: (MonadIO m,MonadRef r m) => DynTxVar r m -> m (Maybe (TxDependencies r m))
+dynTxVarDependencies (DynTxU (Just (BuffTxU (TxValue dirty value force dependencies,_))) _ _ _) = return $ Just dependencies
+dynTxVarDependencies (DynTxU Nothing _ u _) = do
 	readRef (dataTxU u) >>= \dta -> case dta of
-		TxValue dirty value force dependencies -> return dependencies
-		otherwise -> error $ "no buffered dependencies TxU New"
-dynTxVarDependencies (DynTxM _ _ status) = error $ "no buffered dependencies TxM " ++ show status
-
---mkWeakTxM :: WeakKey r => TxLogs r m -> TxM l TxAdapton r m a -> IO (Weak (TxM l TxAdapton r m a))
---mkWeakTxM txlogs m = do
---	let !idm = idTxNM $ metaTxM m
---	mkWeakKey (dataTxM m) m (Just $ HashIO.delete (txLogBuff $ Strict.head txlogs) idm)
---	
---mkWeakTxU :: WeakKey r => TxLogs r m -> TxU l TxAdapton r m a -> IO (Weak (TxU l TxAdapton r m a))
---mkWeakTxU txlogs u = do
---	let !idu = idTxNM $ metaTxU u
---	mkWeakKey (dataTxU u) u (Just $ HashIO.delete (txLogBuff $ Strict.head txlogs) idu)
+		TxValue dirty value force dependencies -> return $ Just dependencies
+		otherwise -> return Nothing
+dynTxVarDependencies _ = return Nothing
 
 -- stores a modifiable in a buffer with a minimal status and returns a buffered copy
 -- Read = an entry is enough
@@ -309,22 +324,24 @@ bufferTxM m Read txlogs = do
 	case mb of
 		Just tvar -> return tvar
 		Nothing -> do
-			let tvar = DynTxM Nothing m Read
+			let tvar = DynTxM Nothing Nothing m Read
 			liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxM m) idm tvar
 			return tvar
 bufferTxM m Eval txlogs = do
 	let !idm = idTxNM $ metaTxM m
 	mb <- liftIO $ findTxLogEntry txlogs idm
-	let new_entry = do
-		!buff_deps <- WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxM m)
+	let new_entry mbtxdeps = do
+		!buff_deps <- case mbtxdeps of
+			Just txdeps -> WeakSet.mergeWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxM m) >> return txdeps
+			Nothing -> WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxM m)
 		!buff_value <- readRef (dataTxM m)
-		let tvar = DynTxM (Just $ BuffTxM (buff_value,buff_deps)) m Eval
+		let tvar = DynTxM (Just $ BuffTxM (buff_value,buff_deps)) Nothing m Eval
 		liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxM m) idm tvar
 		return tvar
 	case mb of
-		Just (DynTxM Nothing _ Read) -> new_entry
+		Just (DynTxM Nothing mbtxdeps _ Read) -> new_entry mbtxdeps
 		Just tvar -> return tvar
-		Nothing -> new_entry
+		Nothing -> new_entry Nothing
 bufferTxM m Write txlogs = changeTxM m Nothing txlogs
 
 -- changes a modifiable, or just buffers it
@@ -332,27 +349,29 @@ changeTxM :: (Eq a,TxLayer l r m,MonadRef r m,MonadIO m) => TxM l TxAdapton r m 
 changeTxM m mbv' txlogs = do
 	let !idm = idTxNM $ metaTxM m
 	mb <- liftIO $ findTxLogEntry txlogs idm
-	let new_entry = do
-		!buff_deps <- WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxM m)
+	let new_entry mbtxdeps = do
+		!buff_deps <- case mbtxdeps of
+			Just txdeps -> WeakSet.mergeWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxM m) >> return txdeps
+			Nothing -> WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxM m)
 		!buff_value <- readRef (dataTxM m)
 		let !v' = maybe buff_value id mbv'
-		let tvar = DynTxM (Just (BuffTxM (v',buff_deps))) m Write
+		let tvar = DynTxM (Just (BuffTxM (v',buff_deps))) Nothing m Write
 		liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxM m) idm tvar
 		return tvar
 	case mb of
-		Just (DynTxM Nothing _ Read) -> new_entry
-		Just (DynTxM (Just (BuffTxM (buff_value,buff_deps))) _ (isEvalOrWrite -> True)) -> do
+		Just (DynTxM Nothing mbtxdeps _ Read) -> new_entry mbtxdeps
+		Just (DynTxM (Just (BuffTxM (buff_value,buff_deps))) _ _ (isEvalOrWrite -> True)) -> do
 			let v' = maybe (coerce buff_value) id mbv'
-			let tvar = DynTxM (Just $ BuffTxM (v',buff_deps)) m Write
+			let tvar = DynTxM (Just $ BuffTxM (v',buff_deps)) Nothing m Write
 			liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxM m) idm tvar
 			return tvar
-		Just tvar@(DynTxM Nothing _ New) -> case mbv' of
+		Just tvar@(DynTxM Nothing _ _ New) -> case mbv' of
 			Nothing -> return tvar
 			Just v' -> do
 				let !datam = dataTxM m
 				writeRef datam v'
 				return tvar
-		Nothing -> new_entry
+		Nothing -> new_entry Nothing
 
 bufferTxU :: (Eq a,TxLayer l r m,MonadRef r m,MonadIO m) => TxU l TxAdapton r m a -> TxStatus -> TxLogs r m -> m (DynTxVar r m)
 bufferTxU u Read txlogs = do 
@@ -361,24 +380,58 @@ bufferTxU u Read txlogs = do
 	case mb of
 		Just tvar -> return tvar
 		Nothing -> do
-			let tvar = DynTxU Nothing u Read
+			let tvar = DynTxU Nothing Nothing u Read
 			liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) idu tvar
 			return tvar
 bufferTxU u Eval txlogs = do
 	let !idu = idTxNM $ metaTxU u
 	mb <- liftIO $ findTxLogEntry txlogs idu
-	let new_entry = do
+	let new_entry mbtxdeps = do
 		-- the copies point to the original dependencies reference
-		!buff_deps <- WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxU u)
+		!buff_deps <- case mbtxdeps of
+			Just txdeps -> WeakSet.mergeWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxU u) >> return txdeps
+			Nothing -> WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxU u)
 		!buff_dta <- readRef (dataTxU u) >>= copyTxUData
-		let tvar = DynTxU (Just $ BuffTxU (buff_dta,buff_deps)) u Eval
+		let tvar = DynTxU (Just $ BuffTxU (buff_dta,buff_deps)) Nothing u Eval
 		liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) idu tvar
 		return tvar
 	case mb of
-		Just (DynTxU Nothing m Read) -> new_entry
+		Just (DynTxU Nothing mbtxdeps _ Read) -> new_entry mbtxdeps
 		Just tvar -> return tvar
-		Nothing -> new_entry
+		Nothing -> new_entry Nothing
 bufferTxU u Write txlogs = changeTxU u Nothing Write txlogs
+
+-- changes a thunk, or just buffers it
+changeTxU :: (Eq a,TxLayer l r m,MonadRef r m,MonadIO m) => TxU l TxAdapton r m a -> Maybe (TxUData l TxAdapton r m a -> m (TxUData l TxAdapton r m a)) -> TxStatus -> TxLogs r m -> m (DynTxVar r m)
+changeTxU u mbChgDta status txlogs = do
+	let !idu = idTxNM $ metaTxU u
+	mb <- liftIO $ findTxLogEntry txlogs idu
+	let new_entry mbtxdeps = do
+		!buff_deps <- case mbtxdeps of
+			Just txdeps -> WeakSet.mergeWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxU u) >> return txdeps
+			Nothing -> WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxU u)
+		!buff_dta <- readRef (dataTxU u) >>= copyTxUData
+		!buff_dta' <- (maybe return id mbChgDta) buff_dta
+		let tvar = DynTxU (Just $ BuffTxU (buff_dta',buff_deps)) Nothing u status
+		liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) idu tvar
+		return tvar
+	case mb of
+		Just (DynTxU Nothing mbtxdeps _ Read) -> new_entry mbtxdeps
+		Just (DynTxU (Just (BuffTxU (buff_dta,buff_deps))) _ wu buff_status@(isEvalOrWrite -> True)) -> do
+			let chg = maybe return id mbChgDta
+			buff_dta' <- chg $ coerce buff_dta
+			let tvar = DynTxU (Just $ BuffTxU (buff_dta',buff_deps)) Nothing u (max buff_status status)
+			-- all changes are logged on the nested transaction's log
+			liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) idu tvar
+			return tvar
+		Just tvar@(DynTxU Nothing _ _ New) -> do
+			case mbChgDta of
+				Nothing -> return ()
+				Just chgDta -> do
+					let !datau = dataTxU u
+					mapRefM_ chgDta datau
+			return tvar
+		Nothing -> new_entry Nothing
 
 copyTxUData :: TxLayer l r m => TxUData l TxAdapton r m a -> m (TxUData l TxAdapton r m a)
 copyTxUData (TxValue dirty value force dependencies) = do
@@ -386,36 +439,6 @@ copyTxUData (TxValue dirty value force dependencies) = do
 	!txrdependencies <- newRef xs
 	return $! TxValue dirty value force txrdependencies
 copyTxUData dta = return dta
-
--- changes a thunk, or just buffers it
-changeTxU :: (Eq a,TxLayer l r m,MonadRef r m,MonadIO m) => TxU l TxAdapton r m a -> Maybe (TxUData l TxAdapton r m a -> m (TxUData l TxAdapton r m a)) -> TxStatus -> TxLogs r m -> m (DynTxVar r m)
-changeTxU u mbChgDta status txlogs = do
-	let !idu = idTxNM $ metaTxU u
-	mb <- liftIO $ findTxLogEntry txlogs idu
-	let new_entry = do
-		!buff_deps <- WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxU u)
-		!buff_dta <- readRef (dataTxU u) >>= copyTxUData
-		!buff_dta' <- (maybe return id mbChgDta) buff_dta
-		let tvar = DynTxU (Just $ BuffTxU (buff_dta',buff_deps)) u status
-		liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) idu tvar
-		return tvar
-	case mb of
-		Just (DynTxU Nothing m Read) -> new_entry
-		Just (DynTxU (Just (BuffTxU (buff_dta,buff_deps))) wu buff_status@(isEvalOrWrite -> True)) -> do
-			let chg = maybe return id mbChgDta
-			buff_dta' <- chg $ coerce buff_dta
-			let tvar = DynTxU (Just $ BuffTxU (buff_dta',buff_deps)) u (max buff_status status)
-			-- all changes are logged on the nested transaction's log
-			liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) idu tvar
-			return tvar
-		Just tvar@(DynTxU Nothing _ New) -> do
-			case mbChgDta of
-				Nothing -> return ()
-				Just chgDta -> do
-					let !datau = dataTxU u
-					mapRefM_ chgDta datau
-			return tvar
-		Nothing -> new_entry
 
 coerce :: a -> b
 coerce x = Unsafe.unsafeCoerce x
@@ -431,13 +454,17 @@ findTxLogEntry (SCons txlog txlogs) uid = do
 
 -- merges a nested txlog with its parent txlog, by overriding parent entries
 mergeTxLog :: MonadIO m => TxLog r m -> TxLog r m -> m ()
-mergeTxLog txlog1 txlog2 = undefined --liftIO $ do
---	HashIO.mapM_ (\(uid,entry) -> HashIO.insert (txLogBuff txlog2) uid entry) (txLogBuff txlog1)
+mergeTxLog txlog1 txlog2 = liftIO $ do
+	WeakTable.mapM_ (\(uid,entry) -> WeakTable.insertWithMkWeak (txLogBuff txlog2) (dynTxMkWeak entry) uid entry) (txLogBuff txlog1)
 	
--- merges only the allocations of a nested txlog with its parent txlog, by overriding parent entries
-mergeAllocsTxLog :: MonadIO m => TxLog r m -> TxLog r m -> m ()
-mergeAllocsTxLog txlog1 txlog2 = undefined --liftIO $ do
---	HashIO.mapM_ (\(uid,entry) -> if isNewDynTxVar entry then HashIO.insert (txLogBuff txlog2) uid entry else return ()) (txLogBuff txlog1)
+---- merges only the allocations of a nested txlog with its parent txlog, by overriding parent entries
+---- we add the necessary dependents relationships to variables on which @New@ allocations depend
+--mergeAllocsTxLog :: MonadIO m => TxLog r m -> TxLog r m -> m ()
+--mergeAllocsTxLog txlog1 txlog2 = liftIO $ WeakTable.mapM_ upd (txLogBuff txlog1) where
+--	upd (uid,entry) = when (isNewDynTxVar entry) $ do
+--		WeakTable.insertWithMkWeak (txLogBuff txlog2) (dynTxMkWeak entry) uid entry
+--		-- we commit dependencies right away to the persistent variables; this is OK because we have necessarily acquired locks on such variables
+--		commitTxDependencies True $ dynTxDependencies entry
 
 -- merges the memo entries for a nested txlog into the memotables of its parent txlog, by overriding parent entries
 mergeTxLogMemos :: MonadIO m => TxLog r m -> TxLog r m -> m ()
@@ -457,44 +484,122 @@ mergeTxLogMemos txlog_child txlog_parent = liftIO $ do
 			Nothing -> return ()
 	Control.Monad.mapM_ mergeMemo txmemos
 
-unbufferWrites :: MonadIO m => TxLog r m -> m ()
-unbufferWrites txlog = undefined --liftIO $ do
---	HashIO.mapM_ (\(uid,entry) -> when (isWriteDynTxVar entry) $ HashIO.insert (txLogBuff txlog) uid $ unwriteDynTxVar entry) (txLogBuff txlog)
+-- unbuffers buffered content
+unbufferTxLogs :: MonadIO m => Bool -> TxLogs r m -> m ()
+unbufferTxLogs onlyWrites txlogs = Foldable.mapM_ (unbufferTxLog onlyWrites) txlogs
+
+unbufferTxLog :: MonadIO m => Bool -> TxLog r m -> m ()
+unbufferTxLog onlyWrites txlog = WeakTable.mapMGeneric_ (unbufferDynTxVar' onlyWrites txlog) $ txLogBuff txlog where
+
+unbufferDynTxVar :: MonadIO m => Bool -> TxLog r m -> DynTxVar r m -> m ()
+unbufferDynTxVar onlyWrites txlog entry = unbufferDynTxVar' onlyWrites txlog (dynTxId entry,entry)
+
+unbufferTxVar :: MonadIO m => Bool -> TxLog r m -> Unique -> m ()
+unbufferTxVar onlyWrites txlog uid = do
+	mb <- WeakTable.lookup (txLogBuff txlog) uid
+	case mb of
+		Just tvar -> unbufferDynTxVar' onlyWrites txlog (uid,tvar)
+		Nothing -> return ()
+
+unbufferDynTxVar' :: MonadIO m => Bool -> TxLog r m -> (Unique,DynTxVar r m) -> m ()
+unbufferDynTxVar' onlyWrites txlog (uid,entry) = when (onlyWrites <= (dynTxStatus entry == Write)) $ 
+		WeakTable.insertWithMkWeak (txLogBuff txlog) (dynTxMkWeak entry) (dynTxId entry) =<< unbufferDynTxVar'' onlyWrites entry
+
+-- we need to clear the dependencies of unbuffered variables
+unbufferDynTxVar'' :: MonadIO m => Bool -> DynTxVar r m -> m (DynTxVar r m)
+unbufferDynTxVar'' onlyWrites tvar@(DynTxU _ _ u stat) = if (if onlyWrites then (==Write) else isEvalOrWrite) stat
+	then do
+		dependents <- dynTxVarDependents tvar
+		dynTxVarDependencies tvar >>= maybe (return ()) clearDependenciesTx
+--		debugTx' ("unbufferU "++ show (idTxNM (metaTxU u)))
+		return (DynTxU Nothing (Just dependents) u Read)
+	else return tvar
+unbufferDynTxVar'' onlyWrites tvar@(DynTxM _ _ m stat) = if (if onlyWrites then (==Write) else isEvalOrWrite) stat
+	then do
+		dependents <- dynTxVarDependents tvar
+--		debugTx' ("unbufferM "++ show (idTxNM (metaTxM m))) 
+		return (DynTxM Nothing (Just dependents) m Read)
+	else return tvar
+
+{-# INLINE clearDependenciesTx #-}
+-- clear only buffered dependencies
+clearDependenciesTx :: (MonadRef r m,MonadIO m) => TxDependencies r m -> m ()
+clearDependenciesTx = \r -> readRef r >>= Foldable.mapM_ clearDependency where
+	clearDependency (d,w) = do
+		isOriginal <- readRef (flagTxW d)
+		unless isOriginal $ liftIO $ Weak.finalize w
 	
 -- merges a nested txlog with a parent txlog, but treating nested writes as reads (so that a parent retry will still wait on them)
-extendTxLog :: MonadIO m => TxLog r m -> TxLog r m -> m ()
-extendTxLog txlog1 txlog2 = undefined --do
---	xs1 <- liftIO $ HashIO.toList (txLogBuff txlog1)
---	let updEntry (uid,entry) = do
---		let entry1 = unwriteDynTxVar entry
---		mb <- liftIO $ HashIO.lookup (txLogBuff txlog2) uid
---		case mb of
---			Nothing -> HashIO.insert (txLogBuff txlog2) uid entry1
---			Just entry2 -> HashIO.insert (txLogBuff txlog2) uid (mergeDynTxVars entry1 entry2)
---	liftIO $ Control.Monad.mapM_ updEntry xs1
---  where
---	mergeDynTxVars :: DynTxVar r m -> DynTxVar r m -> DynTxVar r m
---	mergeDynTxVars x1 x2 = if dynTxStatus x1 >= dynTxStatus x2 then x1 else x2
-
-unwriteDynTxVar :: DynTxVar r m -> DynTxVar r m
-unwriteDynTxVar (DynTxU _ u Write) = DynTxU Nothing u Read
-unwriteDynTxVar (DynTxM _ m Write) = DynTxM Nothing m Read
-unwriteDynTxVar tvar = tvar
+-- discards @onlyWrites@ or both evals and writes
+extendTxLog :: MonadIO m => Bool -> TxLog r m -> TxLog r m -> m ()
+extendTxLog onlyWrites txlog1 txlog2 = do
+	let updEntry (uid,entry) = do
+		entry1 <- unbufferDynTxVar'' onlyWrites entry
+		mb <- liftIO $ WeakTable.lookup (txLogBuff txlog2) uid
+		case mb of
+			Nothing -> liftIO $ WeakTable.insertWithMkWeak (txLogBuff txlog2) (dynTxMkWeak entry1) uid entry1
+			Just entry2 -> mergeDynTxVars entry1 entry2 >>= liftIO . WeakTable.insertWithMkWeak (txLogBuff txlog2) (dynTxMkWeak entry1) uid
+	WeakTable.mapMGeneric_ updEntry (txLogBuff txlog1)
+  where
+	-- merges dependents for @Read@ children
+	-- dirty dependencies for @New@ children
+	mergeDynTxVars :: MonadIO m => DynTxVar r m -> DynTxVar r m -> m (DynTxVar r m)
+	mergeDynTxVars entry1@(DynTxM Nothing txdeps1 m Read) entry2@(DynTxM Nothing txdeps2 _ Read) = do
+		txdeps <- mergeTxDependents txdeps1 txdeps2
+		return $ DynTxM Nothing txdeps m Read
+	mergeDynTxVars entry1@(DynTxM Nothing txdeps1 m Read) entry2 = do
+		txdeps2 <- liftM Just $ dynTxVarDependents entry2
+		mergeTxDependents txdeps1 txdeps2
+		return entry2
+		
+	mergeDynTxVars entry1@(DynTxU Nothing txdeps1 m Read) entry2@(DynTxU Nothing txdeps2 _ Read) = do
+		txdeps <- mergeTxDependents txdeps1 txdeps2
+		return $ DynTxU Nothing txdeps m Read
+	mergeDynTxVars entry1@(DynTxU Nothing txdeps1 m Read) entry2 = do
+		txdeps2 <- liftM Just $ dynTxVarDependents entry2
+		mergeTxDependents txdeps1 txdeps2
+		return entry2
+	
+	-- dirty data+dependencies for @New@ allocations, since they may depend on lost @Write@s
+	mergeDynTxVars entry1@(DynTxU Nothing Nothing u New) x2 = do
+		txudta <- readRef (dataTxU u)
+		case txudta of
+			TxValue dirty value force dependencies -> do
+				readRef dependencies >>= Foldable.mapM_ (\(d,w) -> writeRef (dirtyTxW d) True)
+				writeRef (dataTxU u) $ TxValue 1# value force dependencies
+			otherwise -> return ()
+		writeRef (dataTxU u) txudta
+		
+		return entry1
+	
+	mergeDynTxVars x1 x2 = return x1
+	
+	mergeTxDependents :: MonadIO m => Maybe (TxDependents r m) -> Maybe (TxDependents r m) -> m (Maybe (TxDependents r m))
+	mergeTxDependents Nothing txdeps2 = return txdeps2
+	mergeTxDependents txdeps1 Nothing = return txdeps1
+	mergeTxDependents (Just txdeps1) (Just txdeps2) = mergeWithKey dependenciesTxW txdeps2 txdeps1 >> return (Just txdeps2)
 
 dynTxStatus :: DynTxVar r m -> TxStatus
-dynTxStatus (DynTxU _ _ s) = s
-dynTxStatus (DynTxM _ _ s) = s
+dynTxStatus (DynTxU _ _ _ s) = s
+dynTxStatus (DynTxM _ _ _ s) = s
+
+dynTxMeta :: DynTxVar r m -> TxNodeMeta r m
+dynTxMeta (DynTxU _ _ u _) = metaTxU u
+dynTxMeta (DynTxM _ _ m _) = metaTxM m
 
 dynTxId :: DynTxVar r m -> Unique
-dynTxId (DynTxU _ u _) = idTxNM $ metaTxU u
-dynTxId (DynTxM _ m _) = idTxNM $ metaTxM m
+dynTxId = idTxNM . dynTxMeta
+
+dynTxMkWeak :: DynTxVar r m -> MkWeak
+dynTxMkWeak (DynTxU _ _ u _) = MkWeak $ mkWeakRefKey $ dataTxU u
+dynTxMkWeak (DynTxM _ _ m _) = MkWeak $ mkWeakRefKey $ dataTxM m
 
 -- gets a buffered dependents set, generating a new Eval if needed
 getTxDependents :: MonadIO m => TxLogs r m -> TxNodeMeta r m -> TxStatus -> m (TxDependents r m)
 getTxDependents tbl meta status = bufferTxNM meta status tbl >>= dynTxVarDependents
 
 getTxDependencies :: (MonadIO m,MonadRef r m) => TxLogs r m -> TxNodeMeta r m -> TxStatus -> m (TxDependencies r m)
-getTxDependencies tbl meta status = bufferTxNM meta status tbl >>= dynTxVarDependencies
+getTxDependencies tbl meta status = liftM fromJust $ bufferTxNM meta status tbl >>= dynTxVarDependencies
 
 copyRef r = readRef r >>= newRef
 
@@ -513,3 +618,35 @@ instance DeepTypeable TxU where
 instance (DeepTypeable l,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepTypeable a) => DeepTypeable (TxU l inc r m a) where
 	typeTree (_ :: Proxy (TxU l inc r m a)) = MkTypeTree (mkName "Control.Monad.Transactional.TxAdapton.Types.TxU") args [MkConTree (mkName "Control.Monad.Transactional.TxAdapton.thunk") [typeTree (Proxy::Proxy a)]]
 		where args = [typeTree (Proxy::Proxy l),typeTree (Proxy::Proxy inc),typeTree (Proxy::Proxy r),typeTree (Proxy::Proxy m),typeTree (Proxy::Proxy a)]
+
+type STxAdaptonM = STxM TxAdapton IORef IO
+
+-- a channel for synchronous stdout debugging messages
+{-# NOINLINE debugChan #-}
+debugChan :: Chan String
+debugChan = unsafePerformIO $ newChan
+
+debugTx :: TxLayer l r m => String -> l TxAdapton r m ()
+debugTx str = do
+	time <- readTxTime
+	inL $ liftIO $ writeChan debugChan $ "["++show time++"] " ++ str
+
+debugTx' :: MonadIO m => String -> m ()
+debugTx' str = do
+	liftIO $ writeChan debugChan $ str
+
+-- makes sure to empty the buffer before killing the debugger thread
+debugger :: IO ()
+debugger = flip finally (getChanContents debugChan >>= Control.Monad.mapM_ putStrLn) $ do
+    readChan debugChan >>= putStrLn
+    debugger
+
+readTxStack :: TxLayer l r m => l TxAdapton r m (TxCallStack r m)
+readTxStack = liftM (\(x :!: y :!: z) -> y) $ Reader.ask
+
+readTxLog :: TxLayer l r m => l TxAdapton r m (TxLogs r m)
+readTxLog = liftM (\(x :!: y :!: z) -> z) $ Reader.ask
+
+readTxTime :: TxLayer l r m => l TxAdapton r m (UTCTime)
+readTxTime = liftM (\(x :!: y :!: z) -> x) $ Reader.ask
+
