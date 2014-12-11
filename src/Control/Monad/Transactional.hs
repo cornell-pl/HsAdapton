@@ -18,11 +18,10 @@ class Incremental inc r m => Transactional inc r m where
 	
 	atomically :: STxM inc r m a -> m a
 	
-	-- A read-only transaction with the nice property that it always succeeds, i.e., never conflicts with concurrent transactions
-	-- This is possible because the transaction can ignore concurrent modifications that occurred since its starting time
-	-- For example, a long-running read-only transaction can safely ignore parallel modifications that occur during its execution, and see only a stale state. It still remains consistent in respect to its client or local thread.
-	-- Note that it can still allocate new data
-	-- Note also that we can't use the other transactional blocks in a read-only transaction, since they are unsafe at the inner layer
+	-- A read-only transaction with the nice property that it always suceeds in the presence of other concurrent read-only transactions.
+	-- It can still fail due to concurrent read-write transactions.
+	-- Note that it can still allocate new data.
+	-- Note also that we can't use the other transactional blocks in a read-only transaction, since they are unsafe at the inner layer.
 	readAtomically :: ReadOnlySTxM inc r m a -> m a
 	readAtomically = atomically . inside
 	

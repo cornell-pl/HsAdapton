@@ -202,19 +202,21 @@ leastItem = inside . leastkInc compareItems 1 where
 		p2 <- get $ itemPrice i2 
 		return $ compare p1 p2
 -- finds the cheapest item
-cheapestItem :: Warehouse -> STxAdaptonM Item
-cheapestItem warehouse = do
-	let wrongQuantity = do
-		throw $ NoBalance $ "wrong item"
+cheapestItem :: String -> Warehouse -> STxAdaptonM Item
+cheapestItem msg warehouse = do
+	let wrongQuantity item = do
+		time <- readTxTime
+		str <- showInc item
+		throw $ NoBalance $ "WRONG ITEM " ++ str ++ " " ++ show time ++ " " ++ msg
 	showInc warehouse >>= debugTx . ("warehouse: "++)
 	(mxs::ListTxAdaptonU Item) <- leastItem warehouse
 	showInc mxs >>= debugTx . ("cheapestItem: "++)
 	xs <- forceOutside mxs
 	case xs of
-		NilMod -> throw $ NoBalance "no items left"
+		NilMod -> throw $ NoBalance $ "NO ITEMS LEFT " ++ msg
 		ConsMod item _ -> do
-			quantity <- getOutside (itemQuantity item)
-			when (quantity <= 0) $ wrongQuantity
+			quantity <- getOutside $ itemQuantity item
+			when (quantity <= 0) $ wrongQuantity item
 			return item
 
 deleteItem :: Warehouse -> Item -> STxAdaptonM ()
@@ -223,16 +225,16 @@ deleteItem warehouse item = do
 		ConsMod item' warehouse' -> if itemName item == itemName item'
 			then getOutside warehouse' >>= set warehouse
 			else deleteItem warehouse' item
-		NilMod -> error "item not found"
+		NilMod -> error $ "ITEM NOT FOUND "
 
 -- buy an item for a customer and increase the item's price
-buyCheapestItem :: Warehouse -> Customer -> STxAdaptonM Item
-buyCheapestItem warehouse customer = do
-	item <- cheapestItem warehouse
+buyCheapestItem :: String -> Warehouse -> Customer -> STxAdaptonM Item
+buyCheapestItem msg warehouse customer = do
+	item <- cheapestItem msg warehouse
 	let wrongQuantity = do
 		str1 <- inside $ showInc customer
 		str2 <- inside $ showInc item
-		throw $ NoBalance $ str1 ++ " can't buy " ++ str2
+		throw $ NoBalance $ str1 ++ " CAN'T BUY " ++ str2 ++ " " ++ msg
 	let buy = do
 		balance <- getOutside (customerBalance customer)
 		price <- getOutside (itemPrice item)
@@ -253,7 +255,7 @@ buyCheapestItem warehouse customer = do
 	let noBalance = do
 		str1 <- inside $ showInc customer
 		str2 <- inside $ showInc item
-		throw $ NoBalance $ str1 ++ " has insufficient funds for " ++ show str2
+		throw $ NoBalance $ str1 ++ " has insufficient funds for " ++ show str2 ++ " " ++ msg
 	buy `orElse` noBalance
 
 data NoBalance = NoBalance String deriving (Show,Typeable)
@@ -265,19 +267,19 @@ customer_thread warehouse customer = do
 		choice <- generate $ choose (False,True)
 		if choice
 			then do -- list the cheapest item
-				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer " ++ customerName customer) $ readTxTime >>= \tx -> cheapestItem warehouse >>= liftM (tx,) . showInc
-				writeChan debugChan $ show tx ++ " customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time
+				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer " ++ customerName customer) $ readTxTime >>= \tx -> cheapestItem ("customer " ++ customerName customer) warehouse >>= liftM (tx,) . showInc
+				writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
 			else do -- buy the cheapest item
-				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer "++ customerName customer) $ readTxTime >>= \tx -> buyCheapestItem warehouse customer >>= liftM (tx,) . showInc
-				writeChan debugChan $ show tx ++ " customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time
-		threadDelay 300000
+				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer "++ customerName customer) $ readTxTime >>= \tx -> buyCheapestItem ("customer " ++ customerName customer) warehouse customer >>= liftM (tx,) . showInc
+				writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
+		threadDelay 300
 		action
 	let noBalance (NoBalance msg) = writeChan debugChan msg
 	action -- `Catch.catch` noBalance
 
 main_DB = do
 	let numItems = 5
-	let numCustomers = 5
+	let numCustomers = 3
 	
 	hSetBuffering stdout NoBuffering
 	

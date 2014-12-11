@@ -3,6 +3,7 @@
 module Control.Monad.Transactional.TxAdapton.Types where
 
 import Control.Monad.Incremental
+import Control.Concurrent
 import Control.Monad.Transactional
 import qualified Control.Concurrent.Map as CMap
 import Control.Monad.Incremental.Adapton.Types
@@ -83,7 +84,7 @@ instance Hashable (TxLog r m) where
 	hashWithSalt i (TxLog (id1 :!: _ :!: _)) = hashWithSalt i id1
 
 -- a tx environment contains (a tx start time,a callstack,a list of nested logs -- to support nested transactions)
-type TxEnv r m = (UTCTime :!: TxCallStack r m :!: TxLogs r m)
+type TxEnv r m = (r UTCTime :!: TxCallStack r m :!: TxLogs r m)
 
 txLogId (TxLog (x :!: y :!: z)) = x
 txLogBuff (TxLog (x :!: y :!: z)) = y
@@ -456,15 +457,6 @@ findTxLogEntry (SCons txlog txlogs) uid = do
 mergeTxLog :: MonadIO m => TxLog r m -> TxLog r m -> m ()
 mergeTxLog txlog1 txlog2 = liftIO $ do
 	WeakTable.mapM_ (\(uid,entry) -> WeakTable.insertWithMkWeak (txLogBuff txlog2) (dynTxMkWeak entry) uid entry) (txLogBuff txlog1)
-	
----- merges only the allocations of a nested txlog with its parent txlog, by overriding parent entries
----- we add the necessary dependents relationships to variables on which @New@ allocations depend
---mergeAllocsTxLog :: MonadIO m => TxLog r m -> TxLog r m -> m ()
---mergeAllocsTxLog txlog1 txlog2 = liftIO $ WeakTable.mapM_ upd (txLogBuff txlog1) where
---	upd (uid,entry) = when (isNewDynTxVar entry) $ do
---		WeakTable.insertWithMkWeak (txLogBuff txlog2) (dynTxMkWeak entry) uid entry
---		-- we commit dependencies right away to the persistent variables; this is OK because we have necessarily acquired locks on such variables
---		commitTxDependencies True $ dynTxDependencies entry
 
 -- merges the memo entries for a nested txlog into the memotables of its parent txlog, by overriding parent entries
 mergeTxLogMemos :: MonadIO m => TxLog r m -> TxLog r m -> m ()
@@ -489,7 +481,7 @@ unbufferTxLogs :: MonadIO m => Bool -> TxLogs r m -> m ()
 unbufferTxLogs onlyWrites txlogs = Foldable.mapM_ (unbufferTxLog onlyWrites) txlogs
 
 unbufferTxLog :: MonadIO m => Bool -> TxLog r m -> m ()
-unbufferTxLog onlyWrites txlog = WeakTable.mapMGeneric_ (unbufferDynTxVar' onlyWrites txlog) $ txLogBuff txlog where
+unbufferTxLog onlyWrites txlog = WeakTable.mapMGeneric_ (unbufferDynTxVar' onlyWrites txlog) $ txLogBuff txlog
 
 unbufferDynTxVar :: MonadIO m => Bool -> TxLog r m -> DynTxVar r m -> m ()
 unbufferDynTxVar onlyWrites txlog entry = unbufferDynTxVar' onlyWrites txlog (dynTxId entry,entry)
@@ -507,6 +499,15 @@ unbufferDynTxVar' onlyWrites txlog (uid,entry) = when (onlyWrites <= (dynTxStatu
 
 -- we need to clear the dependencies of unbuffered variables
 unbufferDynTxVar'' :: MonadIO m => Bool -> DynTxVar r m -> m (DynTxVar r m)
+unbufferDynTxVar'' onlyWrites tvar@(DynTxU _ _ u New) = do
+	-- dirty data+dependencies for @New@ allocations, since they may depend on lost @Write@s
+	txudta <- readRef (dataTxU u)
+	case txudta of
+		TxValue dirty value force dependencies -> do
+			readRef dependencies >>= Foldable.mapM_ (\(d,w) -> writeRef (dirtyTxW d) True)
+			writeRef (dataTxU u) $ TxValue 1# value force dependencies
+		otherwise -> return ()
+	return tvar
 unbufferDynTxVar'' onlyWrites tvar@(DynTxU _ _ u stat) = if (if onlyWrites then (==Write) else isEvalOrWrite) stat
 	then do
 		dependents <- dynTxVarDependents tvar
@@ -559,18 +560,6 @@ extendTxLog onlyWrites txlog1 txlog2 = do
 		txdeps2 <- liftM Just $ dynTxVarDependents entry2
 		mergeTxDependents txdeps1 txdeps2
 		return entry2
-	
-	-- dirty data+dependencies for @New@ allocations, since they may depend on lost @Write@s
-	mergeDynTxVars entry1@(DynTxU Nothing Nothing u New) x2 = do
-		txudta <- readRef (dataTxU u)
-		case txudta of
-			TxValue dirty value force dependencies -> do
-				readRef dependencies >>= Foldable.mapM_ (\(d,w) -> writeRef (dirtyTxW d) True)
-				writeRef (dataTxU u) $ TxValue 1# value force dependencies
-			otherwise -> return ()
-		writeRef (dataTxU u) txudta
-		
-		return entry1
 	
 	mergeDynTxVars x1 x2 = return x1
 	
@@ -629,11 +618,13 @@ debugChan = unsafePerformIO $ newChan
 debugTx :: TxLayer l r m => String -> l TxAdapton r m ()
 debugTx str = do
 	time <- readTxTime
-	inL $ liftIO $ writeChan debugChan $ "["++show time++"] " ++ str
+	threadid <- inL $ liftIO $ myThreadId
+	inL $ liftIO $ writeChan debugChan $ "{"++show threadid ++"}["++show time++"] " ++ str
 
 debugTx' :: MonadIO m => String -> m ()
 debugTx' str = do
-	liftIO $ writeChan debugChan $ str
+	threadid <- liftIO $ myThreadId
+	liftIO $ writeChan debugChan $ "{"++ show threadid ++ "}" ++ str
 
 -- makes sure to empty the buffer before killing the debugger thread
 debugger :: IO ()
@@ -648,5 +639,5 @@ readTxLog :: TxLayer l r m => l TxAdapton r m (TxLogs r m)
 readTxLog = liftM (\(x :!: y :!: z) -> z) $ Reader.ask
 
 readTxTime :: TxLayer l r m => l TxAdapton r m (UTCTime)
-readTxTime = liftM (\(x :!: y :!: z) -> x) $ Reader.ask
+readTxTime = liftM (\(x :!: y :!: z) -> x) Reader.ask >>= inL . readRef
 

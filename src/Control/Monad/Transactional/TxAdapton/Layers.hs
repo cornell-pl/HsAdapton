@@ -18,6 +18,7 @@ import System.IO.Unsafe
 import Data.Foldable as Foldable
 import Data.Concurrent.Deque.Class as Queue
 import Data.Concurrent.Deque.Reference.DequeInstance
+import Data.List as List
 
 import Control.Monad.Transactional.TxAdapton.Types
 import Control.Applicative
@@ -96,7 +97,7 @@ instance (MonadRef r m,WeakRef r,MonadIO m) => Incremental TxAdapton r m where
 	{-# INLINE unsafeWorld #-}
 
 	runIncremental m = do
-		starttime <- liftIO $ startTx
+		starttime <- liftIO startTx >>= newRef
 		stack <- liftIO $ newIORef SNil
 		tbl <- liftIO emptyTxLog
 		Reader.runReaderT (runTxOuter m) (starttime :!: stack :!: SCons tbl SNil)
@@ -135,10 +136,10 @@ writeTxMValue m v' = do
 	inL $ changeTxM m (Just v') tbl
 	return ()
 
-readTxUValue :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m (TxUData l1 TxAdapton r m a)
-readTxUValue u@(TxU (r,_)) = do
+readTxUValue :: (Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> TxStatus -> l TxAdapton r m (TxUData l1 TxAdapton r m a)
+readTxUValue u@(TxU (r,_)) status = do
 	tbl <- readTxLog
-	dyntxvar <- inL $ bufferTxU u Read tbl
+	dyntxvar <- inL $ bufferTxU u status tbl
 	case dyntxvar of
 		DynTxU (Just (BuffTxU (v,_))) _ _ _ -> return $ coerce v
 		DynTxU Nothing _ wu _ -> do
@@ -154,6 +155,7 @@ writeTxUValue t dta' status = do
 -- ** Transactions
 
 -- a list of the starting times of running transactions sorted from newest to oldest
+-- we may have multiple transactions with the same start time
 -- needs to be a @MVar@ because multiple txs may start concurrently on different threads
 {-# NOINLINE runningTxs #-}
 runningTxs :: MVar [UTCTime]
@@ -165,20 +167,29 @@ txLock :: Lock
 txLock = unsafePerformIO $ Lock.new
 
 -- a map with commit times of committed transactions and their performed changes
+-- each commited TX should have a different commit time. since we get the current time after acquiring the @MVar@, no two parallel commiting txs can have the same time
 {-# NOINLINE doneTxs #-}
 doneTxs :: MVar (Map UTCTime (TxUnmemo r m,TxWrite r m))
 doneTxs = unsafePerformIO $ newMVar Map.empty
 
 -- we need to acquire a lock, but this should be minimal
 startTx :: IO UTCTime
-startTx = modifyMVarMasked runningTxs (\xs -> getCurrentTime >>= \t -> return (t:xs,t))
+startTx = getCurrentTime >>= \t -> addRunningTx t >> return t
+
+deleteRunningTx time = modifyMVarMasked_ runningTxs (return . List.delete time)
+
+-- insert a new time in a list sorted from newest to oldest
+addRunningTx time = modifyMVarMasked_ runningTxs (\xs -> return $ List.insertBy (\x y -> compare y x) time xs)
+
+updateRunningTx oldtime newtime = modifyMVarMasked_ runningTxs (\xs -> return $ List.insertBy (\x y -> compare y x) newtime $ List.delete oldtime xs)
 
 -- restarts a tx with a new starting time
+-- note that the time has already been added to the @runningTxs@
 restartTx :: TxLayer Outside r m => UTCTime -> Outside TxAdapton r m a -> Outside TxAdapton r m a
 restartTx newtime m = do
-	txlogs <- readTxLog
---	inL $ liftIO $ restartMemoTx txlogs
-	Reader.local (\(_ :!: stack :!: logs) -> (newtime :!: stack :!: logs)) m
+ 	(timeref :!: stack :!: logs) <- Reader.ask
+	writeRef timeref newtime
+	m
 
 --restartMemoTx :: TxLogs r m -> IO ()
 --restartMemoTx = Strict.mapM_ restartMemoTx' where
@@ -186,7 +197,7 @@ restartTx newtime m = do
 
 resetTx :: TxLayer Outside r m => Outside TxAdapton r m a -> Outside TxAdapton r m a
 resetTx m = do
-	now <- inL $ liftIO $ startTx
+	now <- inL $ liftIO startTx >>= newRef
 	stack <- inL $ liftIO $ newIORef SNil
 	tbl <- inL $ liftIO emptyTxLog
 	Reader.local (\_ -> (now :!: stack :!: SCons tbl SNil)) m
