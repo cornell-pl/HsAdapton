@@ -43,6 +43,7 @@ import Control.Exception
 import Control.Monad.Catch (MonadCatch,MonadMask,MonadThrow)
 import qualified Control.Monad.Catch as Catch
 import System.Mem.WeakTable as WeakTable
+import System.Mem.Concurrent.WeakMap as CWeakMap
 import Safe
 
 import Debug
@@ -101,7 +102,7 @@ refOuterTxM :: (Eq a,TxLayer l r m,MonadIO m,TxLayer Outside r m) => a -> Outsid
 refOuterTxM v = do
 	idU <- inL $ liftIO newUnique
 	dta <- inL $ newRef v
-	dependentsU <- inL $ liftIO $ WeakSet.new
+	dependentsU <- inL $ liftIO $ CWeakMap.new
 	-- since the ref will never be reused, we don't need to worry about it's creator
 	waitQ <- inL $ liftIO newQ
 	lck <- inL $ liftIO Lock.new
@@ -113,7 +114,7 @@ refInnerTxM :: (Eq a,TxLayer l r m,MonadIO m,TxLayer Inside r m) => a -> Inside 
 refInnerTxM v = do
 	idU <- inL $ liftIO newUnique
 	dta <- inL $ newRef v
-	dependentsU <- inL $ liftIO $ WeakSet.new
+	dependentsU <- inL $ liftIO $ CWeakMap.new
 	-- add a reference dependency (they are transitive up to the top-level calling thunk)
 	creator <- mkRefCreatorTx idU
 	waitQ <- inL $ liftIO newQ
@@ -199,7 +200,7 @@ thunkTxU :: (Eq a,MonadIO m,TxLayer l r m,TxLayer l1 r m) => l1 TxAdapton r m a 
 thunkTxU c = do
 	idU <- inL $ liftIO newUnique
 	dta <- inL $ newRef (TxThunk c)
-	dependentsU <- inL $ liftIO $ WeakSet.new
+	dependentsU <- inL $ liftIO $ CWeakMap.new
 	waitQ <- inL $ liftIO $ newQ
 	lck <- inL $ liftIO Lock.new
 	let u = TxU (dta,(TxNodeMeta (idU,dependentsU,changeDirtyValueTx True Write $! u,forgetUDataTx $! u,bufferTxU $! u,Nothing,waitQ,lck)))
@@ -210,7 +211,7 @@ constTxU :: (Eq a,MonadIO m,TxLayer l r m,TxLayer l1 r m) => a -> l TxAdapton r 
 constTxU v = do
 	idU <- inL $ liftIO newUnique
 	dta <- inL $ newRef (TxConst v)
-	dependentsU <- inL $ liftIO $ WeakSet.new
+	dependentsU <- inL $ liftIO $ CWeakMap.new
 	waitQ <- inL $ liftIO $ newQ
 	lck <- inL $ liftIO Lock.new
 	let u = TxU (dta,(TxNodeMeta (idU,dependentsU,error "no dirty",forgetUDataTx $! u,bufferTxU $! u,Nothing,waitQ,lck)))
@@ -223,10 +224,7 @@ forceOuterTxU = error "forceOuter"
 forceInnerTxU :: (MonadIO m,Eq a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m a
 forceInnerTxU = \t -> do
 	value <- forceNoDependentsTxU t
-	has <- hasDependenciesTxU t 
-	if has
-		then addDependencyTx (metaTxU t) (checkTxU t $! value)
-		else writeTxUValue t (TxConst value) Eval
+	addDependencyTx (metaTxU t) (checkTxU t $! value)
 	return value
 
 hasDependenciesTxU :: (Eq a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m Bool
@@ -349,7 +347,8 @@ addDependencyTx calleemeta check = do
 			let dependencyW = TxDependency (calleemeta,dirtyW,check,callermeta,originalW,MkWeak $ mkWeakRefKey txcallerdependencies)
 			txcalleedependents <- inL $ getTxDependents tbl calleemeta Eval
 			-- purging does not affect consistency of reads, so we don't need to care about race conditions on the original data
-			let purge = WeakSet.purge (dependentsTxNM calleemeta) >> WeakSet.purge txcalleedependents
+			-- it does!!! what if we we read,purge-read,write,purge-write
+			let purge = CWeakMap.deleteFinalized (dependentsTxNM calleemeta) (idTxNM callermeta) >> CWeakMap.deleteFinalized txcalleedependents (idTxNM callermeta)
 			weak <- inL $ liftIO $ mkWeakRefKey txcallerdependencies dependencyW (Just purge)
 			inL $ insertTxDependency (idTxNM calleemeta) (dependencyW,weak) txcallerdependencies
 			inL $ insertTxDependent (idTxNM callermeta) weak txcalleedependents
@@ -363,7 +362,7 @@ changeTxDependency txdependencies txdependents d@(TxDependency (srcMetaW,dirtyW,
 			dirtyW' <- newRef isDirty
 			originalW' <- newRef False -- dependencies are created within a transaction
 			let dependencyW' = TxDependency (srcMetaW,dirtyW',checkW,tgtMetaW,originalW',MkWeak $ mkWeakRefKey txdependencies)
-			let purge = WeakSet.purge (dependentsTxNM srcMetaW) >> WeakSet.purge txdependents
+			let purge = CWeakMap.deleteFinalized (dependentsTxNM srcMetaW) (idTxNM tgtMetaW) >> CWeakMap.deleteFinalized txdependents (idTxNM tgtMetaW)
 			weak' <- liftIO $ mkWeakRefKey txdependencies dependencyW' (Just purge)
 			insertTxDependency (idTxNM srcMetaW) (dependencyW',weak') txdependencies -- overrides the original dependency
 			insertTxDependent (idTxNM tgtMetaW) weak' txdependents
@@ -389,17 +388,21 @@ dirtyCreatorTx tbl (Just wcreator) = do
 dirtyRecursivelyTx :: (WeakRef r,MonadIO m,MonadRef r m) => TxLogs r m -> TxNodeMeta r m -> m ()
 dirtyRecursivelyTx tbl meta = do
 	txdependents <- getTxDependents tbl meta Write -- marks the buffered dependents as a write, since we will dirty its dependencies
-	dependents <- WeakSet.toListPurge txdependents
-	Control.Monad.mapM_ (dirtyTx' txdependents) dependents
+	dependents <- CWeakMap.toMap txdependents
+	Foldable.mapM_ (dirtyTx' txdependents) dependents
   where
 	{-# INLINE dirtyTx' #-}
-	dirtyTx' txdependents = \d -> do
-		isDirty <- readRef (dirtyTxW d)
-		unless isDirty $ do
-			txdependencies <- getTxDependencies tbl (tgtMetaTxW d) Write -- marks the buffered dependencies as a write, since dirtying results from a change
-			changeTxDependency txdependencies txdependents d True
-			dirtyTxNM (tgtMetaTxW d) tbl
-			dirtyRecursivelyTx tbl (tgtMetaTxW d)
+	dirtyTx' txdependents = \w -> do
+		mb <- liftIO $ Weak.deRefWeak w
+		case mb of
+			Nothing -> return ()
+			Just d -> do
+				isDirty <- readRef (dirtyTxW d)
+				unless isDirty $ do
+					txdependencies <- getTxDependencies tbl (tgtMetaTxW d) Write -- marks the buffered dependencies as a write, since dirtying results from a change
+					changeTxDependency txdependencies txdependents d True
+					dirtyTxNM (tgtMetaTxW d) tbl
+					dirtyRecursivelyTx tbl (tgtMetaTxW d)
 
 -- inserts or updates a dependency in a dependency list
 insertTxDependency :: MonadRef r m => Unique -> (TxDependency r m,Weak (TxDependency r m)) -> TxDependencies r m -> m ()
@@ -409,15 +412,7 @@ insertTxDependency did d rds = mapRef updateTxDependency rds where
 		where xid = idTxNM $ srcMetaTxW $ Prelude.fst x
 
 insertTxDependent :: (MonadIO m,MonadRef r m) => Unique -> Weak (TxDependent r m) -> TxDependents r m -> m ()
-insertTxDependent did d rds = WeakSet.modifyWeak rds updateTxDependent where
-	updateTxDependent SNil = return $ SCons d SNil
-	updateTxDependent (SCons w xs) = do
-		mb <- liftIO $ Weak.deRefWeak w
-		case mb of
-			Nothing -> updateTxDependent xs
-			Just x -> do
-				let xid = idTxNM $ tgtMetaTxW x
-				if did == xid then return (SCons d xs) else liftM (SCons w) (updateTxDependent xs)
+insertTxDependent did d deps = CWeakMap.insertWeak deps did d
 
 -- ** Transactional support
 
@@ -429,7 +424,7 @@ commitDynTxVar doWrites (DynTxU Nothing mbtxdeps u Read) = do
 	-- add buffered dependents on top of persistent dependents
 	case mbtxdeps of
 		Just txdeps -> do
-			WeakSet.mergeWeak (dependentsTxNM $ metaTxU u) txdeps
+			CWeakMap.unionWithKey dependenciesTxW (dependentsTxNM $ metaTxU u) txdeps
 			return ((Map.singleton (idTxNM $ metaTxU u) False,return ()),Map.empty)
 		Nothing -> return ((Map.empty,return ()),Map.empty) 
 commitDynTxVar doWrites (DynTxU (Just (BuffTxU (txudta,txrdependents))) Nothing u txstatus@(isEvalOrWrite -> True)) = do
@@ -441,8 +436,8 @@ commitDynTxVar doWrites (DynTxU (Just (BuffTxU (txudta,txrdependents))) Nothing 
 			otherwise -> return ()
 		writeRef (dataTxU u) txudta
 		-- for dependents we keep the reference and update the contents
-		deps <- WeakSet.toWeakSList txrdependents
-		WeakSet.modifyWeak (dependentsTxNM $ metaTxU u) $ \_ -> return deps
+		deps <- CWeakMap.toMap txrdependents
+		CWeakMap.atomicModifyWeakMap_ (dependentsTxNM $ metaTxU u) $ Prelude.const deps
 	
 	case txstatus of
 		Eval -> do
@@ -471,14 +466,15 @@ commitDynTxVar doWrites (DynTxM Nothing mbtxdeps m Read) = do
 	-- add buffered dependents on top of persistent dependents
 	case mbtxdeps of
 		Just txdeps -> do
-			WeakSet.mergeWeak (dependentsTxNM $ metaTxM m) txdeps
+			CWeakMap.unionWithKey dependenciesTxW (dependentsTxNM $ metaTxM m) txdeps
 			return ((Map.singleton (idTxNM $ metaTxM m) False,return ()),Map.empty)
 		Nothing -> return ((Map.empty,return ()),Map.empty) 
 commitDynTxVar doWrites (DynTxM (Just (BuffTxM (value,txrdependents))) Nothing m txstatus@(isEvalOrWrite -> True)) = do
 	let commit = do
 		writeRef (dataTxM m) value
-		deps <- WeakSet.toWeakSList txrdependents
-		WeakSet.modifyWeak (dependentsTxNM $ metaTxM m) $ \_ -> return deps
+		-- we do not use CAS because we only modify the original dependents under locks
+		deps <- CWeakMap.toMap txrdependents
+		CWeakMap.atomicModifyWeakMap_ (dependentsTxNM $ metaTxM m) $ Prelude.const deps
 		
 	case txstatus of
 		Eval -> do
@@ -523,9 +519,6 @@ retryDynTxVar txlog lck uid tvar = when (dynTxStatus tvar < New) $ enqueueWait l
 --	let toptxenv = starttime :!: stack :!: SCons toptxlog SNil
 --	retryTxLog mblck toptxenv
 
-flattenTxEnv :: (TxLayer Outside r m,MonadIO m,MonadRef r m) => TxEnv r m -> m ()
-flattenTxEnv txenv@(starttime :!: stack :!: txlogs) = flattenTxLogs txlogs >> return ()
-	
 retryTxLog :: (TxLayer Outside r m,MonadIO m,MonadRef r m) => Lock -> TxLog r m -> m ()
 retryTxLog lck txlog = WeakTable.mapMGeneric_ (\(uid,dyntxvar) -> retryDynTxVar txlog lck uid dyntxvar) (txLogBuff txlog)
 
@@ -717,10 +710,8 @@ validateAndCommitNestedTx msg mbException = atomicTx ("validateAndCommitNestedTx
 				Just (newtime,conflicts) -> do
 					-- delete the running tx; it will get a new timestamp once it is retried
 					inL $ liftIO $ updateRunningTx starttime newtime
-					-- flattens the possibly inconsistent nested txlogs into the top-level txlog
-					inL $ flattenTxEnv txenv
 					-- re-start from the top
-					throwM $ InvalidTx (newtime,conflicts)
+					throwM $ InvalidTx (newtime,inL (flattenTxLogs txlogs >>= unbufferTxLog True) >> conflicts)
 
 -- validates a transaction and places it into the waiting queue for retrying
 validateAndRetryTopTx :: (Typeable r,Typeable m,TxLayer Outside r m) => String -> Outside TxAdapton r m (Either Lock (TxRepair r m))
@@ -752,10 +743,8 @@ validateAndRetryNestedTx msg = atomicTx ("validateAndRetryNestedTx "++msg) $ do
 		Just (newtime,conflicts) -> do
 			-- delete the running tx; it will get a new timestamp once it is retried
 			inL $ liftIO $ updateRunningTx starttime newtime
-			-- flattens the possibly inconsistent nested txlogs into the top-level txlog
-			inL $ flattenTxEnv txenv
 			-- discards writes and applies the conflicting changes to locally repair the current tx
-			throwM $ InvalidTx (newtime,conflicts)
+			throwM $ InvalidTx (newtime,inL (flattenTxLogs txlogs >>= unbufferTxLog True) >> conflicts)
 
 -- like STM, our txs are:
 -- same as transaction repair: within transactions, we use no locks; we use locks for commit

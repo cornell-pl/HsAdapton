@@ -207,6 +207,7 @@ mergeWithKey getKey weakset'@(WeakSet (s' :!: weak_s')) s = do
 			Nothing -> return ()
 			Just x -> do
 				let MkWeak mkWeak = getKey x
+				-- creates a new finalizer
 				mkWeak () (Just $ purgeWeak weak_s')
 				insertWeak weakset' w
 	liftIO $ Foldable.mapM_ addFinalizers xs

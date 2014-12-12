@@ -2,7 +2,7 @@
 
 module Data.Strict.List where
 
-import Prelude hiding (mapM,mapM_,map)
+import Prelude hiding (mapM,mapM_,map,sequence)
 import Data.Typeable
 import Data.Foldable
 
@@ -29,3 +29,10 @@ mapM f (SCons a as) = do
 	b <- f a
 	bs <- mapM f as
 	return $ SCons b bs
+
+sequence :: Monad m => SList (m a) -> m (SList a)
+sequence SNil = return SNil
+sequence (SCons m ms) = do
+	x <- m
+	xs <- sequence ms
+	return $ SCons x xs

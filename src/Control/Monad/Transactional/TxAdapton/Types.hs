@@ -48,6 +48,7 @@ import Data.Hashable
 import System.Mem.WeakTable as WeakTable
 import Data.Set as Set
 import Data.List as List
+import System.Mem.Concurrent.WeakMap as CWeakMap
 
 data TxAdapton deriving Typeable
 
@@ -205,7 +206,7 @@ tgtMetaTxW (TxDependency (srcMeta,dirty,check,tgtMeta,flag,_)) = tgtMeta
 flagTxW (TxDependency (srcMeta,dirty,check,tgtMeta,flag,_)) = flag
 dependenciesTxW (TxDependency (srcMeta,dirty,check,tgtMeta,flag,dependencies)) = dependencies
 
-type TxDependents (r :: * -> *) (m :: * -> *) = WeakSet (TxDependent r m)
+type TxDependents (r :: * -> *) (m :: * -> *) = WeakMap Unique (TxDependent r m)
 type TxDependent r m = TxDependency r m
 
 newtype TxM (l :: * -> (* -> *) -> (* -> *) -> * -> *) inc (r :: * -> *) (m :: * -> *) a = TxM (
@@ -289,20 +290,20 @@ dynTxVarLock :: DynTxVar r m -> Lock
 dynTxVarLock (DynTxM _ _ m _) = lockTxNM $ metaTxM m
 dynTxVarLock (DynTxU _ _ u _) = lockTxNM $ metaTxU u
 
--- merge the original dependents on top of the buffered ones (overriding buffered content)
+-- merge the original dependents on top of the buffered ones (without overriding buffered content)
 dynTxVarDependents :: MonadIO m => DynTxVar r m -> m (TxDependents r m)
 dynTxVarDependents (DynTxM (Just (BuffTxM (_,deps))) _ _ _) = return deps
 dynTxVarDependents (DynTxU (Just (BuffTxU (_,deps))) _ _ _) = return deps
 dynTxVarDependents (DynTxM Nothing mbtxdeps m _) = do
 	case mbtxdeps of
 		Just txdeps -> do
-			WeakSet.mergeWeak txdeps (dependentsTxNM $ metaTxM m)
+			CWeakMap.extendWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxM m)
 			return txdeps
 		Nothing -> return $ dependentsTxNM $ metaTxM m
 dynTxVarDependents (DynTxU Nothing mbtxdeps u _) = do
 	case mbtxdeps of
 		Just txdeps -> do
-			WeakSet.mergeWeak txdeps (dependentsTxNM $ metaTxU u)
+			CWeakMap.extendWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxU u)
 			return txdeps
 		Nothing -> return $ dependentsTxNM $ metaTxU u
 
@@ -333,8 +334,8 @@ bufferTxM m Eval txlogs = do
 	mb <- liftIO $ findTxLogEntry txlogs idm
 	let new_entry mbtxdeps = do
 		!buff_deps <- case mbtxdeps of
-			Just txdeps -> WeakSet.mergeWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxM m) >> return txdeps
-			Nothing -> WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxM m)
+			Just txdeps -> CWeakMap.unionWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxM m) >> return txdeps
+			Nothing -> CWeakMap.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxM m)
 		!buff_value <- readRef (dataTxM m)
 		let tvar = DynTxM (Just $ BuffTxM (buff_value,buff_deps)) Nothing m Eval
 		liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxM m) idm tvar
@@ -352,8 +353,8 @@ changeTxM m mbv' txlogs = do
 	mb <- liftIO $ findTxLogEntry txlogs idm
 	let new_entry mbtxdeps = do
 		!buff_deps <- case mbtxdeps of
-			Just txdeps -> WeakSet.mergeWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxM m) >> return txdeps
-			Nothing -> WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxM m)
+			Just txdeps -> CWeakMap.unionWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxM m) >> return txdeps
+			Nothing -> CWeakMap.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxM m)
 		!buff_value <- readRef (dataTxM m)
 		let !v' = maybe buff_value id mbv'
 		let tvar = DynTxM (Just (BuffTxM (v',buff_deps))) Nothing m Write
@@ -390,8 +391,8 @@ bufferTxU u Eval txlogs = do
 	let new_entry mbtxdeps = do
 		-- the copies point to the original dependencies reference
 		!buff_deps <- case mbtxdeps of
-			Just txdeps -> WeakSet.mergeWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxU u) >> return txdeps
-			Nothing -> WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxU u)
+			Just txdeps -> CWeakMap.unionWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxU u) >> return txdeps
+			Nothing -> CWeakMap.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxU u)
 		!buff_dta <- readRef (dataTxU u) >>= copyTxUData
 		let tvar = DynTxU (Just $ BuffTxU (buff_dta,buff_deps)) Nothing u Eval
 		liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) idu tvar
@@ -409,8 +410,8 @@ changeTxU u mbChgDta status txlogs = do
 	mb <- liftIO $ findTxLogEntry txlogs idu
 	let new_entry mbtxdeps = do
 		!buff_deps <- case mbtxdeps of
-			Just txdeps -> WeakSet.mergeWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxU u) >> return txdeps
-			Nothing -> WeakSet.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxU u)
+			Just txdeps -> CWeakMap.unionWithKey dependenciesTxW txdeps (dependentsTxNM $ metaTxU u) >> return txdeps
+			Nothing -> CWeakMap.copyWithKey dependenciesTxW (dependentsTxNM $ metaTxU u)
 		!buff_dta <- readRef (dataTxU u) >>= copyTxUData
 		!buff_dta' <- (maybe return id mbChgDta) buff_dta
 		let tvar = DynTxU (Just $ BuffTxU (buff_dta',buff_deps)) Nothing u status
@@ -566,7 +567,7 @@ extendTxLog onlyWrites txlog1 txlog2 = do
 	mergeTxDependents :: MonadIO m => Maybe (TxDependents r m) -> Maybe (TxDependents r m) -> m (Maybe (TxDependents r m))
 	mergeTxDependents Nothing txdeps2 = return txdeps2
 	mergeTxDependents txdeps1 Nothing = return txdeps1
-	mergeTxDependents (Just txdeps1) (Just txdeps2) = mergeWithKey dependenciesTxW txdeps2 txdeps1 >> return (Just txdeps2)
+	mergeTxDependents (Just txdeps1) (Just txdeps2) = unionWithKey dependenciesTxW txdeps2 txdeps1 >> return (Just txdeps2)
 
 dynTxStatus :: DynTxVar r m -> TxStatus
 dynTxStatus (DynTxU _ _ _ s) = s

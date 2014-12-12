@@ -17,6 +17,7 @@ import Control.Monad.Trans
 
 import Control.Monad
 import Control.Monad.IO.Class
+import System.Mem.Concurrent.WeakMap as CWeakMap
 import Control.Exception
 import Data.UUID
 import Data.UUID.V1
@@ -86,7 +87,7 @@ instance (MonadRef r m,MonadIO m,Eq a,TxLayer Outside r m,TxLayer Inside r m,TxL
 			Nothing -> return ([thunkID],[DN thunkNode])
 
 drawTxDependents :: (TxLayer Outside r m,MonadRef r m,MonadIO m) => String -> TxDependents r m -> Outside TxAdapton r m [DotStatement String]
-drawTxDependents fromID deps = checkDrawnDependents fromID $ liftM (concat . Foldable.toList) $ WeakSet.mapM'' (inL . liftIO) (drawTxDependent fromID) deps
+drawTxDependents fromID deps = checkDrawnDependents fromID $ liftM (concat . Foldable.toList) $ CWeakMap.mapM'' (inL . liftIO) (drawTxDependent fromID) deps
 drawTxDependent :: (TxLayer Outside r m,MonadRef r m,MonadIO m) => String -> Weak (TxDependent r m) -> Outside TxAdapton r m [DotStatement String]
 drawTxDependent fromID weak = do
 	mb <- inL $ liftIO $ deRefWeak weak

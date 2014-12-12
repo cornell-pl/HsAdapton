@@ -112,13 +112,13 @@ instance (Draw inc r m a) => Sat (DrawDict inc r m a) where
 		
 -- * Graphviz bindings
 
-drawPDF :: Draw inc r m a => Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m ()
-drawPDF inc r m v = do
-	inL $ liftIO $ performGC >> threadDelay 2000000
+drawPDF :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m ()
+drawPDF label inc r m v = do
+--	inL $ liftIO $ performGC >> threadDelay 2000000
 	dir <- inL $ liftIO $ getTemporaryDirectory
 	filename <- inL $ liftIO $ liftM toString $ nextUUIDSafe
 	let pdfFile = dir </> addExtension filename "pdf"
-	drawToPDF inc r m v pdfFile
+	drawToPDF label inc r m v pdfFile
 	inL $ liftIO $ modifyIORef tempPDFs (pdfFile:)
 	inL $ liftIO $ putStrLn $ "drew " ++ filename ++ ".pdf"
 
@@ -133,24 +133,25 @@ mergePDFsInto' pdfFile = do
 
 ------
 
-drawToDot :: Draw inc r m a => Proxy inc -> Proxy r -> Proxy m -> a -> FilePath -> Outside inc r m ()
-drawToDot inc r m v dotFile = do
-	graph <- drawGraph inc r m v
+drawToDot :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> FilePath -> Outside inc r m ()
+drawToDot label inc r m v dotFile = do
+	graph <- drawGraph label inc r m v
 	let txt = printDotGraph graph
 	inL $ liftIO $ T.writeFile dotFile txt
 	return ()
 	
-drawToPDF :: Draw inc r m a => Proxy inc -> Proxy r -> Proxy m -> a -> FilePath -> Outside inc r m ()
-drawToPDF inc r m v pdfFile = do
-	graph <- drawGraph inc r m v
+drawToPDF :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> FilePath -> Outside inc r m ()
+drawToPDF label inc r m v pdfFile = do
+	graph <- drawGraph label inc r m v
 	inL $ liftIO $ runGraphviz graph Pdf pdfFile
 	return ()
 
-drawGraph :: Draw inc r m a => Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m (DotGraph String)
-drawGraph inc r m x = do
+drawGraph :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m (DotGraph String)
+drawGraph label inc r m x = do
 	inL resetDrawnNodes
 --	inL $ liftIO printAllRefs
-	dot <- liftM (drawGraphStatements . snd) (draw inc r m x)
+	let labelNode = DN $ DotNode {nodeID = label, nodeAttributes = [Shape PlainText,Label (StrLabel $ T.pack label)]}
+	dot <- liftM (\(x,y) -> drawGraphStatements $ labelNode : y) (draw inc r m x)
 	inL resetDrawnNodes
 	return dot
 

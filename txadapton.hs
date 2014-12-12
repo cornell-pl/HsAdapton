@@ -1,4 +1,4 @@
-{-# LANGUAGE TupleSections, TypeFamilies, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, DeriveDataTypeable, ScopedTypeVariables, FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell, TupleSections, TypeFamilies, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, DeriveDataTypeable, ScopedTypeVariables, FlexibleContexts #-}
 
 module Main where
 
@@ -18,6 +18,13 @@ import Control.Monad.Incremental.Draw
 import Data.Proxy
 import Data.IORef
 import Data.Typeable
+import Data.DeepTypeable
+import Language.Haskell.TH.Syntax
+
+import Data.WithClass.MData
+import Data.DeriveTH
+import Data.WithClass.Derive.MData
+import Data.WithClass.Derive.DeepTypeable
 
 import Test.QuickCheck.Gen
 import Test.QuickCheck
@@ -267,19 +274,29 @@ customer_thread warehouse customer = do
 		choice <- generate $ choose (False,True)
 		if choice
 			then do -- list the cheapest item
-				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer " ++ customerName customer) $ readTxTime >>= \tx -> cheapestItem ("customer " ++ customerName customer) warehouse >>= liftM (tx,) . showInc
+				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer " ++ customerName customer) $ do
+					tx <- readTxTime
+					item <- cheapestItem ("customer " ++ customerName customer) warehouse
+					str <- showInc item
+					return (tx,str)
 				writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
 			else do -- buy the cheapest item
-				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer "++ customerName customer) $ readTxTime >>= \tx -> buyCheapestItem ("customer " ++ customerName customer) warehouse customer >>= liftM (tx,) . showInc
+				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer "++ customerName customer) $ do
+					tx <- readTxTime
+					item <- buyCheapestItem ("customer " ++ customerName customer) warehouse customer
+					str <- showInc item
+--					let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str ++ " " ++ show tx
+--					drawPDF msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse item)
+					return (tx,str)
 				writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
 		threadDelay 300
 		action
 	let noBalance (NoBalance msg) = writeChan debugChan msg
-	action -- `Catch.catch` noBalance
+	action `Catch.catch` noBalance
 
-main_DB = do
+main_DB = {-flip Exception.finally (mergePDFsInto' "tx.pdf") $ -} do
 	let numItems = 5
-	let numCustomers = 3
+	let numCustomers = 10
 	
 	hSetBuffering stdout NoBuffering
 	
@@ -349,4 +366,8 @@ instance Memo Customer where
 	{-# INLINE memoKey #-}
 	memoKey x = (MkWeak $ Weak.mkWeak x,unsafePerformIO $ makeStableName x)
 		
-	
+
+$( derive makeMData ''Item )
+$( derive makeMData ''Customer )
+$( derive makeDeepTypeable ''Item )
+$( derive makeDeepTypeable ''Customer )

@@ -15,7 +15,6 @@ import Control.Monad.Ref
 import System.Mem.Weak as Weak
 import Control.Monad.Reader
 import qualified Data.HashTable.ST.Basic as HT
-import qualified Control.Concurrent.Map as CMap
 
 class WeakRef r where
 	mkWeakRefKey :: r a -> b -> Maybe (IO ()) -> IO (Weak b)
@@ -33,9 +32,6 @@ class WeakKey r where
 
 instance WeakKey (HT.HashTable s k v) where
 	mkWeakKey h v mb = HT.mkWeakKey h v (maybe (return ()) id mb)
-	
-instance WeakKey (CMap.Map k v) where
-	mkWeakKey h v mb = CMap.mkWeakKey h v (maybe (return ()) id mb)
 
 instance WeakKey (IORef a) where
 	mkWeakKey = \r v mb -> mkWeakKeyIORef r v (maybe (return ()) id mb)
