@@ -470,12 +470,12 @@ isUnevaluatedU t = do
 -- | Explicit memoization for recursive functions, fixpoint
 -- A fixed-point operation returning thunks that in the process of tying the knot adds memoization.
 memoU :: (MonadIO m,Eq a,Layer Outside inc r m,Memo arg) => ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
-memoU f = let memo_func = memoNonRecU (thunkU . f memo_func) in memo_func
+memoU f = let memo_func = memoNonRecU MemoLinear (thunkU . f memo_func) in memo_func
 
 gmemoQU :: (Eq b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
 gmemoQU ctx (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b)) =
 	let memo_func :: GenericQMemoU ctx Inside inc r m b
-	    memo_func = gmemoNonRecU ctx (f memo_func)
+	    memo_func = gmemoNonRecU MemoLinear ctx (f memo_func)
 	in memo_func
 
 -- * Auxiliary functions

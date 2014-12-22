@@ -4,7 +4,7 @@ module Data.Strict.List where
 
 import Prelude hiding (mapM,mapM_,map,sequence)
 import Data.Typeable
-import Data.Foldable
+import Data.Foldable as Foldable
 
 -- | A strict list datatype
 data SList a = SCons !a !(SList a) | SNil deriving (Show,Eq,Ord,Typeable)
@@ -36,3 +36,10 @@ sequence (SCons m ms) = do
 	x <- m
 	xs <- sequence ms
 	return $ SCons x xs
+
+reverse :: SList a -> SList a
+reverse = Foldable.foldl (flip SCons) SNil
+
+null :: SList a -> Bool
+null SNil = True
+null (SCons _ _) = False

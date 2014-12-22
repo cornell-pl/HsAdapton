@@ -1,4 +1,4 @@
-{-# LANGUAGE TupleSections, TypeFamilies, ScopedTypeVariables, TemplateHaskell, StandaloneDeriving, KindSignatures, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts, UndecidableInstances, DeriveDataTypeable #-}
+{-# LANGUAGE BangPatterns, TupleSections, TypeFamilies, ScopedTypeVariables, TemplateHaskell, StandaloneDeriving, KindSignatures, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts, UndecidableInstances, DeriveDataTypeable #-}
 
 module Control.Monad.Incremental.List where
 
@@ -9,6 +9,7 @@ import Data.Proxy
 import Control.Monad.Incremental.Display
 import Control.Monad.Incremental.LazyNonInc
 import Control.Monad.Incremental.Adapton hiding (MData)
+import Control.Monad.Transactional.TxAdapton
 import Data.IORef
 import Prelude hiding (mod,const,read)
 import qualified Prelude
@@ -63,6 +64,13 @@ type ListLazyNonIncL' l r m a = ListMod' LazyNonIncL l LazyNonInc r m a
 
 type ListLazyNonIncM l r m a = ListMod LazyNonIncM l LazyNonInc r m a
 type ListLazyNonIncM' l r m a = ListMod' LazyNonIncM l LazyNonInc r m a
+
+type ListTxU l r m a = ListMod TxU l TxAdapton r m a
+type ListTxU' l r m a = ListMod' TxU l TxAdapton r m a
+
+type ListTxM l r m a = ListMod TxM l TxAdapton r m a
+type ListTxM' l r m a = ListMod' TxM l TxAdapton r m a
+
 
 instance (Display l1 inc r m a,Display l1 inc r m (ListMod mod l inc r m a)) => Display l1 inc r m (ListMod' mod l inc r m a) where
 	displaysPrec NilMod r = return $ "NilMod" ++ r
@@ -121,13 +129,13 @@ filterInc p = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
 		else recur mxs >>= force
 	NilMod -> return NilMod
 	
--- | filter
-filterWithKeyInc :: (Thunk mod l inc r m,Eq (ListMod thunk l inc r m a),MonadIO m,Memo (ListMod mod l inc r m a),Eq a,Eq (ListMod mod l inc r m a),Output thunk l inc r m)
+-- | filter=
+filterWithKeyInc :: (Memo a,Thunk mod l inc r m,Eq (ListMod thunk l inc r m a),MonadIO m,Memo (ListMod mod l inc r m a),Eq a,Eq (ListMod mod l inc r m a),Output thunk l inc r m)
 	=> (a -> a -> l inc r m Bool) -> a -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
-filterWithKeyInc cmp k = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
+filterWithKeyInc cmp = memo2 $ \recur k mxs -> read mxs >>= \xs -> case xs of
 	ConsMod x mxs -> cmp k x >>= \b -> if b
-		then liftM (ConsMod x) $ recur mxs
-		else recur mxs >>= force
+		then liftM (ConsMod x) $ recur k mxs
+		else recur k mxs >>= force
 	NilMod -> return NilMod
 
 -- | length
@@ -183,8 +191,26 @@ partitionInc p = memo $ \recur mxs -> force mxs >>= \xs -> case xs of
 		nil <- const NilMod
 		return (nil,nil)
 
+class Monad m => OrdM m a where
+	compareM :: a -> a -> m Ordering
+
+-- if we pass the comparison function as an argument, GHC will sometimes create different memotables for the same filter functions; implementing comparison behind a typeclass solves this issue
+quicksortIncM :: (OrdM (l inc r m) a,Memo a,Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
+	=> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+quicksortIncM (mxs :: ListMod mod l inc r m a) = do
+	let filter_left = filterWithKeyInc (\k y -> liftM (==LT) $ compareM y k)
+	let filter_right = filterWithKeyInc (\k y -> liftM (/=LT) $ compareM y k)
+	(nil :: ListMod mod l inc r m a) <- const NilMod
+	let quicksortInc' = memo2 $ \recur mxs rest -> force mxs >>= \xs -> case xs of
+		ConsMod x mxs' -> do
+			left <- filter_left x mxs'
+			right <- filter_right x mxs'
+			recur right rest >>= const . ConsMod x >>= recur left >>= force
+		NilMod -> force rest
+	quicksortInc' mxs nil
+
 -- | quicksort
-quicksortInc :: (Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
+quicksortInc :: (Memo a,Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
 	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 quicksortInc cmp (mxs :: ListMod mod l inc r m a) = do
 	let filter_left = filterWithKeyInc (\k y -> liftM (==LT) $ cmp y k)
@@ -194,9 +220,21 @@ quicksortInc cmp (mxs :: ListMod mod l inc r m a) = do
 		ConsMod x mxs' -> do
 			left <- filter_left x mxs'
 			right <- filter_right x mxs'
-			tright <- thunk $ liftM (ConsMod x) $ recur right rest
-			recur left tright >>= force
---			recur right rest >>= const . ConsMod x >>= recur left >>= force
+			recur right rest >>= const . ConsMod x >>= recur left >>= force
+		NilMod -> force rest
+	quicksortInc' mxs nil
+	
+quicksortInverseInc :: (Ord a,Memo a,Eq (ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m,Eq a)
+	=> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+quicksortInverseInc (mxs :: ListMod mod l inc r m a) = do
+	let filter_left = filterWithKeyInc (\k y -> return $ compare y k == GT)
+	let filter_right = filterWithKeyInc (\k y -> return $ compare y k /= GT)
+	(nil :: ListMod mod l inc r m a) <- const NilMod
+	let quicksortInc' = memo2 $ \recur mxs rest -> force mxs >>= \xs -> case xs of
+		ConsMod x mxs' -> do
+			left <- filter_left x mxs'
+			right <- filter_right x mxs'
+			recur right rest >>= const . ConsMod x >>= recur left >>= force
 		NilMod -> force rest
 	quicksortInc' mxs nil
 

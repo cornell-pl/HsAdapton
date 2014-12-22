@@ -17,6 +17,7 @@ import Control.Monad.Trans
 
 import Control.Monad
 import Control.Monad.IO.Class
+import Data.Strict.Tuple
 import System.Mem.Concurrent.WeakMap as CWeakMap
 import Control.Exception
 import Data.UUID
@@ -56,18 +57,26 @@ import qualified Data.Foldable as Foldable
 
 import Debug
 
+statusColor :: TxStatus -> Color
+statusColor status = X11Color $ case status of
+	Read False -> Black
+	Read True -> CornFlowerBlue
+	Eval -> Blue4
+	Write -> Crimson
+	New -> Green3
+
 drawTxAdaptonProxy :: Proxy r -> Proxy m -> Proxy (DrawDict TxAdapton r m)
 drawTxAdaptonProxy r m = Proxy
 
 instance (MonadRef r m,MonadIO m,Eq a,TxLayer Inside r m,TxLayer Outside r m,TxLayer l r m,MData (DrawDict TxAdapton r m) (Outside TxAdapton r m) a,Input TxM l TxAdapton r m) => Draw TxAdapton r m (TxM l TxAdapton r m a) where
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idTxNM $ metaTxM t
-		let thunkNode = mNode thunkID
 		(childrenIDs,childrenDot) <- drawDict dict inc r m =<< getOutside t
 		let childrenEdges = map (DE . constructorEdge thunkID) childrenIDs
 		let childrenRank = sameRank childrenIDs
-		dependents <- readTxLog >>= \txlog -> inL $ getTxDependents txlog (metaTxM t) Read
+		(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog (metaTxM t) $ Read False
 		dependendentEdges <- drawTxDependents thunkID dependents
+		let thunkNode = addAttribute (FontColor $ statusColor status) $ mNode thunkID
 		return ([thunkID],DN thunkNode : childrenEdges ++ dependendentEdges ++ SG childrenRank : childrenDot)
 
 -- we do not draw any dependencies from thunks, since we assume that they have all already been drawn by following the dependents of modifiables
@@ -75,9 +84,9 @@ instance (MonadRef r m,MonadIO m,Eq a,TxLayer Outside r m,TxLayer Inside r m,TxL
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idTxNM $ metaTxU t
 		isDirtyUnevaluated <- isDirtyUnevaluatedTxU t
-		dependents <- readTxLog >>= \txlog -> inL $ getTxDependents txlog (metaTxU t) Read
+		(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog (metaTxU t) $ Read False
 		dependentEdges <- drawTxDependents thunkID dependents
-		let thunkNode = uNode isDirtyUnevaluated thunkID
+		let thunkNode = addAttribute (FontColor $ statusColor status) $ uNode isDirtyUnevaluated thunkID
 		case isDirtyUnevaluated of
 			Just _ -> do
 				(childrenIDs,childrenDot) <- drawDict dict inc r m =<< inside (oldvalueTxU t)
@@ -95,10 +104,10 @@ drawTxDependent fromID weak = do
 		Just (TxDependency (srcMetaW,dirtyW,checkW,tgtMetaW,oriW,_)) -> do
 			isOriginal <- inL $ readRef oriW
 			let ithunkID = show $ hashUnique $ idTxNM tgtMetaW
-			let ithunkNode = iuNode ithunkID
-			dependents <- readTxLog >>= \txlog -> inL $ getTxDependents txlog tgtMetaW Read
+			(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog tgtMetaW $ Read False
 			edges <- drawTxDependents ithunkID dependents
 			isDirty <- inL $ readRef dirtyW
+			let ithunkNode = addAttribute (FontColor $ statusColor status) $ iuNode ithunkID
 			return $ DN ithunkNode : DE (dependentTxEdge isOriginal isDirty fromID ithunkID) : edges
 		Nothing -> 	do
 			let deadNodeID = "DEAD_WEAK "
@@ -107,3 +116,15 @@ drawTxDependent fromID weak = do
 dependentTxEdge :: Bool -> Bool -> String -> String -> DotEdge String
 dependentTxEdge isOriginal isDirty fromNode toNode = DotEdge {fromNode = fromNode, toNode = toNode, edgeAttributes = [if isOriginal then penWidth 3 else penWidth 1,Color [WC {wColor = X11Color color, weighting = Nothing}],ArrowHead (AType [(ArrMod {arrowFill = FilledArrow, arrowSide = LeftSide},Normal)])]}
 	where color = if isDirty then Red else Black
+
+getTxDependentsStatus :: MonadIO m => TxLogs r m -> TxNodeMeta r m -> TxStatus -> m (TxDependents r m,TxStatus)
+getTxDependentsStatus tbl meta status = do
+	var <- bufferTxNM meta status tbl
+	deps <- dynTxVarDependents var
+	return (deps,dynTxStatus var)
+
+getTxDependenciesStatus :: (MonadIO m,MonadRef r m) => TxLogs r m -> TxNodeMeta r m -> TxStatus -> m (TxDependencies r m,TxStatus)
+getTxDependenciesStatus tbl meta status = do
+	var <- bufferTxNM meta status tbl
+	Just deps <- dynTxVarDependencies var
+	return (deps,dynTxStatus var)

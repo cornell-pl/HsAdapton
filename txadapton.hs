@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, TupleSections, TypeFamilies, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, DeriveDataTypeable, ScopedTypeVariables, FlexibleContexts #-}
+{-# LANGUAGE RankNTypes, GADTs, BangPatterns, TemplateHaskell, TupleSections, TypeFamilies, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, DeriveDataTypeable, ScopedTypeVariables, FlexibleContexts #-}
 
 module Main where
 
@@ -63,11 +63,21 @@ genList i = do
 
 topkInc :: (Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Ord a) =>
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
-topkInc cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortInc (flip cmp) >=> takeInc' i) mxs >>= force
+topkInc cmp i =
+	let sortInverse = quicksortInc (flip cmp)
+	in memo $ \_ mxs -> (mapInc return >=> sortInverse >=> takeInc' i) mxs >>= force
+
+leastkIncM :: (Eq a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,OrdM (l inc r m) a) =>
+	Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+leastkIncM i =
+	let sort = quicksortIncM
+	in memo $ \_ mxs -> (mapInc return >=> sort >=> takeInc' i) mxs >>= force
 
 leastkInc :: (Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Eq a) =>
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
-leastkInc cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortInc cmp >=> takeInc' i) mxs >>= force
+leastkInc cmp i =
+	let sort = quicksortInc cmp
+	in memo $ \_ mxs -> (mapInc return >=> sort >=> takeInc' i) mxs >>= force
 
 -- * concurrent non-incremental code
 
@@ -154,42 +164,53 @@ changeDB_TxAdapton size db = do
 
 -- * sequential incremental code
 
-main_Adapton = {-flip Exception.finally (mergePDFsInto' "tx.pdf") $ -} runIncremental $ do
-	let (size::Int) = 10^3
+-- inverse comparison for our topk example
+instance Monad m => OrdM m Int where
+	compareM x y = return $ compare y x
+
+main_Adapton = flip Exception.finally (mergePDFsInto' "tx.pdf") $ runIncremental $ do
+	let (size::Int) = 10^4
 	xs <- inL $ liftIO $ genList size
 	db <- inside $ toListRef xs
 	
---	let topk_func = topkInc 3 -- we need to use the same function to enable memoization
+	(time,topk) <- timeOuterT $ do
+		let topk_func = inside . leastkIncM 3
+--		let topk_func = inside . topkInc (\x y -> return $ compare x y) 3
+		topk <- topk_func db -- we need to use the same function to enable memoization
+		inside $ displayAs "top3: " topk
+		return topk
+	inL $ liftIO $ putStrLn ("CPU "++show time)
 	
---	drawPDF proxyAdapton proxyIORef proxyIO db
+--	drawPDF "" proxyAdapton proxyIORef proxyIO (Merge db topk)
 	
-	loop_Adapton size db
+	loop_Adapton 10 size db topk
 
-loop_Adapton :: Int -> ListMod M Inside Adapton IORef IO Int -> Outside Adapton IORef IO ()
-loop_Adapton size db = replicateM_ 10 $ do
+loop_Adapton :: Int -> Int -> ListMod M Inside Adapton IORef IO Int -> ListMod U Inside Adapton IORef IO Int -> Outside Adapton IORef IO ()
+loop_Adapton 0 size db topk = return ()
+loop_Adapton i size db topk = do
 	(time,()) <- timeOuterT $ do
 		p <- inL $ liftIO $ generate $ choose (0,size-1)
 		i <- inL $ liftIO $ generate $ choose (0,maxBound)
 		setListModAt db p $ \(ConsMod x mxs) -> return $ ConsMod i mxs
 		
---		drawPDF proxyAdapton proxyIORef proxyIO db
+--		drawPDF (show i) proxyAdapton proxyIORef proxyIO (Merge db topk)
 		
 		inL $ liftIO $ putStrLn $ "added to db " ++ show i
-		(topk :: ListMod U Inside Adapton IORef IO Int) <- topk3 db
-		--inside $ displayAs "top3: " topk
-		inside $ rnfInc topk
+		inside $ displayAs "top3: " topk
+--		inside $ rnfInc topk
 		
---		drawPDF proxyAdapton proxyIORef proxyIO (Merge db topk)
+--		drawPDF (show i) proxyAdapton proxyIORef proxyIO (Merge db topk)
 		
 	inL $ liftIO $ putStrLn ("CPU "++show time)
+	
+	loop_Adapton (pred i) size db topk
 
 timeOuterT :: Outer r IO a -> Outer r IO (Double,a)
 timeOuterT (Outer m) = Outer $ timeItT m
 
-topk3 = inside . topkInc (\x y -> return $ compare x y) 3
+--topk3 = inside . topkInc (\x y -> return $ compare x y) 3
 
-main = main_DB
-	--main_TxAdapton
+-- * Customer example
 
 type ListTxAdaptonU a = ListMod TxU Inside TxAdapton IORef IO a
 type TxAdaptonU a = TxU Inside TxAdapton IORef IO a
@@ -203,22 +224,24 @@ data Item = Item { itemName :: String, itemPrice :: TxAdaptonM Int, itemInflatio
 data Customer = Customer { customerName :: String, customerBalance :: TxAdaptonM Int, customerPurchases :: ListTxAdaptonM (String,Int) }
 	deriving (Typeable,Eq)
 
-leastItem = inside . leastkInc compareItems 1 where
-	compareItems i1 i2 = do
+-- compare items by their price
+instance OrdM (Inside TxAdapton IORef IO) Item where
+	compareM i1 i2 = do
 		p1 <- get $ itemPrice i1 
 		p2 <- get $ itemPrice i2 
 		return $ compare p1 p2
+
+leastItem = inside . leastkIncM 1
 -- finds the cheapest item
-cheapestItem :: String -> Warehouse -> STxAdaptonM Item
-cheapestItem msg warehouse = do
+cheapestItem :: String -> Warehouse -> ListTxAdaptonU Item -> STxAdaptonM Item
+cheapestItem msg warehouse leastItem = do
 	let wrongQuantity item = do
 		time <- readTxTime
 		str <- showInc item
 		throw $ NoBalance $ "WRONG ITEM " ++ str ++ " " ++ show time ++ " " ++ msg
 	showInc warehouse >>= debugTx . ("warehouse: "++)
-	(mxs::ListTxAdaptonU Item) <- leastItem warehouse
-	showInc mxs >>= debugTx . ("cheapestItem: "++)
-	xs <- forceOutside mxs
+	showInc leastItem >>= debugTx . ("cheapestItem: "++)
+	xs <- forceOutside leastItem
 	case xs of
 		NilMod -> throw $ NoBalance $ "NO ITEMS LEFT " ++ msg
 		ConsMod item _ -> do
@@ -235,9 +258,9 @@ deleteItem warehouse item = do
 		NilMod -> error $ "ITEM NOT FOUND "
 
 -- buy an item for a customer and increase the item's price
-buyCheapestItem :: String -> Warehouse -> Customer -> STxAdaptonM Item
-buyCheapestItem msg warehouse customer = do
-	item <- cheapestItem msg warehouse
+buyCheapestItem :: String -> Warehouse -> ListTxAdaptonU Item -> Customer -> STxAdaptonM Item
+buyCheapestItem msg warehouse leastItem customer = do
+	item <- cheapestItem msg warehouse leastItem
 	let wrongQuantity = do
 		str1 <- inside $ showInc customer
 		str2 <- inside $ showInc item
@@ -268,25 +291,29 @@ buyCheapestItem msg warehouse customer = do
 data NoBalance = NoBalance String deriving (Show,Typeable)
 instance Exception NoBalance
 
-customer_thread :: Warehouse -> Customer -> IO ()
-customer_thread warehouse customer = do
+customer_thread :: Warehouse -> ListTxAdaptonU Item -> Customer -> IO ()
+customer_thread warehouse leastItem customer = do
 	let action = do
 		choice <- generate $ choose (False,True)
 		if choice
 			then do -- list the cheapest item
 				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer " ++ customerName customer) $ do
 					tx <- readTxTime
-					item <- cheapestItem ("customer " ++ customerName customer) warehouse
+--					drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+					item <- cheapestItem ("customer " ++ customerName customer) warehouse leastItem
 					str <- showInc item
+--					let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str ++ " " ++ show tx
+--					drawPDF msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
 					return (tx,str)
 				writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
 			else do -- buy the cheapest item
 				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer "++ customerName customer) $ do
 					tx <- readTxTime
-					item <- buyCheapestItem ("customer " ++ customerName customer) warehouse customer
+--					drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+					item <- buyCheapestItem ("customer " ++ customerName customer) warehouse leastItem customer
 					str <- showInc item
 --					let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str ++ " " ++ show tx
---					drawPDF msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse item)
+--					drawPDF msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
 					return (tx,str)
 				writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
 		threadDelay 300
@@ -294,22 +321,23 @@ customer_thread warehouse customer = do
 	let noBalance (NoBalance msg) = writeChan debugChan msg
 	action `Catch.catch` noBalance
 
-main_DB = {-flip Exception.finally (mergePDFsInto' "tx.pdf") $ -} do
-	let numItems = 5
-	let numCustomers = 10
+main = main_Customers
+main_Customers = {-flip Exception.finally (mergePDFsInto' "tx.pdf") $ -} do
+	let numItems = 10
+	let numCustomers = 2
 	
 	hSetBuffering stdout NoBuffering
 	
-	(warehouse,customers) <- atomically $ genDB numItems numCustomers
+	(warehouse,leastItem,customers) <- atomically $ genDB numItems numCustomers
 	
-	race_ debugger $ mapConcurrently (customer_thread warehouse) customers
+	race_ debugger $ mapConcurrently (customer_thread warehouse leastItem) customers
 	
-genDB :: Int -> Int -> STxAdaptonM (Warehouse,[Customer])
+genDB :: Int -> Int -> STxAdaptonM (Warehouse,ListTxAdaptonU Item,[Customer])
 genDB numItems numCustomers = do
 	let itemIds = [1..numItems]	
 	let genItem itemId = do
 		let itemName = show itemId
-		price <- inL $ liftIO $ generate $ choose (0,500)
+		price <- inL $ liftIO $ generate $ choose (1,500)
 		itemPrice <- inside $ ref price
 		quantity <- inL $ liftIO $ generate $ choose (1,2)
 		itemQuantity <- inside $ ref quantity
@@ -325,7 +353,8 @@ genDB numItems numCustomers = do
 	customers <- mapM genCustomer customerIds
 	-- memoize cheapest item query
 --	cheapestItem warehouse >>= inside . rnfInc
-	return (warehouse,customers)
+	thunk <- leastItem warehouse
+	return (warehouse,thunk,customers)
 	
 instance (Display l1 inc r m (TxAdaptonM Int)) => Display l1 inc r m Item where
 	displaysPrec (Item itemName itemPrice itemInflation itemQuantity) r = do
@@ -371,3 +400,81 @@ $( derive makeMData ''Item )
 $( derive makeMData ''Customer )
 $( derive makeDeepTypeable ''Item )
 $( derive makeDeepTypeable ''Customer )
+
+-- **
+--main = main_Tx
+main_Tx = do
+	let size = 5
+	let runs = 3
+	gen <- genListPairs size runs
+	--let inc_func = filterInc (return . even)
+	let inc_func = leastkIncM 1
+	
+	hSetBuffering stdout NoBuffering
+	
+	res2 <- race_ debugger $ testM inc_func gen (runs * 2) >> mergePDFsInto' "filterInc.pdf"
+	print res2
+
+testM :: (ListTxM Inside IORef IO Int -> Inside TxAdapton IORef IO (ListTxU Inside IORef IO Int)) -> ([Int],[ListChange Int]) -> Int -> IO ()
+testM f (xs,chgs) runs = do
+	(s,t) <- runIncremental $ do
+		s :: ListTxM Inside IORef IO Int <- toListRefInside xs
+		t :: ListTxU Inside IORef IO Int <- inside $ f s
+		drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge s t)
+		!() <- rnfInc t
+		drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge s t)
+		return (s,t)
+	testM' s t chgs
+	return ()
+
+testM' :: ListTxM Inside IORef IO Int -> ListTxU Inside IORef IO Int -> [ListChange Int] -> IO ()
+testM' s t [] = return ()
+testM' s t (chg:chgs) = do
+	runIncremental $ do
+		applyListChange chg s
+		drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge s t)
+		rnfInc t
+		drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge s t)
+	testM' s t chgs
+	return ()
+
+data ListChange a where
+	ListChg :: (forall mod l inc r m . (
+			Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m
+		)
+		=> ListMod mod l inc r m a -> Outside inc r m ()) -> ListChange a
+
+genListPairs :: Int -> Int -> IO ([Int],[ListChange Int])
+genListPairs i runs = do
+	let max = i
+	xs <- generate $ vectorOf max $ choose (minBound,maxBound)
+	positionsDelete <- generate $ vectorOf runs $ choose (0,max-1)
+	positionsInsert <- generate $ vectorOf runs $ choose (0,max-2)
+	let merge [] [] = return []
+	    merge (x:xs) (y:ys) = do
+		tail <- merge xs ys
+		v <- generate $ choose (minBound::Int,maxBound)
+		return $ ListChg (deleteListModAt x) : ListChg (insertListModAt y v) : tail
+	positions <- merge positionsDelete positionsInsert
+	print xs
+	return (xs,positions)
+
+insertListModAt :: (
+	Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> a -> ListMod mod l inc r m a -> Outside inc r m ()
+insertListModAt i x mxs = setListModAt mxs i $ \xs -> do
+	mxs' <- refOutside xs
+	return $ ConsMod x mxs'
+
+deleteListModAt :: (Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> ListMod mod l inc r m a -> Outside inc r m ()
+deleteListModAt i mxs = setListModAt mxs i $ \xs -> case xs of
+	ConsMod x mxs' -> getOutside mxs'
+	NilMod -> error "shouldn't be empty"
+
+-- creates an input list from a regular list
+toListRefInside :: (
+	Eq a,Eq (ListMod mod Inside inc r m a),Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
+toListRefInside xs = inside $ toListRef xs
+
+applyListChange :: (Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m)
+	=> ListChange a -> ListMod mod l inc r m a -> Outside inc r m ()
+applyListChange (ListChg f) xs = f xs

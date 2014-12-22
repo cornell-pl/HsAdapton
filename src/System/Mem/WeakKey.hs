@@ -50,18 +50,19 @@ mkDeadWeak v f = do
 newtype MkWeak = MkWeak { unMkWeak :: forall v . v -> Maybe (IO ()) -> IO (Weak v) }
 
 -- | Creates a weak reference that is alive as long as two keys are
+-- NB: this is not completely symmetric: if the value is the same as the second key, then it will be kept alive as long as the first is alive
 andMkWeak :: MkWeak -> MkWeak -> MkWeak
 andMkWeak (MkWeak mkWeak1) (MkWeak mkWeak2) = MkWeak $ \v f -> do
 	w1 <- mkWeak1 v f
-	mkWeak2 () (Just $ finalize w1) -- the second reference does not add a dependency from the key to the value but only a finalizer; when the second key dies, finalize the first weak reference
-	return w1
+	w2 <- mkWeak2 () (Just $! finalize w1) -- the second reference does not add a dependency from the key to the value but only a finalizer; when the second key dies, finalize the first weak reference
+	return $ w2 `seq` w1
 
 -- | Creates a weak reference that is alive as long as at least one of the keys is 
 orMkWeak :: MkWeak -> MkWeak -> MkWeak
 orMkWeak (MkWeak mkWeak1) (MkWeak mkWeak2) = MkWeak $ \v f -> do
 	w1 <- mkWeak1 v f
-	mkWeak2 v Nothing -- the first reference cannot be dead unless the second one is, due to the value dependencies
-	return w1
+	w2 <- mkWeak2 v Nothing -- the first reference cannot be dead unless the second one is, due to the value dependencies
+	return $ w2 `seq` w1
 
 instance (MonadRef r m) => MonadRef r (ReaderT a m) where
 	readRef r = lift $ readRef r

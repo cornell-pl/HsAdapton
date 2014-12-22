@@ -208,6 +208,9 @@ uNode isDirtyUnevaluated thunkID = DotNode {nodeID = thunkID, nodeAttributes = [
 	where fillcolor = X11Color $ case isDirtyUnevaluated of { Nothing -> CadetBlue4; Just True -> Red ; Just False -> White }
 	      color = X11Color $ case isDirtyUnevaluated of { Nothing -> Black; Just True -> Black ; Just False -> CadetBlue4 }
 
+addAttribute :: Attribute -> DotNode String -> DotNode String
+addAttribute att n = n { nodeAttributes = att : nodeAttributes n }
+
 nextUUIDSafe :: IO UUID
 nextUUIDSafe = do
 	mb <- nextUUID
