@@ -17,6 +17,7 @@ import Data.Typeable
 import Control.DeepSeq
 import Control.Monad.Trans
 import Control.Monad
+import Data.Typeable
 
 -- XXX: this should/can be made more generic to allow seamless displaying of mixed outer/inner references/thunks
 -- a generic but very slow version of display

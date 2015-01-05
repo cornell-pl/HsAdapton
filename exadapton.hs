@@ -816,11 +816,11 @@ instance (NFDataInc l1 inc r m (M Inside Adapton IORef IO Int),NFDataInc l1 inc 
 instance Memo Item where
 	type Key Item = StableName Item
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ Weak.mkWeak x,unsafePerformIO $ makeStableName x)
+	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
 instance Memo Customer where
 	type Key Customer = StableName Customer
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ Weak.mkWeak x,unsafePerformIO $ makeStableName x)
+	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
 		
 
 $( derive makeMData ''Item )

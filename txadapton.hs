@@ -20,6 +20,7 @@ import Data.IORef
 import Data.Typeable
 import Data.DeepTypeable
 import Language.Haskell.TH.Syntax
+import System.Mem.WeakTable (stableName)
 
 import Data.WithClass.MData
 import Data.DeriveTH
@@ -41,14 +42,14 @@ import System.Mem.WeakKey as WeakKey
 import System.IO.Unsafe
 import System.Mem.StableName
 
-toListRef :: (
+toListRef :: (Typeable a,
 	Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
 toListRef [] = ref NilMod
 toListRef (x:xs) = do
 	mxs <- toListRef xs
 	ref (ConsMod x mxs)
 
-setListModAt :: (Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
+setListModAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
 	=> ListMod mod l inc r m a -> Int -> (ListMod' mod l inc r m a -> Outside inc r m (ListMod' mod l inc r m a)) -> Outside inc r m ()
 setListModAt mxs 0 f = getOutside mxs >>= f >>= set mxs
 setListModAt mxs i f = getOutside mxs >>= \xs -> case xs of
@@ -61,19 +62,19 @@ genList i = do
 	xs <- generate $ vectorOf i $ choose (minBound,0)
 	return xs
 
-topkInc :: (Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Ord a) =>
+topkInc :: (Typeable a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Ord a) =>
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 topkInc cmp i =
 	let sortInverse = quicksortInc (flip cmp)
 	in memo $ \_ mxs -> (mapInc return >=> sortInverse >=> takeInc' i) mxs >>= force
 
-leastkIncM :: (Eq a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,OrdM (l inc r m) a) =>
+leastkIncM :: (Typeable a,Eq a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,OrdM (l inc r m) a) =>
 	Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 leastkIncM i =
 	let sort = quicksortIncM
 	in memo $ \_ mxs -> (mapInc return >=> sort >=> takeInc' i) mxs >>= force
 
-leastkInc :: (Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Eq a) =>
+leastkInc :: (Typeable a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Eq a) =>
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 leastkInc cmp i =
 	let sort = quicksortInc cmp
@@ -239,8 +240,8 @@ cheapestItem msg warehouse leastItem = do
 		time <- readTxTime
 		str <- showInc item
 		throw $ NoBalance $ "WRONG ITEM " ++ str ++ " " ++ show time ++ " " ++ msg
-	showInc warehouse >>= debugTx . ("warehouse: "++)
-	showInc leastItem >>= debugTx . ("cheapestItem: "++)
+--	showInc warehouse >>= debugTx . ("warehouse: "++)
+--	showInc leastItem >>= debugTx . ("cheapestItem: "++)
 	xs <- forceOutside leastItem
 	case xs of
 		NilMod -> throw $ NoBalance $ "NO ITEMS LEFT " ++ msg
@@ -282,7 +283,7 @@ buyCheapestItem msg warehouse leastItem customer = do
 		-- add customer's purchase
 		modify (customerPurchases customer) $ ref >=> return . ConsMod (itemName item,price)
 		return item
-	let noBalance = do
+	let noBalance = debugM' ("no balance") $ do
 		str1 <- inside $ showInc customer
 		str2 <- inside $ showInc item
 		throw $ NoBalance $ str1 ++ " has insufficient funds for " ++ show str2 ++ " " ++ msg
@@ -293,13 +294,16 @@ instance Exception NoBalance
 
 customer_thread :: Warehouse -> ListTxAdaptonU Item -> Customer -> IO ()
 customer_thread warehouse leastItem customer = do
+	let noBalance (NoBalance msg) = do
+--		drawPDF ("customer exception" ++ customerName customer) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+		throw (NoBalance msg)
 	let action = do
 		choice <- generate $ choose (False,True)
 		if choice
 			then do -- list the cheapest item
-				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer " ++ customerName customer) $ do
+				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer " ++ customerName customer) $ flip catch noBalance $ do
 					tx <- readTxTime
---					drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--					drawPDF ("customer listing" ++ customerName customer) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
 					item <- cheapestItem ("customer " ++ customerName customer) warehouse leastItem
 					str <- showInc item
 --					let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str ++ " " ++ show tx
@@ -307,9 +311,9 @@ customer_thread warehouse leastItem customer = do
 					return (tx,str)
 				writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
 			else do -- buy the cheapest item
-				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer "++ customerName customer) $ do
+				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer "++ customerName customer) $ flip catch noBalance $ do
 					tx <- readTxTime
---					drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--					drawPDF ("customer buying" ++ customerName customer) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
 					item <- buyCheapestItem ("customer " ++ customerName customer) warehouse leastItem customer
 					str <- showInc item
 --					let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str ++ " " ++ show tx
@@ -318,19 +322,20 @@ customer_thread warehouse leastItem customer = do
 				writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
 		threadDelay 300
 		action
-	let noBalance (NoBalance msg) = writeChan debugChan msg
-	action `Catch.catch` noBalance
+	let noBalance2 (NoBalance msg) = debugTx' msg
+	action `Catch.catch` noBalance2
 
 main = main_Customers
-main_Customers = {-flip Exception.finally (mergePDFsInto' "tx.pdf") $ -} do
-	let numItems = 10
+main_Customers = {-flip Exception.finally (mergePDFsInto' "tx.pdf") $ -}do
+	let numItems = 10^3
 	let numCustomers = 2
 	
 	hSetBuffering stdout NoBuffering
 	
 	(warehouse,leastItem,customers) <- atomically $ genDB numItems numCustomers
 	
-	race_ debugger $ mapConcurrently (customer_thread warehouse leastItem) customers
+	concurrently debugger $ mapConcurrently (customer_thread warehouse leastItem) customers
+	return ()
 	
 genDB :: Int -> Int -> STxAdaptonM (Warehouse,ListTxAdaptonU Item,[Customer])
 genDB numItems numCustomers = do
@@ -389,11 +394,11 @@ instance (NFDataInc l1 inc r m (TxAdaptonM Int),NFDataInc l1 inc r m (ListTxAdap
 instance Memo Item where
 	type Key Item = StableName Item
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ Weak.mkWeak x,unsafePerformIO $ makeStableName x)
+	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
 instance Memo Customer where
 	type Key Customer = StableName Customer
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ Weak.mkWeak x,unsafePerformIO $ makeStableName x)
+	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
 		
 
 $( derive makeMData ''Item )
@@ -460,18 +465,18 @@ genListPairs i runs = do
 	return (xs,positions)
 
 insertListModAt :: (
-	Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> a -> ListMod mod l inc r m a -> Outside inc r m ()
+	Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> a -> ListMod mod l inc r m a -> Outside inc r m ()
 insertListModAt i x mxs = setListModAt mxs i $ \xs -> do
 	mxs' <- refOutside xs
 	return $ ConsMod x mxs'
 
-deleteListModAt :: (Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> ListMod mod l inc r m a -> Outside inc r m ()
+deleteListModAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> ListMod mod l inc r m a -> Outside inc r m ()
 deleteListModAt i mxs = setListModAt mxs i $ \xs -> case xs of
 	ConsMod x mxs' -> getOutside mxs'
 	NilMod -> error "shouldn't be empty"
 
 -- creates an input list from a regular list
-toListRefInside :: (
+toListRefInside :: (Typeable a,
 	Eq a,Eq (ListMod mod Inside inc r m a),Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
 toListRefInside xs = inside $ toListRef xs
 

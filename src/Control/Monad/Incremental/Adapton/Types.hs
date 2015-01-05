@@ -71,7 +71,7 @@ newtype Dependency inc (r :: * -> *) (m :: * -> *) = Dependency (
 	,	r Bool -- dirty flag
 	,	Inside inc r m Bool -- a checking condition with the previously seen value of the source node;
 	,	NodeMeta inc r m -- the metadata of the target node
-	)
+	) deriving Typeable
 
 type WNodeMeta inc r m = Weak (NodeMeta inc r m)
 
@@ -152,7 +152,7 @@ newtype NodeMeta inc (r :: * -> *) (m :: * -> *) = NodeMeta (
 	,	m () -- function that forgets all the old cached thunk data (thunks only)
 	,   Maybe (Creator inc r m) -- the parent thunk under which the reference was created (modifiables only)
 	,	UDataOp inc r m -- generic polymorphic function over the data (thunks only) (used only for debugging)
-	)
+	) deriving Typeable
 
 instance Show (NodeMeta inc r m) where
 	show nm = "NodeMeta"++show (idNM nm)

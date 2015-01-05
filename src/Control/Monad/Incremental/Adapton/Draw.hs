@@ -85,7 +85,7 @@ instance (MonadRef r m,MonadIO m,Eq a,Layer l inc r m,Output U l inc r m,MData (
 		isDirtyUnevaluated <- isDirtyUnevaluatedU t
 		dependentEdges <- drawDependents thunkID (dependentsNM $ metaU t)
 		dependencyEdges <- drawDependencies thunkID (metaU t)
-		let thunkNode = uNode isDirtyUnevaluated thunkID
+		let thunkNode = uNode isDirtyUnevaluated thunkID ""
 		case isDirtyUnevaluated of
 			Just False -> do
 				(childrenIDs,childrenDot) <- drawDict dict inc r m =<< inside (oldvalueU t)
@@ -107,7 +107,7 @@ drawDependent fromID weak = do
 	case mb of
 		Just (Dependency (srcMetaW,dirtyW,checkW,tgtMetaW)) -> do
 			let ithunkID = show $ hashUnique $ idNM tgtMetaW
-			let ithunkNode = iuNode ithunkID
+			let ithunkNode = iuNode ithunkID ""
 			edges <- drawDependents ithunkID (dependentsNM tgtMetaW)
 			edges' <- drawDependencies ithunkID tgtMetaW -- recursive dependencies
 			isDirty <- inL $ readRef dirtyW

@@ -26,6 +26,8 @@ import Data.WithClass.Derive.DeepTypeable
 import Language.Haskell.TH.Syntax hiding (lift,Infix,Fixity)
 import Data.Strict.Maybe as Strict
 import Control.Applicative
+import Data.Global.Dynamic as Dyn
+import Data.Hashable
 
 import Debug
 
@@ -55,37 +57,43 @@ isThunkStackElement :: StackElement inc r m -> Bool
 isThunkStackElement (_ :!: (SJust _)) = True
 isThunkStackElement (_ :!: SNothing) = False
 
-{-# NOINLINE callstack #-}
-callstack :: IORef (CallStack inc r m)
-callstack = unsafePerformIO $ newIORef SNil
+data CallStackID = CallStackID deriving (Eq,Typeable)
+instance Hashable CallStackID where
+	hashWithSalt i _ = i
+
+callstack :: (Typeable inc,Typeable r,Typeable m) => IORef (CallStack inc r m)
+callstack = Dyn.declareIORef CallStackID SNil
 
 {-# INLINE topStack #-}
-topStack :: IO (Maybe (StackElement inc r m))
+topStack :: (Typeable inc,Typeable m,Typeable r) => IO (Maybe (StackElement inc r m))
 topStack = readIORef callstack >>= \s -> case s of
 	SCons x xs -> return $ Just x
 	SNil -> return Nothing
 
-printCallStack :: IO ()
-printCallStack = readIORef callstack >>= putStrLn . showCallStack
+--printCallStack :: IO ()
+--printCallStack = readIORef callstack >>= putStrLn . showCallStack
 
 -- puts a new value to the stack
 {-# INLINE pushStack #-}
-pushStack :: StackElement inc r m -> IO ()
+pushStack :: (Typeable inc,Typeable m,Typeable r) => StackElement inc r m -> IO ()
 pushStack = \x -> modifyIORef' callstack (\xs -> {-debug ("pushStack: " ++ showCallStack (SCons x xs)) $-} SCons x xs)
 
 -- removes the value from the stack
 {-# INLINE popStack #-}
-popStack :: IO (StackElement inc r m)
+popStack :: (Typeable inc,Typeable m,Typeable r) => IO (StackElement inc r m)
 popStack = atomicModifyIORef' callstack (\(SCons x xs) -> {-debug ("popStack: " ++ showCallStack xs) $-} (xs,x))
+
+popStack' :: (MonadIO m,Typeable inc,Typeable m,Typeable r,Layer l inc r m) => l inc r m (StackElement inc r m)
+popStack' = inL $ liftIO $ popStack
 
 -- return the top-most thunk in the stack
 {-# INLINE topThunkStack #-}
-topThunkStack :: IO (Maybe (StackElement inc r m))
+topThunkStack :: (Typeable inc,Typeable m,Typeable r) => IO (Maybe (StackElement inc r m))
 topThunkStack = liftM topStackThunkElement $ readIORef callstack
 
 -- * Adapton layers
 
-instance (MonadRef r m,WeakRef r) => Incremental Adapton r m where
+instance (Typeable r,Typeable m,MonadRef r m,WeakRef r) => Incremental Adapton r m where
 	
 	newtype Outside Adapton r m a = Outer { runOuter :: m a } deriving (Functor,Applicative,Monad,MonadIO,MonadRef r,MonadLazy) 
 	newtype Inside Adapton r m a = Inner { runInner :: m a } deriving (Functor,Applicative,Monad,MonadIO,MonadRef r,MonadLazy)
@@ -107,10 +115,10 @@ instance MonadTrans (Outside Adapton r) where
 instance MonadTrans (Inside Adapton r) where
 	lift = Inner
 	{-# INLINE lift #-}
-instance InLayer Outside Adapton r m where
+instance (Typeable r,Typeable m) => InLayer Outside Adapton r m where
 	inL = Outer
 	{-# INLINE inL #-}
-instance InLayer Inside Adapton r m where
+instance (Typeable r,Typeable m) => InLayer Inside Adapton r m where
 	inL = Inner
 	{-# INLINE inL #-}
 

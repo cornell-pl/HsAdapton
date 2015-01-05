@@ -14,30 +14,31 @@ import Control.Monad.Incremental.Adapton.Layers
 
 import Control.Monad.Lazy
 import Control.Monad.Trans
+import Data.Typeable
 
 -- * Display
 
-instance (MonadLazy (Outside inc r m),Eq a,Display Outside inc r m a,Input M l inc r m) => Display Outside inc r m (M l inc r m a) where
+instance (Typeable a,MonadLazy (Outside inc r m),Eq a,Display Outside inc r m a,Input M l inc r m) => Display Outside inc r m (M l inc r m a) where
 	displaysPrec m rest = getOutside m >>= \x -> lazily $ displaysPrec x rest
 	{-# INLINE displaysPrec #-}
 
-instance (MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,Input M Inside inc r m) => Display Inside inc r m (M Inside inc r m a) where
+instance (Typeable a,MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,Input M Inside inc r m) => Display Inside inc r m (M Inside inc r m a) where
 	displaysPrec m rest = get m >>= \x -> lazily $ displaysPrec x rest
 	{-# INLINE displaysPrec #-}
 	
-instance (MonadLazy (Outside inc r m),Eq a,Display Outside inc r m a,Output U l inc r m) => Display Outside inc r m (U l inc r m a) where
+instance (Typeable a,MonadLazy (Outside inc r m),Eq a,Display Outside inc r m a,Output U l inc r m) => Display Outside inc r m (U l inc r m a) where
 	displaysPrec m rest = forceOutside m >>= \x -> lazily $ displaysPrec x rest
 	{-# INLINE displaysPrec #-}
 
-instance (MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,Output U Inside inc r m) => Display Inside inc r m (U Inside inc r m a) where
+instance (Typeable a,MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,Output U Inside inc r m) => Display Inside inc r m (U Inside inc r m a) where
 	displaysPrec m rest = force m >>= \x -> lazily $ displaysPrec x rest
 	{-# INLINE displaysPrec #-}
 
-instance (MonadLazy (Outside inc r m),Eq a,Display Outside inc r m a,Input L l inc r m) => Display Outside inc r m (L l inc r m a) where
+instance (Typeable a,MonadLazy (Outside inc r m),Eq a,Display Outside inc r m a,Input L l inc r m) => Display Outside inc r m (L l inc r m a) where
 	displaysPrec m rest = getOutside m >>= \x -> lazily $ displaysPrec x rest
 	{-# INLINE displaysPrec #-}
 
-instance (MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,Input L Inside inc r m) => Display Inside inc r m (L Inside inc r m a) where
+instance (Typeable a,MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,Input L Inside inc r m) => Display Inside inc r m (L Inside inc r m a) where
 	displaysPrec m rest = get m >>= \x -> lazily $ displaysPrec x rest
 	{-# INLINE displaysPrec #-}
 
@@ -69,27 +70,27 @@ instance (MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,Input L Insid
 
 -- * NFDataInc
 
-instance (Eq a,NFDataInc Outside inc r m a,Input M l inc r m) => NFDataInc Outside inc r m (M l inc r m a) where
+instance (Typeable a,Eq a,NFDataInc Outside inc r m a,Input M l inc r m) => NFDataInc Outside inc r m (M l inc r m a) where
 	rnfInc m = getOutside m >>= rnfInc
 	{-# INLINE rnfInc #-}
 
-instance (Eq a,NFDataInc Inside inc r m a,Input M Inside inc r m) => NFDataInc Inside inc r m (M Inside inc r m a) where
+instance (Typeable a,Eq a,NFDataInc Inside inc r m a,Input M Inside inc r m) => NFDataInc Inside inc r m (M Inside inc r m a) where
 	rnfInc m = get m >>= rnfInc
 	{-# INLINE rnfInc #-}
 	
-instance (Eq a,NFDataInc Outside inc r m a,Output U l inc r m) => NFDataInc Outside inc r m (U l inc r m a) where
+instance (Typeable a,Eq a,NFDataInc Outside inc r m a,Output U l inc r m) => NFDataInc Outside inc r m (U l inc r m a) where
 	rnfInc m = forceOutside m >>= rnfInc
 	{-# INLINE rnfInc #-}
 
-instance (Eq a,NFDataInc Inside inc r m a,Output U Inside inc r m) => NFDataInc Inside inc r m (U Inside inc r m a) where
+instance (Typeable a,Eq a,NFDataInc Inside inc r m a,Output U Inside inc r m) => NFDataInc Inside inc r m (U Inside inc r m a) where
 	rnfInc m = force m >>= rnfInc
 	{-# INLINE rnfInc #-}
 
-instance (Eq a,NFDataInc Outside inc r m a,Input L l inc r m) => NFDataInc Outside inc r m (L l inc r m a) where
+instance (Typeable a,Eq a,NFDataInc Outside inc r m a,Input L l inc r m) => NFDataInc Outside inc r m (L l inc r m a) where
 	rnfInc m = getOutside m >>= rnfInc
 	{-# INLINE rnfInc #-}
 
-instance (Eq a,NFDataInc Inside inc r m a,Input L Inside inc r m) => NFDataInc Inside inc r m (L Inside inc r m a) where
+instance (Typeable a,Eq a,NFDataInc Inside inc r m a,Input L Inside inc r m) => NFDataInc Inside inc r m (L Inside inc r m a) where
 	rnfInc m = get m >>= rnfInc
 	{-# INLINE rnfInc #-}
 

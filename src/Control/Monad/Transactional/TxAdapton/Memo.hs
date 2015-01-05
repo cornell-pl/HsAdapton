@@ -33,6 +33,7 @@ import Control.Concurrent.Map as CMap
 import Data.WithClass.MGenerics.Aliases
 import Data.IORef
 import Data.Strict.Tuple
+import Data.Global.Dynamic
 import System.Mem.Weak as Weak
 
 import qualified Data.HashTable.IO as HashIO
@@ -40,46 +41,13 @@ import qualified Data.HashTable.ST.Basic as HashST
 
 --- * Generic memoization
 
---type GenericQMemoU ctx l inc r m b = GenericQMemo ctx U l inc r m b
---
----- | An encapsulated generic query
---newtype NewGenericQ ctx m b = NewGenericQ { unNewGenericQ :: GenericQ ctx m b }
---
---type NewGenericQMemo ctx (thunk :: (* -> (* -> *) -> (* -> *) -> * -> *) -> * -> (* -> *) -> (* -> *) -> * -> *) l inc r m b = NewGenericQ (MemoCtx ctx) (l inc r m) (thunk l inc r m b)
---type NewGenericQMemoU ctx l inc r m b = NewGenericQMemo ctx U l inc r m b
---
----- The Haskell type system is very reluctant to accept this type signature, so we need a newtype to work around it
---gmemoNonRecU :: (MonadRef r m,MonadIO m,Layer Inside inc r m) => Proxy ctx -> GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b
---gmemoNonRecU ctx f = unNewGenericQ (newGmemoNonRecU ctx (NewGenericQ f)) where
---	newGmemoNonRecU ctx f = gmemoNonRecU' ctx f (unsafePerformIO $ debug "NewTable!!" $ WeakTable.newFor f)
---
----- | memoizes a generic function on values
---gmemoNonRecU' :: (MonadRef r m,MonadIO m,Layer Inside inc r m) => Proxy ctx -> NewGenericQMemoU ctx Inside inc r m b -> MemoTable (TypeRep,KeyDynamic) (U Inside inc r m b) -> NewGenericQMemoU ctx Inside inc r m b
---gmemoNonRecU' ctx (NewGenericQ f) tbl = NewGenericQ $ \arg -> do
---	let (mkWeak,k) = memoKeyCtx dict ctx $! arg
---	let tyk = (typeRepOf arg,keyDynamicCtx dict ctx (proxyOf arg) k)
---	lkp <- debug ("memo search "++show tyk) $ inL $ liftIO $ WeakTable.lookup tbl tyk
---	case lkp of
---		Nothing -> do
---			let finalizethunk = WeakTable.finalize tbl tyk
---			thunk <- f arg
---			let thunkmemo = addFinalizerU thunk (liftIO finalizethunk)
---			inL $ liftIO $ WeakTable.updateWithMkWeak tbl mkWeak tyk thunk
---			debug (show tyk ++" => "++show thunk) $ return thunkmemo
---		Just thunk -> debug ("memo hit "++show tyk ++ " " ++ show thunk) $ do
---			let finalizethunk = WeakTable.finalize tbl tyk
---			let thunkmemo = addFinalizerU thunk (liftIO finalizethunk)
---			return thunkmemo
-
 -- *		
 
-memoNonRecTxU :: (Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => MemoMode -> (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
-memoNonRecTxU mode f = do
-	let !tbls = unsafePerformIO $ do
-		!buff_tbls <- CMap.empty
-		!ori_tbl <- WeakTable.newFor f
-		return $! (ori_tbl :!: buff_tbls)
-	memoNonRecTxU' mode f $! tbls
+memoNonRecTxU :: (Typeable b,Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => MemoMode -> (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
+memoNonRecTxU mode f =
+	let buff_tbls = declareCMap (stableName f)
+	    ori_tbl = declareWeakTable f
+	in memoNonRecTxU' mode f $! (ori_tbl :!: buff_tbls)
 
 memoNonRecTxU' :: (Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => MemoMode -> (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> TxMemoTable r m (Key a) b -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
 memoNonRecTxU' mode f tbls@(ori_tbl :!: buff_tbls) arg = do
@@ -121,22 +89,22 @@ insertMemoTx tbls@(ori_tbl :!: buff_tbls) mkWeak k thunk = do
 	mb <- inL $ liftIO $ CMap.lookup txlog buff_tbls
 	inL $ liftIO $ case mb of
 		-- if there is already a buffered entry for the log, then the table is also already in the log's record
-		Just memo_tbl -> WeakTable.updateWithMkWeak memo_tbl mkWeak k (mkWeak,thunk)
+		Just memo_tbl -> WeakTable.insertWithMkWeak memo_tbl mkWeak k (mkWeak,thunk)
 		Nothing -> do
 			memo_tbl <- WeakTable.new
-			WeakTable.updateWithMkWeak memo_tbl mkWeak k (mkWeak,thunk)
+			WeakTable.insertWithMkWeak memo_tbl mkWeak k (mkWeak,thunk)
 			CMap.insert txlog memo_tbl buff_tbls
 
 			-- add the buffered memotable to the txlog's list
 			atomicModifyIORef' (txLogMemo txlog) (\xs -> (DynTxMemoTable tbls:xs,()))
 
 
-instance WeakRef r => Memo (TxM l inc r m a) where
+instance (Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (TxM l inc r m a) where
 	type Key (TxM l inc r m a) = Unique
 	{-# INLINE memoKey #-}
 	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataTxM t),idTxNM $ metaTxM t)
                                  
-instance WeakRef r => Memo (TxU l inc r m a) where
+instance (Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (TxU l inc r m a) where
 	type Key (TxU l inc r m a) = Unique
 	{-# INLINE memoKey #-}
 	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataTxU t),idTxNM $ metaTxU t)

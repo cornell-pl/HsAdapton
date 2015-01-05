@@ -237,7 +237,7 @@ evaluateInnerL t force = debug ("re-evaluatingInnerL " ++ show (hashUnique $ idN
 	inL $ liftIO $ pushStack (metaL t :!: SNothing)
 	value <- force
 	inL $ writeRef (dataL t) $ LConst 1# value
-	inL $ liftIO popStack
+	popStack'
 	return value
 
 -- does not add the modifiable to the stack, as we do with thunks
@@ -248,7 +248,7 @@ evaluateOuterL t force = debug ("re-evaluatingOuterL " ++ show (hashUnique $ idN
 	inL $ liftIO $ pushStack (metaL t :!: SNothing)
 	value <- force
 	markForcedL t
-	inL $ liftIO popStack
+	popStack'
 	return value
 
 markForcedL :: (MonadIO m,Layer l inc r m) => L l inc r m a -> l inc r m ()
@@ -442,12 +442,12 @@ repairInnerU t value force dependencies = debug ("repairing thunk "++ show (hash
 -- recomputes a node
 -- does not clear the dependencies on its own
 {-# INLINE evaluateInnerU #-}
-evaluateInnerU :: (MonadIO m,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a -> r (Dependencies inc r m) -> Inside inc r m a
+evaluateInnerU :: (Typeable inc,Typeable r,Typeable m,MonadIO m,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a -> r (Dependencies inc r m) -> Inside inc r m a
 evaluateInnerU t force dependencies = debug ("re-evaluatingInnerU " ++ show (hashUnique $ idU t)) $ do
 	inL $ liftIO $ pushStack (metaU t :!: SJust dependencies)
 	value <- force
 	inL $ writeRef (dataU t) $ Value 0# value force dependencies
-	inL $ liftIO popStack
+	popStack'
 	return value
 
 -- Nothing = unevaluated, Just True = dirty, Just False = not dirty
@@ -469,10 +469,10 @@ isUnevaluatedU t = do
 
 -- | Explicit memoization for recursive functions, fixpoint
 -- A fixed-point operation returning thunks that in the process of tying the knot adds memoization.
-memoU :: (MonadIO m,Eq a,Layer Outside inc r m,Memo arg) => ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
+memoU :: (Typeable arg,Typeable a,MonadIO m,Eq a,Layer Outside inc r m,Memo arg) => ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
 memoU f = let memo_func = memoNonRecU MemoLinear (thunkU . f memo_func) in memo_func
 
-gmemoQU :: (Eq b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
+gmemoQU :: (Typeable ctx,Typeable b,Eq b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
 gmemoQU ctx (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b)) =
 	let memo_func :: GenericQMemoU ctx Inside inc r m b
 	    memo_func = gmemoNonRecU MemoLinear ctx (f memo_func)
@@ -567,7 +567,7 @@ forgetUData' dta = do
 
 {-# INLINE mkRefCreator #-}
 -- if the parent is a reference, we don't need to remember it because no dirtying will be necessary
-mkRefCreator :: (WeakRef r,MonadIO m) => Unique -> m (Maybe (Creator inc r m))
+mkRefCreator :: (Typeable inc,Typeable r,Typeable m,WeakRef r,MonadIO m) => Unique -> m (Maybe (Creator inc r m))
 mkRefCreator = \idU -> liftIO $ do
 	top <- topStack
 	case top of

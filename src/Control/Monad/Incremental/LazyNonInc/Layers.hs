@@ -21,7 +21,7 @@ data LazyNonInc deriving Typeable
 
 $( derive makeDeepTypeableAbstract ''LazyNonInc )
 
-instance (MonadRef r m,WeakRef r) => Incremental LazyNonInc r m where
+instance (Typeable r,Typeable m,MonadRef r m,WeakRef r) => Incremental LazyNonInc r m where
 	
 	newtype Outside LazyNonInc r m a = LazyNonIncOuter { runLazyNonIncOuter :: m a } deriving (Functor,Applicative,Monad,MonadIO,MonadRef r,MonadLazy)
 	newtype Inside LazyNonInc r m a = LazyNonIncInner { runLazyNonIncInner :: m a } deriving (Functor,Applicative,Monad,MonadIO,MonadRef r,MonadLazy)
@@ -41,10 +41,10 @@ instance MonadTrans (Outside LazyNonInc r) where
 instance MonadTrans (Inside LazyNonInc r) where
 	lift = LazyNonIncInner
 	{-# INLINE lift #-}
-instance InLayer Outside LazyNonInc r m where
+instance (Typeable r,Typeable m) => InLayer Outside LazyNonInc r m where
 	inL = LazyNonIncOuter
 	{-# INLINE inL #-}
-instance InLayer Inside LazyNonInc r m where
+instance (Typeable r,Typeable m) => InLayer Inside LazyNonInc r m where
 	inL = LazyNonIncInner
 	{-# INLINE inL #-}
 

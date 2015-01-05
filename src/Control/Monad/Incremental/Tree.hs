@@ -95,7 +95,7 @@ instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepTy
 instance Memo (TreeMod' mod l inc r m a) where
 	type Key (TreeMod' mod l inc r m a) = StableName (TreeMod' mod l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ Weak.mkWeak x,unsafePerformIO $ makeStableName x)
+	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
 
 -- | tree fold
 foldTreeInc :: (Thunk mod l inc r m,Eq a,Memo (mod l inc r m (TreeMod' mod l inc r m a)),Output thunk l inc r m,Eq (TreeMod mod l inc r m a),Layer l inc r m) => a -> (a -> a -> l inc r m a) -> TreeMod mod l inc r m a -> l inc r m (thunk l inc r m a)

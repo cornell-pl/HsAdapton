@@ -56,6 +56,7 @@ import Data.DeriveTH                 -- Library for deriving instances for exist
 import Data.DeepTypeable
 import Data.WithClass.Derive.DeepTypeable
 import Language.Haskell.TH.Syntax
+import Data.Global.TH as TH
 
 data Merge a b = Merge a b deriving (Typeable,Eq,Show,Ord) -- a special type that allows passing pairs of arguments to @drawToDot@
 
@@ -68,34 +69,34 @@ $( derive makeDeepTypeable ''Merge )
 
 -- hack to automatize drawing sequences
 
-{-# NOINLINE tempPDFs #-}
-tempPDFs :: IORef [FilePath]
-tempPDFs = unsafePerformIO $ newIORef []
+declareMVar "tempPDFs"  [t| [FilePath] |] [e| [] |]
+declareMVar "drawnDependents"  [t| Map ThreadId [String] |] [e| Map.empty |]
+declareMVar "drawnDependencies"  [t| Map ThreadId [String] |] [e| Map.empty |]
 
-{-# NOINLINE drawnDependents #-}
-drawnDependents :: IORef [String]
-drawnDependents = unsafePerformIO $ newIORef []
-
-{-# NOINLINE drawnDependencies #-}
-drawnDependencies :: IORef [String]
-drawnDependencies = unsafePerformIO $ newIORef []
-
-checkDrawnDependencies :: (Layer l inc r m,MonadIO m) => String -> l inc r m [a] -> l inc r m [a]
-checkDrawnDependencies node m = do
-	nodes <- inL $ liftIO $ readIORef drawnDependencies
-	if node `elem` nodes
-		then return []
-		else inL (liftIO (writeIORef drawnDependencies (node:nodes))) >> m
+--checkDrawnDependencies :: (Layer l inc r m,MonadIO m) => String -> l inc r m [a] -> l inc r m [a]
+--checkDrawnDependencies node m = do
+--	threadid <- inL $ liftIO myThreadId
+--	nodesmap <- inL $ liftIO $ takeMVar drawnDependencies
+----	let nodes = maybe [] id $ Map.lookup threadid nodesmap
+--	if node `elem` nodesmap
+--		then inL (liftIO $ putMVar drawnDependencies nodesmap) >> return []
+--		else inL (liftIO $ putMVar drawnDependencies $ node:nodesmap) >> m
 
 checkDrawnDependents :: (Layer l inc r m,MonadIO m) => String -> l inc r m [a] -> l inc r m [a]
 checkDrawnDependents node m = do
-	nodes <- inL $ liftIO $ readIORef drawnDependents
+	threadid <- inL $ liftIO myThreadId
+	nodesmap <- inL $ liftIO $ takeMVar drawnDependents
+	let nodes = maybe [] id $ Map.lookup threadid nodesmap
 	if node `elem` nodes
-		then return []
-		else inL (liftIO (writeIORef drawnDependents (node:nodes))) >> m
+		then inL (liftIO $ putMVar drawnDependents nodesmap) >> (return [])
+		else inL (liftIO $ putMVar drawnDependents $ Map.insertWith (++) threadid [node] nodesmap) >> m
 
 resetDrawnNodes :: MonadIO m => m ()
-resetDrawnNodes = liftIO $ writeIORef drawnDependencies [] >> writeIORef drawnDependents []
+resetDrawnNodes = do
+	threadid <- liftIO myThreadId
+	let delete = return . Map.delete threadid
+--	let delete = \_ -> return []
+	liftIO $ modifyMVar_ drawnDependencies delete >> modifyMVar_ drawnDependents delete
 
 -- * Graphviz Drawing classes
 
@@ -115,11 +116,11 @@ instance (Draw inc r m a) => Sat (DrawDict inc r m a) where
 drawPDF :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m ()
 drawPDF label inc r m v = do
 --	inL $ liftIO $ performGC >> threadDelay 2000000
-	dir <- inL $ liftIO $ getTemporaryDirectory
+	dir <- inL $ liftIO getTemporaryDirectory -- $ return "/Users/hpacheco/Desktop/tmp/"
 	filename <- inL $ liftIO $ liftM toString $ nextUUIDSafe
 	let pdfFile = dir </> addExtension filename "pdf"
 	drawToPDF label inc r m v pdfFile
-	inL $ liftIO $ modifyIORef tempPDFs (pdfFile:)
+	inL $ liftIO $ modifyMVar_ tempPDFs (return . (pdfFile:))
 	inL $ liftIO $ putStrLn $ "drew " ++ filename ++ ".pdf"
 
 mergePDFsInto :: (MonadRef r m,MonadIO m,Layer Outside inc r m) => FilePath -> Outside inc r m ()
@@ -127,7 +128,7 @@ mergePDFsInto = inL . liftIO . mergePDFsInto'
 	
 mergePDFsInto' :: FilePath -> IO ()
 mergePDFsInto' pdfFile = do
-	pdfs <- atomicModifyIORef' tempPDFs (\pdfs -> ([],pdfs))
+	pdfs <- modifyMVar tempPDFs (\pdfs -> return ([],pdfs))
 	system $ "pdftk " ++ unwords (reverse pdfs) ++ " cat output " ++ pdfFile
 	return ()
 
@@ -198,13 +199,13 @@ mNode thunkID = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {wColor =
 	where fillcolor = X11Color White
 	      color = X11Color DarkGreen
 	
-iuNode :: String -> DotNode String
-iuNode thunkID = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {wColor = color, weighting = Nothing}],Shape DiamondShape,Label (StrLabel $ T.pack thunkID),Style [SItem Filled []],FillColor [WC {wColor = fillcolor, weighting = Nothing}]]}
+iuNode :: String -> String -> DotNode String
+iuNode thunkID label = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {wColor = color, weighting = Nothing}],Shape DiamondShape,Label (StrLabel $ T.pack $ thunkID ++ label),Style [SItem Filled []],FillColor [WC {wColor = fillcolor, weighting = Nothing}]]}
 	where fillcolor = X11Color White
 	      color = X11Color Goldenrod4
 
-uNode :: Maybe Bool -> String -> DotNode String
-uNode isDirtyUnevaluated thunkID = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {wColor = color, weighting = Nothing}],Shape Circle,Label (StrLabel $ T.pack thunkID),Style [SItem Filled []],FillColor [WC {wColor = fillcolor, weighting = Nothing}]]}
+uNode :: Maybe Bool -> String -> String -> DotNode String
+uNode isDirtyUnevaluated thunkID label = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {wColor = color, weighting = Nothing}],Shape Circle,Label (StrLabel $ T.pack $ thunkID ++ label),Style [SItem Filled []],FillColor [WC {wColor = fillcolor, weighting = Nothing}]]}
 	where fillcolor = X11Color $ case isDirtyUnevaluated of { Nothing -> CadetBlue4; Just True -> Red ; Just False -> White }
 	      color = X11Color $ case isDirtyUnevaluated of { Nothing -> Black; Just True -> Black ; Just False -> CadetBlue4 }
 

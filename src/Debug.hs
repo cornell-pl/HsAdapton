@@ -20,28 +20,10 @@ import Data.UUID
 import Data.UUID.V1
 
 debug :: String -> a -> a
-debug str = id
---debug str x = trace str x
+--debug str = id
+debug str x = trace str x
 
---type RefDB = HashIO.IOHashTable HashST.HashTable UUID (IO ())
---
---{-# NOINLINE refDB #-}
---refDB :: RefDB
---refDB = unsafePerformIO $ HashIO.new
---
---newRefDB :: (MonadRef r m,WeakKey r,MonadIO m) => a -> String -> m (r a)
---newRefDB v msg = do newRef v
-----	r <- newRef v
-----	uid <- liftIO $ nextUUIDSafe
-----	w <- liftIO $ mkWeakKey r (HashIO.delete refDB uid >> putStrLn (msg ++" has died"))
-----	liftIO $ HashIO.insert refDB uid $ do
-----		mb <- deRefWeak w
-----		case mb of
-----			Nothing -> finalize w
-----			Just _ -> putStrLn $ msg ++" is alive"
-----	return r
---
---printDB :: IO ()
---printDB = do
---	db <- HashIO.toList refDB
---	sequence_ $ map snd db
+debugM :: MonadIO m => String -> m a -> m a
+debugM str m = do
+	threadid <- liftIO $ myThreadId
+	debug ("{"++ show threadid ++ "}" ++ str) m

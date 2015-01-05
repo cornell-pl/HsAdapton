@@ -21,12 +21,13 @@ import System.IO.Unsafe
 import System.Mem.Weak
 import System.Mem.WeakKey
 import GHC.Conc.Sync
+import System.Mem.WeakTable
 
 
 -- ** STM bindings
 
 -- | @STM@ as an incremental computation class
-data IncSTM
+data IncSTM deriving Typeable
 
 instance Incremental IncSTM IORef IO where
 	newtype Outside IncSTM IORef IO a = OutsideSTM { unOutsideSTM :: STM a } deriving (MonadLazy,Monad,Applicative,Functor)
@@ -76,10 +77,10 @@ type IncUVar = LazyNonIncU
 -- default instance
 instance MonadLazy STM
 
-instance WeakRef r => Memo (IncTVar l inc r m a) where
+instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (IncTVar l inc r m a) where
 	type Key (IncTVar l inc r m a) = StableName (IncTVar l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ mkWeak x,unsafePerformIO $ makeStableName x)
+	memoKey x = (MkWeak $ mkWeak x,stableName x)
 
 
 

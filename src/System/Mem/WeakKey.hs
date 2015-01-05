@@ -1,4 +1,4 @@
-{-# LANGUAGE UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, RankNTypes, MagicHash, UnboxedTuples #-}
+{-# LANGUAGE DeriveDataTypeable, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, RankNTypes, MagicHash, UnboxedTuples #-}
 
 -- A class for precise finalization of weak pointers.
 
@@ -15,6 +15,7 @@ import Control.Monad.Ref
 import System.Mem.Weak as Weak
 import Control.Monad.Reader
 import qualified Data.HashTable.ST.Basic as HT
+import Data.Typeable
 
 class WeakRef r where
 	mkWeakRefKey :: r a -> b -> Maybe (IO ()) -> IO (Weak b)
@@ -30,8 +31,8 @@ mkWeakKeyIORef k@(IORef (STRef r#)) v f = IO $ \s ->
 class WeakKey r where
 	mkWeakKey :: r -> b -> Maybe (IO ()) -> IO (Weak b)
 
-instance WeakKey (HT.HashTable s k v) where
-	mkWeakKey h v mb = HT.mkWeakKey h v (maybe (return ()) id mb)
+--instance WeakKey (HT.HashTable s k v) where
+--	mkWeakKey h v mb = HT.mkWeakKey h v (maybe (return ()) id mb)
 
 instance WeakKey (IORef a) where
 	mkWeakKey = \r v mb -> mkWeakKeyIORef r v (maybe (return ()) id mb)
@@ -47,7 +48,7 @@ mkDeadWeak v f = do
 	Weak.finalize w
 	return w
 	
-newtype MkWeak = MkWeak { unMkWeak :: forall v . v -> Maybe (IO ()) -> IO (Weak v) }
+newtype MkWeak = MkWeak { unMkWeak :: forall v . v -> Maybe (IO ()) -> IO (Weak v) } deriving Typeable
 
 -- | Creates a weak reference that is alive as long as two keys are
 -- NB: this is not completely symmetric: if the value is the same as the second key, then it will be kept alive as long as the first is alive

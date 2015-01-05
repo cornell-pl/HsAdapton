@@ -1,16 +1,17 @@
-{-# LANGUAGE TypeOperators, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE DeriveDataTypeable, TypeOperators, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module System.Mem.WeakTable (
 	  WeakTable(..)
-	, new,unsafeNew,newForMkWeak
-	, newFor,unsafeNewFor
+	, new,newForMkWeak
+	, newFor
 	, lookup
 	, insert,delete
-	, insertWith, insertWithRefKey, insertWithMkWeak, updateWithMkWeak
+	, insertWith, insertWithMkWeak
 	, finalize,table_finalizer,finalizeEntry
 	, mapM_
 	, mapMGeneric_,foldM
 	, debugWeakTable
+	, stableName
 	) where
 
 -- | Implementation of memo tables using hash tables and weak pointers as presented in http://community.haskell.org/~simonmar/papers/weak.pdf.
@@ -18,6 +19,7 @@ module System.Mem.WeakTable (
 
 import Prelude hiding (lookup,mapM_)
 import qualified Prelude
+import System.Mem.StableName
 
 import System.Mem.Weak (Weak(..))
 import qualified System.Mem.Weak as Weak
@@ -35,47 +37,37 @@ import Control.Monad.Ref
 import System.Mem.WeakKey as WeakKey
 import qualified System.Mem.WeakKey as WeakKey
 import Data.Strict.Tuple as Strict
+import Data.IORef
 
 import Debug
+import Data.Typeable
 
-newtype WeakTable k v = WeakTable (WeakTable' k v :!: Weak (WeakTable' k v))
+-- an @IORef@ so that we have precise weak pointers
+newtype WeakTable k v = WeakTable (IORef (WeakTable' k v) :!: Weak (WeakTable' k v)) deriving Typeable
 type WeakTable' k v = HashIO.IOHashTable HashST.HashTable k (Weak v)
 	
 new :: (Eq k,Hashable k) => IO (WeakTable k v)
 new = do
 	tbl <- HashIO.new
-	weak_tbl <- mkWeakKey tbl tbl $ Just $ table_finalizer tbl
-	return $ WeakTable (tbl :!: weak_tbl)
-
-{-# NOINLINE unsafeNew #-}
-unsafeNew :: (Eq k,Hashable k) => (WeakTable k v)
-unsafeNew = unsafePerformIO $ do
-	tbl <- HashIO.new
-	weak_tbl <- mkWeakKey tbl tbl $ Just $ table_finalizer tbl
-	return $ WeakTable (tbl :!: weak_tbl)
+	tbl_ref <- newIORef tbl
+	weak_tbl <- mkWeakKey tbl_ref tbl $ Just $ table_finalizer tbl
+	return $ WeakTable (tbl_ref :!: weak_tbl)
 
 -- | creates a new weak table that is uniquely identified by an argument value @a@
 newFor :: (Eq k,Hashable k) => a -> IO (WeakTable k v)
 newFor a = do
 	tbl <- HashIO.new
-	let (MkWeak mkWeak) = MkWeak (mkWeakKey tbl) `orMkWeak` MkWeak (Weak.mkWeak a)
+	tbl_ref <- newIORef tbl
+	let (MkWeak mkWeak) = MkWeak (mkWeakKey tbl_ref) `orMkWeak` MkWeak (Weak.mkWeak a)
 	weak_tbl <- mkWeak tbl $ Just $ table_finalizer tbl
-	return $ WeakTable (tbl :!: weak_tbl)
-
-{-# NOINLINE unsafeNewFor #-}
--- | creates a new weak table that is uniquely identified by an argument value @a@
-unsafeNewFor :: (Eq k,Hashable k) => a -> (WeakTable k v)
-unsafeNewFor a = unsafePerformIO $ do
-	tbl <- HashIO.new
-	let (MkWeak mkWeak) = MkWeak (mkWeakKey tbl) `orMkWeak` MkWeak (Weak.mkWeak a)
-	weak_tbl <- mkWeak tbl $ Just $ table_finalizer tbl
-	return $ WeakTable (tbl :!: weak_tbl)
+	return $ WeakTable (tbl_ref :!: weak_tbl)
 
 newForMkWeak :: (Eq k,Hashable k) => MkWeak -> IO (WeakTable k v)
 newForMkWeak (MkWeak mkWeak) = do
 	tbl <- HashIO.new
+	tbl_ref <- newIORef tbl
 	weak_tbl <- mkWeak tbl $ Just $ table_finalizer tbl
-	return $ WeakTable (tbl :!: weak_tbl)
+	return $ WeakTable (tbl_ref :!: weak_tbl)
 
 finalize :: (Eq k,Hashable k) => WeakTable k v -> IO ()
 finalize w_tbl@(WeakTable (_ :!: weak_tbl)) = do
@@ -95,27 +87,24 @@ insert tbl k v = System.Mem.WeakTable.insertWith tbl k k v
 
 -- | the key @k@ stores the entry for the value @a@ in the table
 insertWith :: (Eq k,Hashable k) => WeakTable k v -> a -> k -> v -> IO ()
-insertWith w_tbl@(WeakTable (tbl :!: weak_tbl)) a k v = do
+insertWith w_tbl@(WeakTable (tbl_ref :!: weak_tbl)) a k v = do
+	tbl <- readIORef tbl_ref
 	weak <- Weak.mkWeak a v $ Just $ System.Mem.WeakTable.deleteFinalized' weak_tbl k
 	HashIO.insert tbl k weak
 
 insertWithMkWeak :: (MonadIO m,Eq k,Hashable k) => WeakTable k v -> MkWeak -> k -> v -> m ()
-insertWithMkWeak w_tbl@(WeakTable (tbl :!: weak_tbl)) (MkWeak mkWeak) k v = do
-	liftIO $ finalizeEntry w_tbl k -- we need to make sure that any old weak pointer is finalized, since it may be be kept alive by the same key
-	weak <- liftIO $ mkWeak v $ Just $ System.Mem.WeakTable.deleteFinalized' weak_tbl k
-	liftIO $ HashIO.insert tbl k weak
-	
-updateWithMkWeak :: (MonadIO m,Eq k,Hashable k) => WeakTable k v -> MkWeak -> k -> v -> m ()
-updateWithMkWeak w_tbl@(WeakTable (tbl :!: weak_tbl)) (MkWeak mkWeak) k v = do
+insertWithMkWeak w_tbl@(WeakTable (tbl_ref :!: weak_tbl)) (MkWeak mkWeak) k v = do
+	tbl <- liftIO $ readIORef tbl_ref
 	liftIO $ finalizeEntry w_tbl k -- we need to make sure that any old weak pointer is finalized, since it may be be kept alive by the same key
 	weak <- liftIO $ mkWeak v $ Just $ System.Mem.WeakTable.deleteFinalized' weak_tbl k
 	liftIO $ HashIO.insert tbl k weak
 
--- | @insertWith@ that uses a reference as key
-insertWithRefKey :: (Eq k,Hashable k,WeakRef r) => WeakTable k v -> r a -> k -> v -> IO ()
-insertWithRefKey w_tbl@(WeakTable (tbl :!: weak_tbl)) a k v = do
-	weak <- WeakKey.mkWeakRefKey a v $ Just $ System.Mem.WeakTable.deleteFinalized' weak_tbl k
-	HashIO.insert tbl k weak
+---- | @insertWith@ that uses a reference as key
+--insertWithRefKey :: (Eq k,Hashable k,WeakRef r) => WeakTable k v -> r a -> k -> v -> IO ()
+--insertWithRefKey w_tbl@(WeakTable (tbl_ref :!: weak_tbl)) a k v = do
+--	tbl <- readIORef tbl_ref
+--	weak <- WeakKey.mkWeakRefKey a v $ Just $ System.Mem.WeakTable.deleteFinalized' weak_tbl k
+--	HashIO.insert tbl k weak
 
 finalizeEntry :: (Eq k,Hashable k) => WeakTable k b -> k -> IO ()
 finalizeEntry (WeakTable (_ :!: weak_tbl)) k = do
@@ -139,18 +128,19 @@ deleteFinalized' weak_tbl k = do
 		Just tbl -> HashIO.delete tbl k
 
 lookup :: (MonadIO m,Eq k,Hashable k) => WeakTable k v -> k -> m (Maybe v)
-lookup (WeakTable (tbl :!: weak_tbl)) k = do
+lookup (WeakTable (tbl_ref :!: weak_tbl)) k = do
+	tbl <- liftIO $ readIORef tbl_ref
 	w <- liftIO $ HashIO.lookup tbl k
 	case w of
 		Nothing -> return Nothing
 		Just r -> liftIO $ Weak.deRefWeak r
 
 delete :: (Eq k,Hashable k) => WeakTable k v -> k -> IO ()
-delete (WeakTable (tbl :!: _)) k = HashIO.delete tbl k
+delete (WeakTable (tbl_ref :!: _)) k = readIORef tbl_ref >>= \tbl -> HashIO.delete tbl k
 
 {-# INLINE mapM_ #-}
 mapM_ :: ((k,v) -> IO ()) -> WeakTable k v -> IO ()
-mapM_ f (WeakTable (tbl :!: weak_tbl)) = HashIO.mapM_ g tbl where
+mapM_ f (WeakTable (tbl_ref :!: weak_tbl)) = readIORef tbl_ref >>= \tbl -> HashIO.mapM_ g tbl where
 	g (k,weak) = do
 		mbv <- Weak.deRefWeak weak
 		case mbv of
@@ -159,7 +149,7 @@ mapM_ f (WeakTable (tbl :!: weak_tbl)) = HashIO.mapM_ g tbl where
 
 {-# INLINE mapMGeneric_ #-}
 mapMGeneric_ :: (Hashable k,MonadIO m,Eq k) => ((k,v) -> m ()) -> WeakTable k v -> m ()
-mapMGeneric_ f (WeakTable (tbl :!: weak_tbl)) = liftIO (HashIO.toList tbl) >>= Prelude.mapM_ g where
+mapMGeneric_ f (WeakTable (tbl_ref :!: weak_tbl)) = liftIO (readIORef tbl_ref) >>= \tbl -> liftIO (HashIO.toList tbl) >>= Prelude.mapM_ g where
 	g (k,weak) = do
 		mbv <- liftIO $ Weak.deRefWeak weak
 		case mbv of
@@ -167,7 +157,7 @@ mapMGeneric_ f (WeakTable (tbl :!: weak_tbl)) = liftIO (HashIO.toList tbl) >>= P
 			Just v -> f (k,v)
 			
 foldM :: (Hashable k,MonadIO m,Eq k) => (a -> (k,v) -> m a) -> a -> WeakTable k v -> m a
-foldM f z (WeakTable (tbl :!: weak_tbl)) = liftIO (HashIO.toList tbl) >>= Control.Monad.foldM g z where
+foldM f z (WeakTable (tbl_ref :!: weak_tbl)) = liftIO (readIORef tbl_ref) >>= \tbl -> liftIO (HashIO.toList tbl) >>= Control.Monad.foldM g z where
 	g x (k,weak) = do
 		mbv <- liftIO $ Weak.deRefWeak weak
 		case mbv of
@@ -175,7 +165,8 @@ foldM f z (WeakTable (tbl :!: weak_tbl)) = liftIO (HashIO.toList tbl) >>= Contro
 			Just v -> f x (k,v)
 
 debugWeakTable :: (Show k,Show v) => WeakTable k v -> IO ()
-debugWeakTable (WeakTable (tbl :!: weak_tbl)) = do
+debugWeakTable (WeakTable (tbl_ref :!: weak_tbl)) = do
+	tbl <- readIORef tbl_ref
 	let debugEntry (k,w) = do
 		mb <- Weak.deRefWeak w
 		case mb of
@@ -185,3 +176,6 @@ debugWeakTable (WeakTable (tbl :!: weak_tbl)) = do
 	HashIO.mapM_ debugEntry tbl
 	putStrLn "...WeakTable"
 
+{-# NOINLINE stableName #-}
+stableName :: a -> StableName a
+stableName = unsafePerformIO . makeStableName

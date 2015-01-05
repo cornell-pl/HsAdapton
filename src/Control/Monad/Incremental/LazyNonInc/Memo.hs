@@ -20,25 +20,26 @@ import Control.Monad.Ref
 import System.IO.Unsafe
 import System.Mem.StableName
 import System.Mem.WeakKey as WeakKey
+import Data.Typeable
 
-instance WeakRef r => Memo (LazyNonIncM l inc r m a) where
+instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (LazyNonIncM l inc r m a) where
 	type Key (LazyNonIncM l inc r m a) = StableName (LazyNonIncM l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x@(LazyNonIncM r) = (MkWeak $ WeakKey.mkWeakRefKey r,unsafePerformIO $ makeStableName x)
+	memoKey x@(LazyNonIncM r) = (MkWeak $ WeakKey.mkWeakRefKey r,stableName x)
                                  
-instance WeakRef r => Memo (LazyNonIncU l inc r m a) where
+instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (LazyNonIncU l inc r m a) where
 	type Key (LazyNonIncU l inc r m a) = StableName (LazyNonIncU l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x@(LazyNonIncU r) = (MkWeak $ WeakKey.mkWeakRefKey r,unsafePerformIO $ makeStableName x)
+	memoKey x@(LazyNonIncU r) = (MkWeak $ WeakKey.mkWeakRefKey r,stableName x)
 
-instance WeakRef r => Memo (LazyNonIncL l inc r m a) where
+instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (LazyNonIncL l inc r m a) where
 	type Key (LazyNonIncL l inc r m a) = StableName (LazyNonIncL l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x@(LazyNonIncL r) = (MkWeak $ WeakKey.mkWeakRefKey r,unsafePerformIO $ makeStableName x)
+	memoKey x@(LazyNonIncL r) = (MkWeak $ WeakKey.mkWeakRefKey r,stableName x)
 
 instance Hashable (LazyNonIncU l inc r m a) where
-	hashWithSalt i u = hashWithSalt i (hashStableName $ unsafePerformIO $ makeStableName u)
+	hashWithSalt i u = hashWithSalt i (hashStableName $ stableName u)
 instance Hashable (LazyNonIncM l inc r m a) where
-	hashWithSalt i m = hashWithSalt i (hashStableName $ unsafePerformIO $ makeStableName m)
+	hashWithSalt i m = hashWithSalt i (hashStableName $ stableName m)
 instance Hashable (LazyNonIncL l inc r m a) where
-	hashWithSalt i l = hashWithSalt i (hashStableName $ unsafePerformIO $ makeStableName l)
+	hashWithSalt i l = hashWithSalt i (hashStableName $ stableName l)

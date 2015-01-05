@@ -17,6 +17,7 @@ import Control.Monad.Trans
 
 import Control.Monad
 import Control.Monad.IO.Class
+import System.Mem.WeakTable as WeakTable
 import Data.Strict.Tuple
 import System.Mem.Concurrent.WeakMap as CWeakMap
 import Control.Exception
@@ -86,7 +87,8 @@ instance (MonadRef r m,MonadIO m,Eq a,TxLayer Outside r m,TxLayer Inside r m,TxL
 		isDirtyUnevaluated <- isDirtyUnevaluatedTxU t
 		(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog (metaTxU t) $ Read False
 		dependentEdges <- drawTxDependents thunkID dependents
-		let thunkNode = addAttribute (FontColor $ statusColor status) $ uNode isDirtyUnevaluated thunkID
+		thunkDependencies <- drawTxDependencies $ metaTxU t
+		let thunkNode = addAttribute (FontColor $ statusColor status) $ uNode isDirtyUnevaluated thunkID ('_':thunkDependencies)
 		case isDirtyUnevaluated of
 			Just _ -> do
 				(childrenIDs,childrenDot) <- drawDict dict inc r m =<< inside (oldvalueTxU t)
@@ -96,18 +98,19 @@ instance (MonadRef r m,MonadIO m,Eq a,TxLayer Outside r m,TxLayer Inside r m,TxL
 			Nothing -> return ([thunkID],[DN thunkNode])
 
 drawTxDependents :: (TxLayer Outside r m,MonadRef r m,MonadIO m) => String -> TxDependents r m -> Outside TxAdapton r m [DotStatement String]
-drawTxDependents fromID deps = checkDrawnDependents fromID $ liftM (concat . Foldable.toList) $ CWeakMap.mapM'' (inL . liftIO) (drawTxDependent fromID) deps
+drawTxDependents fromID deps = checkDrawnDependents fromID $ liftM concat $ CWeakMap.mapM'' (inL . liftIO) (drawTxDependent fromID) deps
 drawTxDependent :: (TxLayer Outside r m,MonadRef r m,MonadIO m) => String -> Weak (TxDependent r m) -> Outside TxAdapton r m [DotStatement String]
 drawTxDependent fromID weak = do
 	mb <- inL $ liftIO $ deRefWeak weak
 	case mb of
 		Just (TxDependency (srcMetaW,dirtyW,checkW,tgtMetaW,oriW,_)) -> do
 			isOriginal <- inL $ readRef oriW
+			ithunkDependencies <- drawTxDependencies tgtMetaW
 			let ithunkID = show $ hashUnique $ idTxNM tgtMetaW
 			(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog tgtMetaW $ Read False
 			edges <- drawTxDependents ithunkID dependents
 			isDirty <- inL $ readRef dirtyW
-			let ithunkNode = addAttribute (FontColor $ statusColor status) $ iuNode ithunkID
+			let ithunkNode = addAttribute (FontColor $ statusColor status) $ iuNode ithunkID ('_':ithunkDependencies)
 			return $ DN ithunkNode : DE (dependentTxEdge isOriginal isDirty fromID ithunkID) : edges
 		Nothing -> 	do
 			let deadNodeID = "DEAD_WEAK "
@@ -116,6 +119,23 @@ drawTxDependent fromID weak = do
 dependentTxEdge :: Bool -> Bool -> String -> String -> DotEdge String
 dependentTxEdge isOriginal isDirty fromNode toNode = DotEdge {fromNode = fromNode, toNode = toNode, edgeAttributes = [if isOriginal then penWidth 3 else penWidth 1,Color [WC {wColor = X11Color color, weighting = Nothing}],ArrowHead (AType [(ArrMod {arrowFill = FilledArrow, arrowSide = LeftSide},Normal)])]}
 	where color = if isDirty then Red else Black
+
+drawTxDependencies :: (TxLayer Outside r m,MonadRef r m,MonadIO m) => TxNodeMeta r m -> Outside TxAdapton r m String
+drawTxDependencies meta = do
+	txlogs <- readTxLog
+	mb <- inL $ liftIO $ findTxLogEntry txlogs (idTxNM meta)
+	case mb of
+		Nothing -> return "?"
+		Just tvar -> do
+			mb <- inL $ dynTxVarDependencies tvar
+			case mb of
+				Nothing -> return ""
+				Just deps -> do
+					xs <- readRef deps
+					let conc str (d,_) = do
+						isDirty <- readRef (dirtyTxW d)
+						return $ str ++","++ show (idTxNM $ srcMetaTxW d) ++ (if isDirty then "*" else "")
+					Foldable.foldlM conc "" xs
 
 getTxDependentsStatus :: MonadIO m => TxLogs r m -> TxNodeMeta r m -> TxStatus -> m (TxDependents r m,TxStatus)
 getTxDependentsStatus tbl meta status = do

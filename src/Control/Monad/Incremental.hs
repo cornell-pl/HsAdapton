@@ -18,6 +18,10 @@ import Data.WithClass.MGenerics.Aliases
 import Language.Haskell.TH.Syntax
 import Control.Monad
 import Data.IORef
+import qualified Data.Strict.Tuple as Strict
+import Control.Monad.IO.Class
+import Control.Concurrent
+import Debug
 
 -- | General class for incremental computation libraries
 class (MonadRef r m,WeakRef r
@@ -35,7 +39,7 @@ class (MonadRef r m,WeakRef r
 	
 	runIncremental :: Outside inc r m a -> m a
 
-class InLayer l inc r m where
+class (Typeable l,Typeable inc,Typeable r,Typeable m) => InLayer l inc r m where
 	inL :: m a -> l inc r m a
 	
 -- | A class to facilitate the combination of different incremental computation styles
@@ -73,11 +77,11 @@ deriving instance Typeable Inside
 --deriving instance Typeable IncrementalArgs
 
 -- | A general class for thunks with no assumptions of incrementality. The only expectation is that it supports sharing (if we read the thunk twice the computataion is only performed once)
-class Layer l inc r m => Thunk mod l inc r m where
-	new :: Eq a => l inc r m a -> l inc r m (mod l inc r m a)
-	newc :: Eq a => a -> l inc r m (mod l inc r m a)
+class (Typeable mod,Layer l inc r m) => Thunk mod l inc r m where
+	new :: (Typeable a,Eq a) => l inc r m a -> l inc r m (mod l inc r m a)
+	newc :: (Typeable a,Eq a) => a -> l inc r m (mod l inc r m a)
 	newc = Control.Monad.Incremental.new . return
-	read :: Eq a => mod l inc r m a -> l inc r m a
+	read :: (Typeable a,Eq a) => mod l inc r m a -> l inc r m a
 
 --instance Output mod l inc r m => Thunk mod l inc r m where
 --	new = mod
@@ -92,27 +96,27 @@ class Layer l inc r m => Thunk mod l inc r m where
 -- | Output modifiable references (can NOT be directly mutated; are updated for changes on other modifiables)
 class (Thunk mod l inc r m,Layer l inc r m) => Output mod l inc r m where
 	
-	thunk :: (Eq a) => l inc r m a -> l inc r m (mod l inc r m a)
+	thunk :: (Typeable a,Eq a) => l inc r m a -> l inc r m (mod l inc r m a)
 	
-	const :: Eq a => a -> l inc r m (mod l inc r m a)
+	const :: (Typeable a,Eq a) => a -> l inc r m (mod l inc r m a)
 	const = thunk . return
 	{-# INLINE const #-}
 	
-	force :: (Eq a) => mod l inc r m a -> l inc r m a
+	force :: (Typeable a,Eq a) => mod l inc r m a -> l inc r m a
 	
 	{-# INLINE forceOutside #-}
-	forceOutside :: Eq a => mod l inc r m a -> Outside inc r m a
+	forceOutside :: (Typeable a,Eq a) => mod l inc r m a -> Outside inc r m a
 	forceOutside = outside . force
 	
 	-- * these memoization functions are specific to the Adapton approach, otherwise they are no-ops
-	memo :: (Eq a,Memo arg) => ((arg -> l inc r m (mod l inc r m a)) -> arg -> l inc r m a) -> (arg -> l inc r m (mod l inc r m a))
+	memo :: (Typeable a,Eq a,Memo arg) => ((arg -> l inc r m (mod l inc r m a)) -> arg -> l inc r m a) -> (arg -> l inc r m (mod l inc r m a))
 	memo f arg = thunk $ f (memo f) arg
 	
-	memo2 :: (Eq a,Memo arg1,Memo arg2) => ((arg1 -> arg2 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> l inc r m a) -> (arg1 -> arg2 -> l inc r m (mod l inc r m a))
+	memo2 :: (Typeable a,Eq a,Memo arg1,Memo arg2) => ((arg1 -> arg2 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> l inc r m a) -> (arg1 -> arg2 -> l inc r m (mod l inc r m a))
 	memo2 f = curry (memo (uncurry . f . curry))
 	{-# INLINE memo2 #-}
 	
-	memo3 :: (Eq a,Memo arg1,Memo arg2,Memo arg3) => ((arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> arg3 -> l inc r m a) -> (arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a))
+	memo3 :: (Typeable a,Eq a,Memo arg1,Memo arg2,Memo arg3) => ((arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> arg3 -> l inc r m a) -> (arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a))
 	memo3 f = curry3 (memo (uncurry3 . f . curry3))
 		where
 		curry3 f x y z = f (x,y,z)
@@ -120,7 +124,7 @@ class (Thunk mod l inc r m,Layer l inc r m) => Output mod l inc r m where
 	{-# INLINE memo3 #-}
 	
 	-- | fix-point memoization for incremental generic queries
-	gmemoQ :: (Eq b) => Proxy ctx -> (GenericQMemo ctx mod l inc r m b -> GenericQMemo ctx mod l inc r m b) -> GenericQMemo ctx mod l inc r m b
+	gmemoQ :: (Typeable ctx,Typeable b,Eq b) => Proxy ctx -> (GenericQMemo ctx mod l inc r m b -> GenericQMemo ctx mod l inc r m b) -> GenericQMemo ctx mod l inc r m b
 	gmemoQ ctx (f :: GenericQMemo ctx mod l inc r m b -> GenericQMemo ctx mod l inc r m b) =
 		let memo_func :: GenericQMemo ctx mod l inc r m b
 		    memo_func = f memo_func
@@ -133,45 +137,45 @@ class (Thunk mod l inc r m,Layer l inc r m) => Output mod l inc r m where
 class (Thunk mod l inc r m,Layer l inc r m) => Input mod l inc r m where
 	
 	-- | strict modifiable
-	ref :: (Eq a,Layer l inc r m) => a -> l inc r m (mod l inc r m a)
+	ref :: (Typeable a,Eq a,Layer l inc r m) => a -> l inc r m (mod l inc r m a)
 	-- | lazy modifiable
 	
 	{-# INLINE mod #-}
-	mod :: (Eq a,Layer l inc r m) => l inc r m a -> l inc r m (mod l inc r m a)
+	mod :: (Typeable a,Eq a,Layer l inc r m) => l inc r m a -> l inc r m (mod l inc r m a)
 	mod c = c >>= ref
 	
 	-- | reads the value of a modifiable
-	get :: (Eq a) => mod l inc r m a -> l inc r m a
+	get :: (Typeable a,Eq a) => mod l inc r m a -> l inc r m a
 	
 	-- | strictly changes the value of a modifiable
-	set :: (Eq a,Layer Outside inc r m) => mod l inc r m a -> a -> Outside inc r m ()
+	set :: (Typeable a,Eq a,Layer Outside inc r m) => mod l inc r m a -> a -> Outside inc r m ()
 	
 	-- | lazily changes the value of a modifiable
 	{-# INLINE overwrite #-}
-	overwrite :: (Eq a,Layer Outside inc r m) => mod l inc r m a -> l inc r m a -> Outside inc r m ()
+	overwrite :: (Typeable a,Eq a,Layer Outside inc r m) => mod l inc r m a -> l inc r m a -> Outside inc r m ()
 	overwrite = \m c -> outside c >>= set m
 	
 	-- | lazily appends a new change to the pending change sequence of a modifiable
 	{-# INLINE modify #-}
-	modify :: (Eq a,Layer Outside inc r m) => mod l inc r m a -> (a -> l inc r m a) -> Outside inc r m ()
+	modify :: (Typeable a,Eq a,Layer Outside inc r m) => mod l inc r m a -> (a -> l inc r m a) -> Outside inc r m ()
 	modify = \m f -> getOutside m >>= overwrite m . f
 
 	{-# INLINE refOutside #-}
-	refOutside :: (Eq a) => a -> Outside inc r m (mod l inc r m a)
+	refOutside :: (Typeable a,Eq a) => a -> Outside inc r m (mod l inc r m a)
 	refOutside = outside . ref
 
 	{-# INLINE modOutside #-}
-	modOutside :: (Eq a) => l inc r m a -> Outside inc r m (mod l inc r m a)
+	modOutside :: (Typeable a,Eq a) => l inc r m a -> Outside inc r m (mod l inc r m a)
 	modOutside = outside . mod
 	
 	{-# INLINE getOutside #-}
-	getOutside :: Eq a => mod l inc r m a -> Outside inc r m a
+	getOutside :: (Typeable a,Eq a) => mod l inc r m a -> Outside inc r m a
 	getOutside = outside . get
 
-overwriteAndReturn :: (Input mod l inc r m,Eq a,Layer Outside inc r m) => mod l inc r m a -> (l inc r m a) -> Outside inc r m (mod l inc r m a)
+overwriteAndReturn :: (Typeable a,Input mod l inc r m,Eq a,Layer Outside inc r m) => mod l inc r m a -> (l inc r m a) -> Outside inc r m (mod l inc r m a)
 overwriteAndReturn t m = overwrite t m >> return t
 
-modifyAndReturn :: (Input mod l inc r m,Eq a,Layer Outside inc r m) => mod l inc r m a -> (a -> l inc r m a) -> Outside inc r m (mod l inc r m a)
+modifyAndReturn :: (Typeable a,Input mod l inc r m,Eq a,Layer Outside inc r m) => mod l inc r m a -> (a -> l inc r m a) -> Outside inc r m (mod l inc r m a)
 modifyAndReturn t f = modify t f >> return t
 
 -- * Generics
@@ -197,7 +201,7 @@ instance (Layer Outside inc r m,DeepTypeable inc,MData ctx (Outside inc r m) a,T
 	dataTypeOf ctx x = return ty
 		where ty = mkDataType "Control.Monad.Adapton.Outside" [mkConstr ty "return" [] Prefix]
 
-instance (Sat (ctx (mod l1 inc r m a)),Eq a,MData ctx (l2 inc r m) (l1 inc r m a),Layers l1 l2,Layer l1 inc r m,Layer l2 inc r m,Thunk mod l1 inc r m,DeepTypeable inc,DeepTypeable m,DeepTypeable r,DeepTypeable (mod l1 inc r m a)
+instance (Typeable a,Sat (ctx (mod l1 inc r m a)),Eq a,MData ctx (l2 inc r m) (l1 inc r m a),Layers l1 l2,Layer l1 inc r m,Layer l2 inc r m,Thunk mod l1 inc r m,DeepTypeable inc,DeepTypeable m,DeepTypeable r,DeepTypeable (mod l1 inc r m a)
 		) => MData ctx (l2 inc r m) (mod l1 inc r m a) where
 	gfoldl ctx k z t = z (\mmx -> mmx >>= liftLayer . new) >>= flip k (return $ read t)
 	gunfold ctx k z c = z (\mmx -> mmx >>= liftLayer . new) >>= k
@@ -218,13 +222,13 @@ instance (Sat (ctx (mod l1 inc r m a)),Eq a,MData ctx (l2 inc r m) (l1 inc r m a
 -- * Memoization
 
 -- for evaluation-order reasons related to @gfoldl@ we need to treat layer computations as traversable types, but for correctness of IC we can't memoize them
-instance Memo (Inside incr r m a) where
+instance (Typeable inc,Typeable r,Typeable m,Typeable a) => Memo (Inside inc r m a) where
 	type Key (Inside incr r m a) = Neq
 	{-# INLINE memoKey #-}
 	memoKey m = (MkWeak mkDeadWeak,Neq)
 
 -- for evaluation-order reasons related to @gfoldl@ we need to treat layer computations as traversable types, but for correctness of IC we can't memoize them
-instance Memo (Outside incr r m a) where
+instance (Typeable inc,Typeable r,Typeable m,Typeable a) => Memo (Outside inc r m a) where
 	type Key (Outside incr r m a) = Neq
 	{-# INLINE memoKey #-}
 	memoKey m = (MkWeak mkDeadWeak,Neq)
@@ -237,7 +241,7 @@ data MemoCtx ctx a = MemoCtx {
 	  memoKeyCtx :: Proxy ctx -> a -> (MkWeak,Key a)
 	, keyDynamicCtx :: Proxy ctx -> Proxy a -> Key a -> KeyDynamic
 	, memoCtx :: ctx a
-	}
+	} deriving Typeable
 
 type MemoCtxK ctx a = (Typeable a,Typeable (Key a),Memo a,Sat (ctx a))
 
@@ -250,6 +254,8 @@ instance (MemoCtxK ctx a) => Sat (MemoCtx ctx a) where
 data KeyDynamic where
 	KeyDyn :: (Typeable k,Show k,Eq k,Hashable k) => k -> KeyDynamic
 
+deriving instance Typeable KeyDynamic
+	
 instance Show KeyDynamic where
 	show (KeyDyn k) = show k
 instance Hashable KeyDynamic where
@@ -279,7 +285,7 @@ proxyInside = (Proxy::Proxy Inside)
 proxyOutside = (Proxy::Proxy Outside)
 
 -- | A plain thunk type with sharing but is not mutable nor incrementally updated
-newtype T (l :: * -> (* -> *) -> (* -> *) -> * -> *) inc (r :: * -> *) (m :: * -> *) a = T (r (l inc r m a))
+newtype T (l :: * -> (* -> *) -> (* -> *) -> * -> *) inc (r :: * -> *) (m :: * -> *) a = T (r (l inc r m a)) deriving Typeable
 
 instance (Layer l inc r m) => Thunk T l inc r m where
 	new m = liftM T $ inL $ newRef m
@@ -291,3 +297,10 @@ instance (Layer l inc r m) => Thunk T l inc r m where
 
 proxyIORef = Proxy :: Proxy IORef
 proxyIO = Proxy :: Proxy IO
+
+deriving instance Typeable Strict.Pair
+
+debugM' :: (Layer l inc r m,MonadIO m) => String -> l inc r m a -> l inc r m a
+debugM' str m = do
+	threadid <- inL $ liftIO $ myThreadId
+	debug ("{"++ show threadid ++ "}" ++ str) m

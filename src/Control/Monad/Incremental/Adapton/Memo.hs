@@ -1,4 +1,4 @@
-{-# LANGUAGE UndecidableInstances, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE DeriveDataTypeable, UndecidableInstances, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module Control.Monad.Incremental.Adapton.Memo (
 	memoNonRecU, Memo(..), Hashable(..),MemoMode(..)
@@ -31,21 +31,22 @@ import Data.WithClass.MGenerics.Aliases
 import Data.Strict.Tuple
 import qualified Data.HashTable.IO as HashIO
 import qualified Data.HashTable.ST.Basic as HashST
+import Data.Global.Dynamic
 
 --- * Generic memoization
 
 type GenericQMemoU ctx l inc r m b = GenericQMemo ctx U l inc r m b
 
 -- | An encapsulated generic query
-newtype NewGenericQ ctx m b = NewGenericQ { unNewGenericQ :: GenericQ ctx m b }
+newtype NewGenericQ ctx m b = NewGenericQ { unNewGenericQ :: GenericQ ctx m b } deriving Typeable
 
 type NewGenericQMemo ctx (thunk :: (* -> (* -> *) -> (* -> *) -> * -> *) -> * -> (* -> *) -> (* -> *) -> * -> *) l inc r m b = NewGenericQ (MemoCtx ctx) (l inc r m) (thunk l inc r m b)
 type NewGenericQMemoU ctx l inc r m b = NewGenericQMemo ctx U l inc r m b
 
 -- The Haskell type system is very reluctant to accept this type signature, so we need a newtype to work around it
-gmemoNonRecU :: (MonadRef r m,MonadIO m,Layer Inside inc r m) => MemoMode -> Proxy ctx -> GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b
+gmemoNonRecU :: (Typeable ctx,Typeable b,MonadRef r m,MonadIO m,Layer Inside inc r m) => MemoMode -> Proxy ctx -> GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b
 gmemoNonRecU mode ctx f = unNewGenericQ (newGmemoNonRecU ctx (NewGenericQ f)) where
-	newGmemoNonRecU ctx f = gmemoNonRecU' mode ctx f (unsafePerformIO $ debug "NewTable!!" $ WeakTable.newFor f)
+	newGmemoNonRecU ctx f = gmemoNonRecU' mode ctx f (debug "NewTable!!" $ declareWeakTable f)
 
 -- | memoizes a generic function on values
 gmemoNonRecU' :: (MonadRef r m,MonadIO m,Layer Inside inc r m) => MemoMode -> Proxy ctx -> NewGenericQMemoU ctx Inside inc r m b -> MemoTable (TypeRep,KeyDynamic) (U Inside inc r m b) -> NewGenericQMemoU ctx Inside inc r m b
@@ -59,7 +60,7 @@ gmemoNonRecU' mode ctx (NewGenericQ f) tbl = NewGenericQ $ \arg -> do
 			let thunkWeak = case mode of
 				MemoLinear -> MkWeak (WeakKey.mkWeakRefKey (dataU thunk)) `andMkWeak` mkWeak
 				MemoSuperlinear -> mkWeak
-			inL $ liftIO $ WeakTable.updateWithMkWeak tbl thunkWeak tyk thunk
+			inL $ liftIO $ WeakTable.insertWithMkWeak tbl thunkWeak tyk thunk
 			debug (show tyk ++" => "++show thunk) $ return thunk
 		Just thunk -> debug ("memo hit "++show tyk ++ " " ++ show thunk) $ return thunk
 
@@ -68,9 +69,9 @@ gmemoNonRecU' mode ctx (NewGenericQ f) tbl = NewGenericQ $ \arg -> do
 data MemoMode = MemoLinear -- stores at most as much space as a single run of the program; users have to explicitely retain output thunks for them to remain memoized
 			  | MemoSuperlinear -- stores all previous executions for live inputs; users do not have to explicitely retain output thunks for them to remain memoized
 
-memoNonRecU :: (MonadRef r m,MonadIO m,Memo a,Layer Inside inc r m) => MemoMode -> (a -> Inside inc r m (U Inside inc r m b)) -> a -> Inside inc r m (U Inside inc r m b)
+memoNonRecU :: (Typeable a,Typeable b,MonadRef r m,MonadIO m,Memo a,Layer Inside inc r m) => MemoMode -> (a -> Inside inc r m (U Inside inc r m b)) -> a -> Inside inc r m (U Inside inc r m b)
 memoNonRecU mode f =
-	let tbl = debug "NewTable!!!" $ WeakTable.unsafeNewFor f
+	let tbl = debug "NewTable!!!" $ declareWeakTable f
 	in memoNonRecU' mode f tbl
 
 memoNonRecU' :: (MonadRef r m,MonadIO m,Memo a,Layer Inside inc r m) => MemoMode -> (a -> Inside inc r m (U Inside inc r m b)) -> MemoTable (Key a) (U Inside inc r m b) -> a -> Inside inc r m (U Inside inc r m b)
@@ -84,26 +85,24 @@ memoNonRecU' mode f tbl arg = do
 				let thunkWeak = case mode of
 					MemoLinear -> MkWeak (WeakKey.mkWeakRefKey (dataU thunk)) `andMkWeak` mkWeak
 					MemoSuperlinear -> mkWeak
-				inL $ liftIO $ WeakTable.updateWithMkWeak tbl thunkWeak k thunk
+				inL $ liftIO $ WeakTable.insertWithMkWeak tbl thunkWeak k thunk
 				debug (show k ++" => "++show thunk) $ return thunk
 			Just thunk -> debug ("memoM hit " ++show k ++ " " ++ show thunk) $ return thunk
 
-instance WeakRef r => Memo (M l inc r m a) where
+instance (Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (M l inc r m a) where
 	type Key (M l inc r m a) = Unique
 	{-# INLINE memoKey #-}
 	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataM t),idNM $ metaM t)
                                  
-instance WeakRef r => Memo (U l inc r m a) where
+instance (Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (U l inc r m a) where
 	type Key (U l inc r m a) = Unique
 	{-# INLINE memoKey #-}
 	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataU t),idU t)
 
-instance WeakRef r => Memo (L l inc r m a) where
+instance (Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (L l inc r m a) where
 	type Key (L l inc r m a) = Unique
 	{-# INLINE memoKey #-}
 	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataL t),idNM $ metaL t)
-
-
 
 instance Hashable (U l inc r m a) where
 	hashWithSalt i u = hashWithSalt i (idU u)

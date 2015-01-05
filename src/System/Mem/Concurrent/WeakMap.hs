@@ -1,20 +1,20 @@
-{-# LANGUAGE TypeOperators, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE TupleSections, TypeOperators, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module System.Mem.Concurrent.WeakMap (
-	  WeakMap(..)
+	  WeakMap(..), mfence
 	, new,new'
 --	,newForMkWeak
 --	, newFor
 --	, lookup
 --	, insert,delete
 --	, insertWith, insertWithRefKey
-	, insertWithMkWeak, insertWeak
+	, insertWithMkWeak, insertWeak, mergeWeak
 --	, finalize,
 	, deleteFinalized
 --	, mapM_
 --	, mapMGeneric_,foldM
 	, copyWithKey
-	, unionWithKey, extendWithKey, unionWithKey'
+	, unionWithKey, extendWithKey, unionWithKey', mergeWithKey
 	, atomicModifyWeakMap_
 	, toMap
 	, mapM_,mapM'',purge
@@ -25,6 +25,7 @@ module System.Mem.Concurrent.WeakMap (
 
 import Prelude hiding (lookup,mapM_)
 import qualified Prelude
+import Control.Exception
 
 import Data.Atomics
 import System.Mem.Weak (Weak(..))
@@ -54,8 +55,10 @@ import Debug
 newtype WeakMap k v = WeakMap (WeakMap' k v :!: Weak (WeakMap' k v))
 type WeakMap' k v = IORef (Map k (Weak v))
 
+mfence = storeLoadBarrier >> loadLoadBarrier >> writeBarrier
+
 toMap :: MonadIO m => WeakMap k v -> m (Map k (Weak v))
-toMap (WeakMap (tbl :!: _)) = liftIO $ readIORef tbl
+toMap (WeakMap (tbl :!: _)) = liftIO $ mfence >> readIORef tbl
 
 {-# NOINLINE new #-}
 new :: (Eq k,Hashable k) => IO (WeakMap k v)
@@ -96,8 +99,19 @@ finalize w_tbl@(WeakMap (_ :!: weak_tbl)) = do
 
 table_finalizer :: (Eq k,Hashable k) => WeakMap' k v -> IO ()
 table_finalizer tbl = do
-	pairs <- readIORef tbl
+	pairs <- mfence >> readIORef tbl
 	Foldable.mapM_ Weak.finalize pairs
+
+finalizeEntry :: Ord k => WeakMap k v -> k -> IO ()
+finalizeEntry (WeakMap (_ :!: weak_tbl)) k = do
+	mb <- Weak.deRefWeak weak_tbl
+	case mb of
+		Nothing -> return ()
+		Just weak_tbl' -> do
+			tbl <- mfence >> readIORef weak_tbl'
+			case Map.lookup k tbl of
+				Nothing -> return ()
+				Just w -> Weak.finalize w
 
 --{-# INLINE insert #-}
 --insert :: (Eq k,Hashable k) => WeakMap k v -> k -> v -> IO ()
@@ -112,6 +126,7 @@ table_finalizer tbl = do
 insertWithMkWeak :: (Ord k,Hashable k) => WeakMap k v -> MkWeak -> k -> v -> IO ()
 insertWithMkWeak w_tbl@(WeakMap (tbl :!: _)) (MkWeak mkWeak) k v = do
 	weak <- mkWeak v $ Just $ deleteFinalized w_tbl k
+	finalizeEntry w_tbl k
 	atomicModifyWeakMap'CAS_ tbl (return . Map.insert k weak)
 	
 {-# INLINE insertWeak #-}
@@ -120,22 +135,27 @@ insertWeak (WeakMap (tbl :!: _)) k weak = liftIO $ atomicModifyWeakMap'CAS_ tbl 
 
 -- non-overlapping union
 extendWeak :: (Ord k,Hashable k,MonadIO m) => WeakMap k v -> k -> Weak v -> m ()
-extendWeak (WeakMap (tbl :!: _)) k weak = liftIO $ atomicModifyWeakMap'CAS_ tbl $ \m -> do
+extendWeak = mergeWeak (\_ _ -> return False)
+
+-- non-overlapping union
+mergeWeak :: (Ord k,Hashable k,MonadIO m) => (v -> v -> m Bool) -> WeakMap k v -> k -> Weak v -> m ()
+mergeWeak doOverwrite (WeakMap (tbl :!: _)) k weak = atomicModifyWeakMap'CAS_ tbl $ \m -> do
 	case Map.lookup k m of
 		Nothing -> do
 			return $ Map.insert k weak m
 		Just w -> do
-			mb <- Weak.deRefWeak w
+			mb <- liftIO $ Weak.deRefWeak w
 			case mb of
 				Nothing -> return $ Map.insert k weak m
-				otherwise -> return m
-	
---
----- | @insertWith@ that uses a reference as key
---insertWithRefKey :: (Eq k,Hashable k,WeakRef r) => WeakMap k v -> r a -> k -> v -> IO ()
---insertWithRefKey w_tbl@(WeakMap (tbl :!: weak_tbl)) a k v = do
---	weak <- WeakKey.mkWeakRefKey a v $ Just $ finalizeEntry' weak_tbl k
---	CMap.insert k weak tbl
+				Just oldv -> do
+					mb <- liftIO $ Weak.deRefWeak weak
+					case mb of
+						Nothing -> return m
+						Just newv -> do
+							b <- doOverwrite oldv newv
+							if b
+								then return $ Map.insert k weak m
+								else return m
 
 -- only deletes the entry if it is already dead
 deleteFinalized :: (Ord k,Hashable k) => WeakMap k v -> k -> IO ()
@@ -194,7 +214,7 @@ deleteFinalized (WeakMap (_ :!: weak_tbl)) = finalizeEntry' weak_tbl where
 --
 copyWithKey :: (Ord k,Hashable k,MonadIO m) => (v -> MkWeak) -> WeakMap k v -> m (WeakMap k v)
 copyWithKey getKey (WeakMap (tbl :!: weak_tbl)) = do
-	xs <- liftM Map.toList $ liftIO $ readIORef tbl
+	xs <- liftM Map.toList $ liftIO $ mfence >> readIORef tbl
 	tbl' <- liftIO $ newIORef Map.empty
 	weak_tbl' <- liftIO $ mkWeakKey tbl' tbl' $ Just $ return () -- the copy has no finalization, because if the copy dies we don't want it to kill the weak pointers of the original set
 	let weaktbl' = WeakMap (tbl' :!: weak_tbl')
@@ -242,31 +262,22 @@ unionWithKey' wmap m@(WeakMap (tbl :!: _)) = do
 	liftIO $ Foldable.mapM_ addFinalizers xs
 
 extendWithKey :: (Ord k,Hashable k,MonadIO m) => (v -> MkWeak) -> WeakMap k v -> WeakMap k v -> m ()
-extendWithKey getKey wmap m@(WeakMap (tbl :!: _)) = do
+extendWithKey = mergeWithKey (\_ _ -> return False)
+
+mergeWithKey :: (Ord k,Hashable k,MonadIO m) => (v -> v -> m Bool) -> (v -> MkWeak) -> WeakMap k v -> WeakMap k v -> m ()
+mergeWithKey merge getKey wmap m@(WeakMap (tbl :!: _)) = do
 	xs <- liftM Map.toList $ liftIO $ readIORef tbl
 	
 	let addFinalizers (k,w) = do
-		mb <- Weak.deRefWeak w
+		mb <- liftIO $ Weak.deRefWeak w
 		case mb of
 			Nothing -> return ()
 			Just x -> do
 				let MkWeak mkWeak = getKey x
-				mkWeak () (Just $ deleteFinalized wmap k)
-				extendWeak wmap k w
+				liftIO $ mkWeak () (Just $ deleteFinalized wmap k)
+				mergeWeak merge wmap k w
 	
-	liftIO $ Foldable.mapM_ addFinalizers xs
-
--- not that this is highly unsafe to use in general, since the side-effects are not revocable
-atomicModifyWeakMap'CAS_ :: WeakMap' k v -> (Map k (Weak v) -> IO (Map k (Weak v))) -> IO ()
-atomicModifyWeakMap'CAS_ tbl f = readForCAS tbl >>= loop
-	where
-	loop tick = do
-		v' <- f (peekTicket tick)
-		(success,tick') <- casIORef tbl tick $ v' `seq` v'
-		if success then return () else loop tick'
-
-atomicModifyWeakMap_ :: MonadIO m => WeakMap k v -> (Map k (Weak v) -> Map k (Weak v)) -> m ()
-atomicModifyWeakMap_ (WeakMap (tbl :!: _)) f = liftIO $ atomicModifyIORef' tbl (\x -> (f x,()))
+	Foldable.mapM_ addFinalizers xs
 
 purge :: (Ord k,Hashable k) => WeakMap k v -> IO ()
 purge (WeakMap (_ :!: w_map)) = purgeWeak w_map where
@@ -286,8 +297,25 @@ purge (WeakMap (_ :!: w_map)) = purgeWeak w_map where
 
 {-# INLINE mapM'' #-}
 mapM'' :: Monad m => (forall x . IO x -> m x) -> (Weak v -> m a) -> WeakMap k v -> m [a]
-mapM'' liftIO f (WeakMap (tbl :!: _)) = liftIO (readIORef tbl) >>= Control.Monad.mapM f . Map.elems
+mapM'' liftIO f (WeakMap (tbl :!: _)) = liftIO (mfence >> readIORef tbl) >>= Control.Monad.mapM f . Map.elems
 
+-- not that this is highly unsafe to use in general, since the side-effects are not revocable
+atomicModifyWeakMap'CAS_ :: MonadIO m => WeakMap' k v -> (Map k (Weak v) -> m (Map k (Weak v))) -> m ()
+atomicModifyWeakMap'CAS_ tbl f = liftIO (readForCAS tbl) >>= loop
+	where
+	loop tick = do
+		v' <- f (peekTicket tick)
+		(success,tick') <- liftIO $ casIORef tbl tick $ v' `seq` v'
+		if success then return () else loop tick'
+
+atomicModifyWeakMap_ :: MonadIO m => WeakMap k v -> (Map k (Weak v) -> Map k (Weak v)) -> m ()
+atomicModifyWeakMap_ (WeakMap (tbl :!: _)) f = liftIO $ atomicModifyIORef' tbl ((,()) . f)
+--atomicModifyWeakMap_ (WeakMap (tbl :!: _)) f = liftIO $ readForCAS tbl >>= loop
+--	where
+--	loop tick = do
+--		v' <- evaluate $ f $ peekTicket tick
+--		(success,tick') <- casIORef tbl tick $ v' `seq` v'
+--		if success then return () else loop tick'
 
 
 

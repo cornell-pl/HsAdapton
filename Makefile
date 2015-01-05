@@ -2,7 +2,10 @@ ex:
 	ghc --make -O3 exadapton.hs -fforce-recomp -isrc
 	./exadapton --output exadapton.html
 tx:
-	ghc --make -O3 txadapton.hs -fforce-recomp -isrc
+	ghc --make -O3 -threaded txadapton.hs -fforce-recomp -isrc
+	./txadapton --output txadapton.html
+txfast:
+	ghc --make -O0 -threaded txadapton.hs -fforce-recomp -isrc
 	./txadapton --output txadapton.html
 tx1:
 	ghc --make -O txadapton.hs -fforce-recomp -isrc
