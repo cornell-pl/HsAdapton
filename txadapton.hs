@@ -328,7 +328,7 @@ customer_thread warehouse leastItem customer = do
 main = main_Customers
 main_Customers = {-flip Exception.finally (mergePDFsInto' "tx.pdf") $ -}do
 	let numItems = 10^3
-	let numCustomers = 2
+	let numCustomers = 5
 	
 	hSetBuffering stdout NoBuffering
 	

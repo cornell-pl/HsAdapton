@@ -576,8 +576,7 @@ catchTx (stm :: Outside TxAdapton r m a) h = stm `Catch.catches` [Catch.Handler 
 	catchInvalid (e::InvalidTx r m) = throwM e
 	catchRetry (e::BlockedOnRetry) = throwM e
 	catchSome (e::SomeException) = do
-		-- in case the computation raises an exception, discard all its visible (write) effects
-		readTxLog >>= inL . unbufferTxLogs True
+		validateCatchTx "catchTx"
 		h $ fromJust $ fromException e
 
 atomicallyTx :: (Typeable r,Typeable m,TxLayer Outside r m) => String -> Outside TxAdapton r m a -> m a
@@ -739,6 +738,21 @@ validateAndCommitNestedTx msg mbException = atomicTx ("validateAndCommitNestedTx
 					inL $ liftIO $ updateRunningTx starttime newtime
 					-- re-start from the top
 					throwM $ InvalidTx (newtime,inL (flattenTxLogs txlogs >>= unbufferTxLog True) >> conflicts)
+
+validateCatchTx :: (Typeable r,Typeable m,TxLayer Outside r m) => String -> Outside TxAdapton r m ()
+validateCatchTx msg = atomicTx ("validateAndCommitCatchTx "++msg) $ do
+	txenv@(timeref :!: callstack :!: txlogs) <- Reader.ask
+	starttime <- inL $ readRef timeref
+	mbsuccess <- inL $ validateTxs starttime txlogs
+	case mbsuccess of
+		Nothing -> do
+			-- in case the computation raises an exception, discard all its visible (write) effects
+			inL $ unbufferTxLogs True txlogs
+		Just (newtime,conflicts) -> do
+			-- delete the running tx; it will get a new timestamp once it is retried
+			inL $ liftIO $ updateRunningTx starttime newtime
+			-- re-start from the top
+			throwM $ InvalidTx (newtime,inL (flattenTxLogs txlogs >>= unbufferTxLog True) >> conflicts)
 
 -- validates a transaction and places it into the waiting queue for retrying
 validateAndRetryTopTx :: (Typeable r,Typeable m,TxLayer Outside r m) => String -> Outside TxAdapton r m (Either Lock (TxRepair r m))

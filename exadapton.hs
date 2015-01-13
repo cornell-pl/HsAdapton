@@ -63,18 +63,18 @@ import Control.Monad.Incremental.Tree
 
 -- creates an input list from a regular list
 toListRefInside :: (
-	Eq a,Eq (ListMod mod Inside inc r m a),Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
+	Typeable a,Eq a,Eq (ListMod mod Inside inc r m a),Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
 toListRefInside xs = inside $ toListRef xs
 
 toListRef :: (
-	Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
+	Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
 toListRef [] = ref NilMod
 toListRef (x:xs) = do
 	mxs <- toListRef xs
 	ref (ConsMod x mxs)
 
 toTreeRef :: (
-	Eq a,Eq (TreeMod mod l inc r m a),Input mod l inc r m) => Tree a -> l inc r m (TreeMod mod l inc r m a)
+	Typeable a,Eq a,Eq (TreeMod mod l inc r m a),Input mod l inc r m) => Tree a -> l inc r m (TreeMod mod l inc r m a)
 toTreeRef Empty = ref EmptyMod
 toTreeRef (Bin x l r) = do
 	ml <- toTreeRef l
@@ -82,43 +82,43 @@ toTreeRef (Bin x l r) = do
 	ref (BinMod x ml mr)
 	
 toListModInside :: (
-	Eq a,Eq (ListMod mod Inside inc r m a),Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
+	Typeable a,Eq a,Eq (ListMod mod Inside inc r m a),Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
 toListModInside xs = inside $ toListMod xs
 
 toListMod :: (
-	Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
+	Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
 toListMod [] = ref NilMod
 toListMod (x:xs) = mod $ do
 	mxs <- toListMod xs
 	return $ ConsMod x mxs
 
-modifyListModAt :: (Eq a,Eq (ListMod mod l inc r m a),Layer Outside inc r m,Input mod l inc r m)
+modifyListModAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Layer Outside inc r m,Input mod l inc r m)
 	=> ListMod mod l inc r m a -> Int -> (ListMod' mod l inc r m a -> l inc r m (ListMod' mod l inc r m a)) -> Outside inc r m ()
 modifyListModAt mxs 0 f = modify mxs f
 modifyListModAt mxs i f = getOutside mxs >>= \xs -> case xs of
 	ConsMod x mxs -> modifyListModAt mxs (pred i) f
 	NilMod -> error "position not found"
 
-setListModAt :: (Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
+setListModAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
 	=> ListMod mod l inc r m a -> Int -> (ListMod' mod l inc r m a -> Outside inc r m (ListMod' mod l inc r m a)) -> Outside inc r m ()
 setListModAt mxs 0 f = getOutside mxs >>= f >>= set mxs
 setListModAt mxs i f = getOutside mxs >>= \xs -> case xs of
 	ConsMod x mxs -> setListModAt mxs (pred i) f
 	NilMod -> error "position not found"
 
-setListModHeadAt :: (Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
+setListModHeadAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
 	=> ListMod mod l inc r m a -> Int -> a -> Outside inc r m ()
 setListModHeadAt mxs i x' = setListModAt mxs i $ \xs -> case xs of
 	ConsMod x mxs -> return $ ConsMod x' mxs
 	NilMod -> return NilMod
 
-deleteListModAt :: (Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> ListMod mod l inc r m a -> Outside inc r m ()
+deleteListModAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> ListMod mod l inc r m a -> Outside inc r m ()
 deleteListModAt i mxs = setListModAt mxs i $ \xs -> case xs of
 	ConsMod x mxs' -> getOutside mxs'
 	NilMod -> error "shouldn't be empty"
 
 insertListModAt :: (
-	Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> a -> ListMod mod l inc r m a -> Outside inc r m ()
+	Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> a -> ListMod mod l inc r m a -> Outside inc r m ()
 insertListModAt i x mxs = setListModAt mxs i $ \xs -> do
 	mxs' <- refOutside xs
 	return $ ConsMod x mxs'

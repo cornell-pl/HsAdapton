@@ -2,6 +2,7 @@
 
 module Control.Monad.Incremental.Tree where
 
+import System.Mem.WeakTable
 import Data.WithClass.MData
 import Control.Monad.Incremental
 import Data.Proxy
@@ -92,13 +93,13 @@ instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepTy
       dataTypeOf ctx x = return ty where
             ty = mkDataType "Todo.TreeMod'" [mkConstr ty "EmptyMod" [] Prefix,mkConstr ty "BinMod" [] Prefix]
 
-instance Memo (TreeMod' mod l inc r m a) where
+instance (Typeable mod,Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a) => Memo (TreeMod' mod l inc r m a) where
 	type Key (TreeMod' mod l inc r m a) = StableName (TreeMod' mod l inc r m a)
 	{-# INLINE memoKey #-}
 	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
 
 -- | tree fold
-foldTreeInc :: (Thunk mod l inc r m,Eq a,Memo (mod l inc r m (TreeMod' mod l inc r m a)),Output thunk l inc r m,Eq (TreeMod mod l inc r m a),Layer l inc r m) => a -> (a -> a -> l inc r m a) -> TreeMod mod l inc r m a -> l inc r m (thunk l inc r m a)
+foldTreeInc :: (Typeable a,Thunk mod l inc r m,Eq a,Memo (mod l inc r m (TreeMod' mod l inc r m a)),Output thunk l inc r m,Eq (TreeMod mod l inc r m a),Layer l inc r m) => a -> (a -> a -> l inc r m a) -> TreeMod mod l inc r m a -> l inc r m (thunk l inc r m a)
 foldTreeInc z f = memo $ \recur mt -> read mt >>= \t -> case t of
 	EmptyMod -> return z
 	BinMod x ml mr -> do

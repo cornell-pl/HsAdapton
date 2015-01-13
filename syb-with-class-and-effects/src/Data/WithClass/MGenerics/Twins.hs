@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -cpp                  #-}
-{-# LANGUAGE RankNTypes               #-}
+{-# LANGUAGE ScopedTypeVariables, ImpredicativeTypes, RankNTypes               #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -18,24 +18,24 @@
 --
 -----------------------------------------------------------------------------
 
-module Data.MGenerics.Twins (
+module Data.WithClass.MGenerics.Twins (
 
         -- * Generic folds and maps that also accumulate
---        gfoldlAccum,
+        gfoldlAccum,
 --        gmapAccumT,
 --        gmapAccumM,
 --        gmapAccumQl,
---        gmapAccumQr,
---        gmapAccumQ,
+        gmapAccumQr,
+        gmapAccumQ,
 --        gmapAccumA,
 
         -- * Mapping combinators for twin traversal
 --        gzipWithT,
 --        gzipWithM,
---        gzipWithQ,
+        gzipWithQ,
 
         -- * Typical twin traversals
---        geq,
+        geq,
 --        gzip
 
   ) where
@@ -43,11 +43,13 @@ module Data.MGenerics.Twins (
 
 ------------------------------------------------------------------------------
 
+import Control.Monad
+
 #ifdef __HADDOCK__
 import Prelude
 #endif
-import Data.MData
-import Data.MGenerics.Aliases
+import Data.WithClass.MData
+import Data.WithClass.MGenerics.Aliases
 
 #ifdef __GLASGOW_HASKELL__
 import Prelude hiding ( GT )
@@ -81,21 +83,20 @@ Applying the same scheme we obtain an accumulating gfoldl.
 
 -- | gfoldl with accumulation
 
---gfoldlAccum :: Data d
---            => (forall e r. Data e => a -> c (e -> r) -> e -> (a, c r))
---            -> (forall g. a -> g -> (a, c g))
---            -> a -> d -> (a, c d)
---
---gfoldlAccum k z a0 d = unA (gfoldl k' z' d) a0
--- where
---  k' c y = A (\a -> let (a', c') = unA c a in k a' c' y)
---  z' f   = A (\a -> z a f)
---
---
----- | A type constructor for accumulation
---newtype A a c d = A { unA :: a -> (a, c d) }
---
---
+gfoldlAccum :: MData ctx m d
+            => Proxy ctx -> (forall e r. MData ctx m e => a -> c (m e -> m r) -> m e -> m (a, c r))
+            -> (forall g. a -> g -> m (a, c g))
+            -> a -> d -> m (a, c d)
+
+gfoldlAccum ctx k z a0 d = do { a <- gfoldl ctx k' z' d; unA a a0 }
+	where
+	k' c y = return $ A $ \a -> do { (a', c') <- unA c a; k a' c' y }
+	z' f   = return $ A $ \a -> z a f
+
+-- | A type constructor for accumulation
+newtype A a c m d = A { unA :: a -> m (a, c d) }
+
+
 ---- | gmapT with accumulation
 --gmapAccumT :: Data d
 --           => (forall e. Data e => a -> e -> (a,e))
@@ -147,30 +148,31 @@ Applying the same scheme we obtain an accumulating gfoldl.
 --  k a (CONST c) d = let (a', r) = f a d
 --                     in (a', CONST (c `o` r))
 --  z a _ = (a, CONST r0)
---
---
----- | gmapQr with accumulation
---gmapAccumQr :: Data d
---            => (r' -> r -> r)
---            -> r
---            -> (forall e. Data e => a -> e -> (a,r'))
---            -> a -> d -> (a, r)
---gmapAccumQr o r0 f a0 d0 = let (a1, l) = gfoldlAccum k z a0 d0
---                           in (a1, unQr l r0)
--- where
---  k a (Qr c) d = let (a',r') = f a d
---                  in (a', Qr (\r -> c (r' `o` r)))
---  z a _ = (a, Qr id)
---
---
----- | gmapQ with accumulation
---gmapAccumQ :: Data d
---           => (forall e. Data e => a -> e -> (a,q))
---           -> a -> d -> (a, [q])
---gmapAccumQ f = gmapAccumQr (:) [] f
---
---
---
+
+-- | gmapQr with accumulation
+gmapAccumQr :: MData ctx m d
+            => Proxy ctx -> (r' -> r -> m r)
+            -> r
+            -> (forall e. MData ctx m e => a -> e -> m (a,r'))
+            -> a -> d -> m (a,r)
+gmapAccumQr ctx o r0 f a0 d0 = do
+		(a1,l) <- gfoldlAccum ctx k z a0 d0
+		r1 <- unQr l r0
+		return (a1,r1)
+	where
+	k a (Qr c) d = do
+		(a',r') <- f a =<< d
+		return (a', Qr (\r -> c =<< (r' `o` r)))
+	z a _ = return (a, Qr return)
+
+-- | gmapQ with accumulation
+gmapAccumQ :: MData ctx m d
+           => Proxy ctx -> (forall e. MData ctx m e => a -> e -> m (a,q))
+           -> a -> d -> m (a, [q])
+gmapAccumQ ctx f = gmapAccumQr ctx (\x xs -> return $ x:xs) [] f
+
+
+
 --------------------------------------------------------------------------------
 ----
 ----      Helper type constructors
@@ -184,13 +186,13 @@ Applying the same scheme we obtain an accumulating gfoldl.
 --
 ---- | The constant type constructor needed for the definition of gmapAccumQl
 --newtype CONST c a = CONST { unCONST :: c }
---
---
----- | The type constructor needed for the definition of gmapAccumQr
---newtype Qr r a = Qr { unQr  :: r -> r }
---
---
---
+
+
+-- | The type constructor needed for the definition of gmapAccumQr
+newtype Qr r m a = Qr { unQr  :: r -> m r }
+
+
+
 --------------------------------------------------------------------------------
 ----
 ----      Mapping combinators for twin traversal
@@ -218,49 +220,61 @@ Applying the same scheme we obtain an accumulating gfoldl.
 --  perkid a d = (tail a, unGM (head a) d)
 --  funs = gmapQ (\k -> GM (f k)) x
 --
+
+-- | Twin map for queries
+gzipWithQ :: Proxy ctx -> GenericQ ctx m (GenericQ' ctx m r) -> GenericQ ctx m (GenericQ' ctx m [r])
+gzipWithQ ctx f = aux1 ctx f
+	where
+	perkid :: MData ctx m e => Proxy ctx -> [GenericQ' ctx m r] -> e -> m ([GenericQ' ctx m r],r)
+	perkid ctx a d = unGQ (head a) d >>= \r -> return (tail a,r)
+	
+	aux1 :: Proxy ctx -> GenericQ ctx m (GenericQ' ctx m r) -> GenericQ ctx m (GenericQ' ctx m [r])
+	aux1 ctx f x = do
+		funs <- gmapQ ctx f x
+		return $ aux2 ctx funs
+	
+	aux2 :: Proxy ctx -> [GenericQ' ctx m r] -> GenericQ' ctx m [r]
+	aux2 ctx funs = GQ $ \y -> do
+		res <- gmapAccumQ ctx (perkid ctx) funs y
+		case res of
+			([], r) -> return r
+			_       -> fail "gzipWithQ"
+
+------------------------------------------------------------------------------
 --
----- | Twin map for queries
---gzipWithQ :: GenericQ (GenericQ r) -> GenericQ (GenericQ [r])
---gzipWithQ f x y = case gmapAccumQ perkid funs y of
---                   ([], r) -> r
---                   _       -> error "gzipWithQ"
--- where
---  perkid a d = (tail a, unGQ (head a) d)
---  funs = gmapQ (\k -> GQ (f k)) x
+--      Typical twin traversals
 --
---
---
---------------------------------------------------------------------------------
-----
-----      Typical twin traversals
-----
---------------------------------------------------------------------------------
---
----- | Generic equality: an alternative to \"deriving Eq\"
---geq :: Data a => a -> a -> Bool
---
---{-
---
---Testing for equality of two terms goes like this. Firstly, we
---establish the equality of the two top-level datatype
---constructors. Secondly, we use a twin gmap combinator, namely tgmapQ,
---to compare the two lists of immediate subterms.
---
---(Note for the experts: the type of the worker geq' is rather general
---but precision is recovered via the restrictive type of the top-level
---operation geq. The imprecision of geq' is caused by the type system's
---unability to express the type equivalence for the corresponding
---couples of immediate subterms from the two given input terms.)
---
----}
---
---geq x0 y0 = geq' x0 y0
---  where
---    geq' :: GenericQ (GenericQ Bool)
---    geq' x y =     (toConstr x == toConstr y)
---                && and (gzipWithQ geq' x y)
---
---
+------------------------------------------------------------------------------
+
+-- | Generic equality: an alternative to \"deriving Eq\"
+geq :: MData ctx m a => Proxy ctx -> a -> a -> m Bool
+
+{-
+
+Testing for equality of two terms goes like this. Firstly, we
+establish the equality of the two top-level datatype
+constructors. Secondly, we use a twin gmap combinator, namely tgmapQ,
+to compare the two lists of immediate subterms.
+
+(Note for the experts: the type of the worker geq' is rather general
+but precision is recovered via the restrictive type of the top-level
+operation geq. The imprecision of geq' is caused by the type system's
+unability to express the type equivalence for the corresponding
+couples of immediate subterms from the two given input terms.)
+
+-}
+
+geq ctx x0 y0 = do { GQ q <- geq' ctx x0; q y0 }
+	where
+	geq' :: Proxy ctx -> GenericQ ctx m (GenericQ' ctx m Bool)
+	geq' ctx x = do
+		xConstr <- toConstr ctx x
+		return $ GQ $ \y -> do
+			yConstr <- toConstr ctx y
+			GQ q <- gzipWithQ ctx (geq' ctx) x
+			bs <- q y
+			return $ (xConstr == yConstr) && (and bs)
+
 ---- | Generic zip controlled by a function with type-specific branches
 --gzip :: GenericQ (GenericM Maybe) -> GenericQ (GenericM Maybe)
 ---- See testsuite/.../Generics/gzip.hs for an illustration

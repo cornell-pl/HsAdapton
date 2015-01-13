@@ -39,7 +39,7 @@ module Data.WithClass.MGenerics.Aliases (
 --        Generic,
 --        Generic'(..),
 --        GenericT'(..),
---        GenericQ'(..),
+        GenericQ'(..),
 --        GenericM'(..),
 
         -- * Ingredients of generic functions
@@ -280,7 +280,7 @@ type GenericB ctx m = forall a. MData ctx m a => m a
 --
 ---- | Other first-class polymorphic wrappers
 --newtype GenericT'   = GT { unGT :: forall a. Data a => a -> a }
---newtype GenericQ' r = GQ { unGQ :: GenericQ r }
+newtype GenericQ' ctx m r = GQ { unGQ :: GenericQ ctx m r }
 --newtype GenericM' m = GM { unGM :: forall a. Data a => a -> m a }
 
 

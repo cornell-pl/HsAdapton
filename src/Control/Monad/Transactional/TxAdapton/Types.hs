@@ -295,7 +295,7 @@ lockTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = lck
 
 -- a wait queue of tx locks and environments
 -- it does not need to be thread-safe, because we only push and pop elements inside validation/commit phases
-type WaitQueue = Deque Nonthreadsafe Nonthreadsafe SingleEnd SingleEnd Grow Safe Lock
+type WaitQueue = Deque Threadsafe Threadsafe SingleEnd SingleEnd Grow Safe Lock
 
 -- | registers a new wait on modifications of a node when a lock is provided
 enqueueWait :: MonadIO m => Lock -> TxNodeMeta r m -> m ()
@@ -506,14 +506,12 @@ copyTxUData dta@(TxValue dirty value force dependencies) = do
 	return buff_dta
 copyTxUData dta = newRef (dta,Nothing)
 
---{-# INLINE coerce #-}
---coerce :: a -> b
---coerce x = Unsafe.unsafeCoerce x
-
+{-# INLINE coerce #-}
 coerce :: (Typeable a,Typeable b) => a -> b
-coerce x = case cast x of
-	Nothing -> error "failed coerce"
-	Just y -> y
+coerce = Unsafe.unsafeCoerce
+--coerce x = case cast x of
+--	Nothing -> error "failed coerce"
+--	Just y -> y
 
 -- finds a buffered entry in any depth of a nested tx log
 findTxLogEntry :: TxLogs r m -> Unique -> IO (Maybe (DynTxVar r m))

@@ -5,7 +5,7 @@ module System.Mem.Concurrent.WeakMap (
 	, new,new'
 --	,newForMkWeak
 --	, newFor
---	, lookup
+	, lookup
 --	, insert,delete
 --	, insertWith, insertWithRefKey
 	, insertWithMkWeak, insertWeak, mergeWeak
@@ -55,7 +55,7 @@ import Debug
 newtype WeakMap k v = WeakMap (WeakMap' k v :!: Weak (WeakMap' k v))
 type WeakMap' k v = IORef (Map k (Weak v))
 
-mfence = storeLoadBarrier >> loadLoadBarrier >> writeBarrier
+mfence = return () --storeLoadBarrier >> loadLoadBarrier >> writeBarrier
 
 toMap :: MonadIO m => WeakMap k v -> m (Map k (Weak v))
 toMap (WeakMap (tbl :!: _)) = liftIO $ mfence >> readIORef tbl
@@ -173,13 +173,14 @@ deleteFinalized (WeakMap (_ :!: weak_tbl)) = finalizeEntry' weak_tbl where
 							Nothing -> return $ Map.delete k m
 							Just x -> return m
 
---lookup :: (Eq k,Hashable k) => WeakMap k v -> k -> IO (Maybe v)
---lookup (WeakMap (tbl :!: weak_tbl)) k = do
---	w <- CMap.lookup k tbl
---	case w of
---		Nothing -> return Nothing
---		Just r -> Weak.deRefWeak r
---
+lookup :: (Ord k,Hashable k,MonadIO m) => WeakMap k v -> k -> m (Maybe v)
+lookup (WeakMap (tbl :!: weak_tbl)) k = liftIO $ do
+	xs <- readIORef tbl
+	let mb = Map.lookup k xs
+	case mb of
+		Nothing -> return Nothing
+		Just w -> Weak.deRefWeak w
+
 --delete :: (Eq k,Hashable k) => WeakMap k v -> k -> IO ()
 --delete (WeakMap (tbl :!: _)) k = do
 --	tick <- readForCAS

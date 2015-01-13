@@ -34,6 +34,7 @@ Library {
                           Data.WithClass.MGenerics.Instances
                           Data.WithClass.MGenerics.Schemes
                           Data.WithClass.MGenerics.Text
+                          Data.WithClass.MGenerics.Twins
                           Data.DeepTypeable
 
   extensions:             CPP, RankNTypes, ScopedTypeVariables
