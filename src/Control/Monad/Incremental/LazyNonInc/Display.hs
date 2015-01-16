@@ -18,27 +18,27 @@ import Control.Monad.Trans
 -- * Display
 
 instance (Typeable a,MonadLazy (Outside inc r m),Eq a,Display Outside inc r m a,Output LazyNonIncU l inc r m) => Display Outside inc r m (LazyNonIncU l inc r m a) where
-	displaysPrec m rest = forceOutside m >>= \x -> lazily $ displaysPrec x rest
+	displaysPrec proxyL proxyInc proxyR proxyM m rest = forceOutside m >>= \x -> lazily $ displaysPrec proxyL proxyInc proxyR proxyM x rest
 	{-# INLINE displaysPrec #-}
 
 instance (Typeable a,MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,Output LazyNonIncU Inside inc r m) => Display Inside inc r m (LazyNonIncU Inside inc r m a) where
-	displaysPrec m rest = force m >>= \x -> lazily $ displaysPrec x rest
+	displaysPrec proxyL proxyInc proxyR proxyM m rest = force m >>= \x -> lazily $ displaysPrec proxyL proxyInc proxyR proxyM x rest
 	{-# INLINE displaysPrec #-}
 
 instance (Typeable a,MonadLazy (Outside inc r m),Eq a,Display Outside inc r m a,Input LazyNonIncL l inc r m) => Display Outside inc r m (LazyNonIncL l inc r m a) where
-	displaysPrec m rest = getOutside m >>= \x -> lazily $ displaysPrec x rest
+	displaysPrec proxyL proxyInc proxyR proxyM m rest = getOutside m >>= \x -> lazily $ displaysPrec proxyL proxyInc proxyR proxyM x rest
 	{-# INLINE displaysPrec #-}
 
 instance (Typeable a,MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,Input LazyNonIncL Inside inc r m) => Display Inside inc r m (LazyNonIncL Inside inc r m a) where
-	displaysPrec m rest = get m >>= \x -> lazily $ displaysPrec x rest
+	displaysPrec proxyL proxyInc proxyR proxyM m rest = get m >>= \x -> lazily $ displaysPrec proxyL proxyInc proxyR proxyM x rest
 	{-# INLINE displaysPrec #-}
 
 instance (Typeable a,MonadLazy (Outside inc r m),Eq a,Display Outside inc r m a,Input LazyNonIncM l inc r m) => Display Outside inc r m (LazyNonIncM l inc r m a) where
-	displaysPrec m rest = getOutside m >>= \x -> lazily $ displaysPrec x rest
+	displaysPrec proxyL proxyInc proxyR proxyM m rest = getOutside m >>= \x -> lazily $ displaysPrec proxyL proxyInc proxyR proxyM x rest
 	{-# INLINE displaysPrec #-}
 
 instance (Typeable a,MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,Input LazyNonIncM Inside inc r m) => Display Inside inc r m (LazyNonIncM Inside inc r m a) where
-	displaysPrec m rest = get m >>= \x -> lazily $ displaysPrec x rest
+	displaysPrec proxyL proxyInc proxyR proxyM m rest = get m >>= \x -> lazily $ displaysPrec proxyL proxyInc proxyR proxyM x rest
 	{-# INLINE displaysPrec #-}
 
 -- * Serialize
@@ -71,27 +71,27 @@ instance (Typeable a,MonadLazy (Inside inc r m),Eq a,Display Inside inc r m a,In
 -- * NFDataInc
 
 instance (Typeable a,Eq a,NFDataInc Outside inc r m a,Output LazyNonIncU l inc r m) => NFDataInc Outside inc r m (LazyNonIncU l inc r m a) where
-	rnfInc m = forceOutside m >>= rnfInc
+	rnfInc proxyL proxyInc proxyR proxyM m = forceOutside m >>= rnfInc proxyL proxyInc proxyR proxyM
 	{-# INLINE rnfInc #-}
 
 instance (Typeable a,Eq a,NFDataInc Inside inc r m a,Output LazyNonIncU Inside inc r m) => NFDataInc Inside inc r m (LazyNonIncU Inside inc r m a) where
-	rnfInc m = force m >>= rnfInc
+	rnfInc proxyL proxyInc proxyR proxyM m = force m >>= rnfInc proxyL proxyInc proxyR proxyM
 	{-# INLINE rnfInc #-}
 
 instance (Typeable a,Eq a,NFDataInc Outside inc r m a,Input LazyNonIncL l inc r m) => NFDataInc Outside inc r m (LazyNonIncL l inc r m a) where
-	rnfInc m = getOutside m >>= rnfInc
+	rnfInc proxyL proxyInc proxyR proxyM m = getOutside m >>= rnfInc proxyL proxyInc proxyR proxyM
 	{-# INLINE rnfInc #-}
 
 instance (Typeable a,Eq a,NFDataInc Inside inc r m a,Input LazyNonIncL Inside inc r m) => NFDataInc Inside inc r m (LazyNonIncL Inside inc r m a) where
-	rnfInc m = get m >>= rnfInc
+	rnfInc proxyL proxyInc proxyR proxyM m = get m >>= rnfInc proxyL proxyInc proxyR proxyM
 	{-# INLINE rnfInc #-}
 
 instance (Typeable a,Eq a,NFDataInc Outside inc r m a,Input LazyNonIncM l inc r m) => NFDataInc Outside inc r m (LazyNonIncM l inc r m a) where
-	rnfInc m = getOutside m >>= rnfInc
+	rnfInc proxyL proxyInc proxyR proxyM m = getOutside m >>= rnfInc proxyL proxyInc proxyR proxyM
 	{-# INLINE rnfInc #-}
 
 instance (Typeable a,Eq a,NFDataInc Inside inc r m a,Input LazyNonIncM Inside inc r m) => NFDataInc Inside inc r m (LazyNonIncM Inside inc r m a) where
-	rnfInc m = get m >>= rnfInc
+	rnfInc proxyL proxyInc proxyR proxyM m = get m >>= rnfInc proxyL proxyInc proxyR proxyM
 	{-# INLINE rnfInc #-}
 
 

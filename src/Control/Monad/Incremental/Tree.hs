@@ -66,19 +66,19 @@ type TreeLazyNonIncM l r m a = TreeMod LazyNonIncM l LazyNonInc r m a
 type TreeLazyNonIncM' l r m a = TreeMod' LazyNonIncM l LazyNonInc r m a
 
 instance (Display l1 inc r m a,Display l1 inc r m (TreeMod mod l inc r m a)) => Display l1 inc r m (TreeMod' mod l inc r m a) where
-	displaysPrec EmptyMod r = return $ "EmptyMod" ++ r
-	displaysPrec (BinMod x ml mr) rest = do
-		sr <- displaysPrec mr (')':rest)
-		sl <- displaysPrec ml (' ':sr)
-		sx <- displaysPrec x (' ':sl)
+	displaysPrec proxyL proxyInc proxyR proxyM EmptyMod r = return $ "EmptyMod" ++ r
+	displaysPrec proxyL proxyInc proxyR proxyM (BinMod x ml mr) rest = do
+		sr <- displaysPrec proxyL proxyInc proxyR proxyM mr (')':rest)
+		sl <- displaysPrec proxyL proxyInc proxyR proxyM ml (' ':sr)
+		sx <- displaysPrec proxyL proxyInc proxyR proxyM x (' ':sl)
 		return $ "(TreeMod " ++ sx
 
 instance (NFDataInc l1 inc r m a,NFDataInc l1 inc r m (TreeMod mod l inc r m a)) => NFDataInc l1 inc r m (TreeMod' mod l inc r m a) where
-	rnfInc EmptyMod = return $! ()
-	rnfInc (BinMod x ml mr) = do
-		a <- rnfInc x
-		l <- rnfInc ml
-		r <- rnfInc mr
+	rnfInc proxyL proxyInc proxyR proxyM EmptyMod = return $! ()
+	rnfInc proxyL proxyInc proxyR proxyM (BinMod x ml mr) = do
+		a <- rnfInc proxyL proxyInc proxyR proxyM x
+		l <- rnfInc proxyL proxyInc proxyR proxyM ml
+		r <- rnfInc proxyL proxyInc proxyR proxyM mr
 		return $! a `seq` l `seq` r
 
 instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepTypeable l,Sat (ctx (TreeMod' mod l inc r m a)),MData ctx (l1 inc r m) a,MData ctx (l1 inc r m) (TreeMod mod l inc r m a))

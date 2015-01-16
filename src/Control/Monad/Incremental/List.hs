@@ -74,10 +74,10 @@ type ListTxM' l r m a = ListMod' TxM l TxAdapton r m a
 
 
 instance (Display l1 inc r m a,Display l1 inc r m (ListMod mod l inc r m a)) => Display l1 inc r m (ListMod' mod l inc r m a) where
-	displaysPrec NilMod r = return $ "NilMod" ++ r
-	displaysPrec (ConsMod x mxs) rest = do
-		sxs <- displaysPrec mxs (')':rest)
-		sx <- displaysPrec x (' ':sxs)
+	displaysPrec proxyL proxyInc proxyR proxyM NilMod r = return $ "NilMod" ++ r
+	displaysPrec proxyL proxyInc proxyR proxyM (ConsMod x mxs) rest = do
+		sxs <- displaysPrec proxyL proxyInc proxyR proxyM mxs (')':rest)
+		sx <- displaysPrec proxyL proxyInc proxyR proxyM x (' ':sxs)
 		return $ "(ConsMod " ++ sx
 
 --instance (Serialize l1 inc r m a,Serialize l1 inc r m (ListMod mod l inc r m a)) => Serialize l1 inc r m (ListMod' mod l inc r m a) where
@@ -91,10 +91,10 @@ instance (Display l1 inc r m a,Display l1 inc r m (ListMod mod l inc r m a)) => 
 --		]
 
 instance (NFDataInc l1 inc r m a,NFDataInc l1 inc r m (ListMod mod l inc r m a)) => NFDataInc l1 inc r m (ListMod' mod l inc r m a) where
-	rnfInc NilMod = return $! ()
-	rnfInc (ConsMod x mxs) = do
-		a <- rnfInc x
-		b <- rnfInc mxs
+	rnfInc proxyL proxyInc proxyR proxyM NilMod = return $! ()
+	rnfInc proxyL proxyInc proxyR proxyM (ConsMod x mxs) = do
+		a <- rnfInc proxyL proxyInc proxyR proxyM x
+		b <- rnfInc proxyL proxyInc proxyR proxyM mxs
 		return $! a `seq` b
 
 instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepTypeable l,Sat (ctx (ListMod' mod l inc r m a)),MData ctx (l1 inc r m) a,MData ctx (l1 inc r m) (ListMod mod l inc r m a))
@@ -426,21 +426,21 @@ type JoinListLazyNonIncM l r m a = JoinListMod LazyNonIncM l LazyNonInc r m a
 type JoinListLazyNonIncM' l r m a = JoinListMod' LazyNonIncM l LazyNonInc r m a
 
 instance (Display l1 inc r m a,Display l1 inc r m (JoinListMod mod l inc r m a)) => Display l1 inc r m (JoinListMod' mod l inc r m a) where
-	displaysPrec EmptyMod r = return $ "EmptyMod" ++ r
-	displaysPrec (SingleMod x) rest = do
-		sx <- displaysPrec x (')':rest)
+	displaysPrec proxyL proxyInc proxyR proxyM EmptyMod r = return $ "EmptyMod" ++ r
+	displaysPrec proxyL proxyInc proxyR proxyM (SingleMod x) rest = do
+		sx <- displaysPrec proxyL proxyInc proxyR proxyM x (')':rest)
 		return $ "(SingleMod " ++ sx
-	displaysPrec (JoinMod mxs mys) rest = do
-		sys <- displaysPrec mys (')':rest)
-		sxs <- displaysPrec mxs (' ':sys)
+	displaysPrec proxyL proxyInc proxyR proxyM (JoinMod mxs mys) rest = do
+		sys <- displaysPrec proxyL proxyInc proxyR proxyM mys (')':rest)
+		sxs <- displaysPrec proxyL proxyInc proxyR proxyM mxs (' ':sys)
 		return $ "(JoinMod " ++ sxs
 
 instance (NFDataInc l1 inc r m a,NFDataInc l1 inc r m (JoinListMod mod l inc r m a)) => NFDataInc l1 inc r m (JoinListMod' mod l inc r m a) where
-	rnfInc EmptyMod = return $! ()
-	rnfInc (SingleMod x) = rnfInc x
-	rnfInc (JoinMod x y) = do
-		a <- rnfInc x
-		b <- rnfInc y
+	rnfInc proxyL proxyInc proxyR proxyM EmptyMod = return $! ()
+	rnfInc proxyL proxyInc proxyR proxyM (SingleMod x) = rnfInc proxyL proxyInc proxyR proxyM x
+	rnfInc proxyL proxyInc proxyR proxyM (JoinMod x y) = do
+		a <- rnfInc proxyL proxyInc proxyR proxyM x
+		b <- rnfInc proxyL proxyInc proxyR proxyM y
 		return $! a `seq` b
 
 instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepTypeable l,Sat (ctx (JoinListMod' mod l inc r m a)),MData ctx (l1 inc r m) a,MData ctx (l1 inc r m) (JoinListMod mod l inc r m a))

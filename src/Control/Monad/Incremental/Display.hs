@@ -1,16 +1,9 @@
-{-# LANGUAGE UndecidableInstances, FlexibleContexts, FlexibleInstances, KindSignatures, MultiParamTypeClasses #-}
+{-# LANGUAGE OverlappingInstances, UndecidableInstances, FlexibleContexts, FlexibleInstances, KindSignatures, MultiParamTypeClasses #-}
 
 module Control.Monad.Incremental.Display where
 
 import Control.Monad.Incremental
 import Control.Monad.IO.Class
-
---import Blaze.ByteString.Builder
---import Data.ByteString.Lazy.Char8 (ByteString)
---import qualified Data.ByteString.Lazy.Char8 as B
---import Blaze.ByteString.Builder.Internal
---import Blaze.Text.Int
---import Blaze.ByteString.Builder.Int
 
 import Data.Monoid
 import Data.Typeable
@@ -18,102 +11,123 @@ import Control.DeepSeq
 import Control.Monad.Trans
 import Control.Monad
 import Data.Typeable
+import Data.WithClass.MData
+import Control.Monad.Ref
+import System.Mem.WeakKey
 
--- XXX: this should/can be made more generic to allow seamless displaying of mixed outer/inner references/thunks
--- a generic but very slow version of display
---displayGeneric :: (MData NoCtx (Inside inc r m) a,MonadIO m,Layer l inc r m) => a -> l inc r m ()
---displayGeneric x = inside $ gshow x >>= inL . liftIO . putStrLn
+class (Layer l inc r m) => Display l inc r m a where
+	displaysPrec :: Proxy l -> Proxy inc -> Proxy r -> Proxy m -> a -> DisplayS l inc r m
+
+data DisplayDict l inc r m a = DisplayDict { displayDict :: Proxy l -> Proxy inc -> Proxy r -> Proxy m -> a -> DisplayS l inc r m }
+
+instance (Display l inc r m a) => Sat (DisplayDict l inc r m a) where
+	dict = DisplayDict { displayDict = displaysPrec }
 
 displayAs :: (MonadIO m,Layer l inc r m,Display l inc r m a) => String -> a -> l inc r m ()
-displayAs str x = (displaysPrec x "") >>= inL . liftIO . putStrLn . (str++)
+displayAs str x = (displaysPrec Proxy Proxy Proxy Proxy x "") >>= inL . liftIO . putStrLn . (str++)
 
 display :: (MonadIO m,Layer l inc r m,Display l inc r m a) => a -> l inc r m ()
-display x = (displaysPrec x "") >>= inL . liftIO . putStrLn
+display x = (displaysPrec Proxy Proxy Proxy Proxy x "") >>= inL . liftIO . putStrLn
 
 showInc :: (Layer l inc r m,Display l inc r m a) => a -> l inc r m String
-showInc x = displaysPrec x ""
+showInc x = displaysPrec Proxy Proxy Proxy Proxy x ""
 
 type DisplayS l inc (r :: * -> *) (m :: * -> *) = String -> l inc r m String
 
-class (Layer l inc r m) => Display l inc r m a where
-	displaysPrec :: a -> DisplayS l inc r m
-
 instance Display Inside inc r m a => Display Inside inc r m (Inside inc r m a) where
-	displaysPrec m rest = m >>= flip displaysPrec rest
+	displaysPrec proxyL proxyInc proxyR proxyM m rest = m >>= flip (displaysPrec proxyL proxyInc proxyR proxyM) rest
 instance Display Outside inc r m a => Display Outside inc r m (Outside inc r m a) where
-	displaysPrec m rest = m >>= flip displaysPrec rest
+	displaysPrec proxyL proxyInc proxyR proxyM m rest = m >>= flip (displaysPrec proxyL proxyInc proxyR proxyM) rest
 instance Display Outside inc r m a => Display Outside inc r m (Inside inc r m a) where
-	displaysPrec m rest = inside m >>= flip displaysPrec rest
+	displaysPrec proxyL proxyInc proxyR proxyM m rest = inside m >>= flip (displaysPrec proxyL proxyInc proxyR proxyM) rest
 
 instance Layer l inc r m => Display l inc r m Char where
-	displaysPrec i rest = return $ show i++rest
+	displaysPrec proxyL proxyInc proxyR proxyM i rest = return $ show i++rest
 
 instance Layer l inc r m => Display l inc r m Bool where
-	displaysPrec i rest = return $ show i++rest
+	displaysPrec proxyL proxyInc proxyR proxyM i rest = return $ show i++rest
 
 instance Layer l inc r m => Display l inc r m Float where
-	displaysPrec i rest = return $ show i++rest
+	displaysPrec proxyL proxyInc proxyR proxyM i rest = return $ show i++rest
 
 instance Layer l inc r m => Display l inc r m Double where
-	displaysPrec i rest = return $ show i++rest
+	displaysPrec proxyL proxyInc proxyR proxyM i rest = return $ show i++rest
 
 instance Layer l inc r m => Display l inc r m Int where
-	displaysPrec i rest = return $ show i++rest
+	displaysPrec proxyL proxyInc proxyR proxyM i rest = return $ show i++rest
 
 instance Layer l inc r m => Display l inc r m Integer where
-	displaysPrec i rest = return $ show i++rest
+	displaysPrec proxyL proxyInc proxyR proxyM i rest = return $ show i++rest
 
 instance (Display l inc r m a,Display l inc r m b) => Display l inc r m (a,b) where
-	displaysPrec (x,y) rest = do
-		sy <- displaysPrec y (')':rest)
-		sx <- displaysPrec x (',':sy)
+	displaysPrec proxyL proxyInc proxyR proxyM (x,y) rest = do
+		sy <- displaysPrec proxyL proxyInc proxyR proxyM y (')':rest)
+		sx <- displaysPrec proxyL proxyInc proxyR proxyM x (',':sy)
 		return $ '(':sx
 
 instance (Display l inc r m a) => Display l inc r m (Maybe a) where
-	displaysPrec Nothing rest = return $ "Nothing" ++ rest
-	displaysPrec (Just x) rest = do
-		sx <- displaysPrec x (')':rest)
+	displaysPrec proxyL proxyInc proxyR proxyM Nothing rest = return $ "Nothing" ++ rest
+	displaysPrec proxyL proxyInc proxyR proxyM (Just x) rest = do
+		sx <- displaysPrec proxyL proxyInc proxyR proxyM x (')':rest)
 		return $ "(Just "++sx
 
 instance (Typeable a,Display l inc r m a) => Display l inc r m [a] where
-	displaysPrec xs rest = case cast xs :: Maybe String of
+	displaysPrec proxyL proxyInc proxyR proxyM xs rest = case cast xs :: Maybe String of
 		Just str -> return $ str ++ rest
-		Nothing -> liftM ('[':) $ displayList xs rest
+		Nothing -> liftM ('[':) $ displayList proxyL proxyInc proxyR proxyM xs rest
 
-displayList :: Display l inc r m a => [a] -> DisplayS l inc r m
-displayList [] rest = return $ ']':rest
-displayList [x] rest = displaysPrec x rest
-displayList (x:xs) rest = do
-	sxs <- displayList xs rest
-	displaysPrec x $ ',':sxs
+displayList :: Display l inc r m a => Proxy l -> Proxy inc -> Proxy r -> Proxy m -> [a] -> DisplayS l inc r m
+displayList proxyL proxyInc proxyR proxyM [] rest = return $ ']':rest
+displayList proxyL proxyInc proxyR proxyM [x] rest = displaysPrec proxyL proxyInc proxyR proxyM x rest
+displayList proxyL proxyInc proxyR proxyM (x:xs) rest = do
+	sxs <- displayList proxyL proxyInc proxyR proxyM xs rest
+	displaysPrec proxyL proxyInc proxyR proxyM x $ ',':sxs
 	
---class Layer l inc r m => Serialize l inc r m a where
---	serialize :: Proxy (l inc r m) -> a -> Builder
---
---instance (Layer l inc r m) => Serialize l inc r m Int where
---	serialize _ = \i -> integral i
---	{-# INLINE serialize #-}
---
---displayBlaze :: (Layer l inc r m,Serialize l inc r m a,InIO (l inc r m)) => a -> l inc r m ()
---displayBlaze = displayBlaze' Proxy
---
---{-# INLINE displayBlaze' #-}
---displayBlaze' :: (Layer l inc r m,Serialize l inc r m a,InIO (l inc r m)) => Proxy (l inc r m) -> a -> l inc r m ()
---displayBlaze' = \proxy a -> runInIO $ B.putStrLn $ toLazyByteString $ serialize proxy a
+-- default instance for arbitrary types
+instance (Layer l inc r m,MData (DisplayDict l inc r m) (l inc r m) a) => Display l inc r m a where
+	displaysPrec l inc r m v rest = do
+		ms <- gmapQ (displayProxy l inc r m) (\v -> return $ mshowChar ' ' <=< displayDict dict l inc r m v) v
+		str <- liftM showConstr $ toConstr (displayProxy l inc r m) v
+		let e = mshowChar '(' <=< mshowString str <=< (foldr (<=<) return ms) <=< mshowChar ')'
+		e rest
+
+displayProxy :: Proxy l -> Proxy inc -> Proxy r -> Proxy m -> Proxy (DisplayDict l inc r m)
+displayProxy l inc r m = Proxy
+
+type MShowS m = String -> m String
+
+mshowChar :: Monad m => Char -> MShowS m
+mshowChar c s = return (c:s)
+	
+mshow :: (Show a,Monad m) => a -> MShowS m
+mshow x s = return $ show x ++ s
+
+mshowString :: Monad m => String -> MShowS m
+mshowString c s = return (c++s)
 
 -- | An incremental version of @NFData@ that only forces dirty thunks
-class Layer l inc r m => NFDataInc l inc r m a where
-	rnfInc :: a -> l inc r m ()
+class (Layer l inc r m) => NFDataInc l inc r m a where
+	rnfInc :: Proxy l -> Proxy inc -> Proxy r -> Proxy m -> a -> l inc r m ()
+
+instance (NFDataInc l inc r m a) => Sat (NFDataIncDict l inc r m a) where
+	dict = NFDataIncDict { rnfIncDict = rnfInc }
+
+data NFDataIncDict (l :: * -> (* -> *) -> (* -> *) -> * -> *) inc r m a = NFDataIncDict { rnfIncDict :: Proxy l -> Proxy inc -> Proxy r -> Proxy m -> a -> l inc r m () }
 
 instance Layer l inc r m => NFDataInc l inc r m Int where
-	rnfInc = return . rnf
+	rnfInc l inc r m = return . rnf
 	{-# INLINE rnfInc #-}
 
 instance Layer l inc r m => NFDataInc l inc r m String where
-	rnfInc = return . rnf
+	rnfInc l inc r m = return . rnf
 	{-# INLINE rnfInc #-}
 
+nfDataIncProxy :: Proxy l -> Proxy inc -> Proxy r -> Proxy m -> Proxy (NFDataIncDict l inc r m)
+nfDataIncProxy l inc r m = Proxy
 
+-- default instance for arbitrary types
+instance (Layer l inc r m,MData (NFDataIncDict l inc r m) (l inc r m) a) => NFDataInc l inc r m a where
+	rnfInc l inc r m v = gmapQr (nfDataIncProxy l inc r m) (\() () -> return ()) () (rnfIncDict dict l inc r m) v
 
 
 
