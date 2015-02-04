@@ -31,7 +31,7 @@ import Prelude hiding (mod,const,read)
 
 -- * Strict modifiables
 
-instance (MonadIO m,Layer Inside inc r m) => Thunk M Inside inc r m where
+instance (MonadIO m,Layer Inside Adapton r m) => Thunk M Inside Adapton r m where
 	new = modInnerM
 	{-# INLINE new #-}
 	newc = refInnerM
@@ -39,7 +39,7 @@ instance (MonadIO m,Layer Inside inc r m) => Thunk M Inside inc r m where
 	read = getInnerM
 	{-# INLINE read #-}
 
-instance (MonadIO m,Layer Outside inc r m) => Thunk M Outside inc r m where
+instance (MonadIO m,Layer Outside Adapton r m) => Thunk M Outside Adapton r m where
 	new = modOuterM
 	{-# INLINE new #-}
 	newc = refOuterM
@@ -47,7 +47,7 @@ instance (MonadIO m,Layer Outside inc r m) => Thunk M Outside inc r m where
 	read = getOuterM
 	{-# INLINE read #-}
 
-instance (MonadIO m,Layer Inside inc r m) => Input M Inside inc r m where
+instance (MonadIO m,Layer Inside Adapton r m) => Input M Inside Adapton r m where
 	ref = refInnerM
 	{-# INLINE ref #-}
 	get = getInnerM
@@ -61,7 +61,7 @@ instance (MonadIO m,Layer Inside inc r m) => Input M Inside inc r m where
 	modOutside = \c -> outside c >>= refOutside
 	{-# INLINE modOutside #-}
 
-instance (MonadIO m,Layer Outside inc r m) => Input M Outside inc r m where
+instance (MonadIO m,Layer Outside Adapton r m) => Input M Outside Adapton r m where
 	ref = refOuterM
 	{-# INLINE ref #-}
 	get = getOuterM
@@ -73,13 +73,13 @@ instance (MonadIO m,Layer Outside inc r m) => Input M Outside inc r m where
 	modOutside = \c -> c >>= refOutside
 	{-# INLINE modOutside #-}
 
-modInnerM :: (Eq a,MonadIO m,Layer Inside inc r m) => Inside inc r m a -> Inside inc r m (M Inside inc r m a)
+modInnerM :: (IncK inc a,MonadIO m,Layer Inside inc r m) => Inside inc r m a -> Inside inc r m (M Inside inc r m a)
 modInnerM m = m >>= refInnerM
 
-modOuterM :: (Eq a,Layer Outside inc r m,MonadIO m) => Outside inc r m a -> Outside inc r m (M Outside inc r m a)
+modOuterM :: (IncK inc a,Layer Outside inc r m,MonadIO m) => Outside inc r m a -> Outside inc r m (M Outside inc r m a)
 modOuterM m = m >>= refOuterM
 
-refOuterM :: (Eq a,Layer l inc r m,MonadIO m,Layer Outside inc r m) => a -> Outside inc r m (M l inc r m a)
+refOuterM :: (IncK inc a,Layer l inc r m,MonadIO m,Layer Outside inc r m) => a -> Outside inc r m (M l inc r m a)
 refOuterM v = inL $ do
 	idU <- liftIO newUnique
 	dta <- newRef v
@@ -87,7 +87,7 @@ refOuterM v = inL $ do
 	-- since the ref will never be reused, we don't need to worry about it's creator
 	return $ M (dta,(NodeMeta (idU,dependentsU,error "nodirty",return (),Nothing,mkEmptyUDataOp)))
 
-refInnerM :: (Eq a,Layer l inc r m,MonadIO m,Layer Inside inc r m) => a -> Inside inc r m (M l inc r m a)
+refInnerM :: (IncK inc a,Layer l inc r m,MonadIO m,Layer Inside inc r m) => a -> Inside inc r m (M l inc r m a)
 refInnerM v = inL $ do
 	idU <- liftIO newUnique
 	dta <- newRef v
@@ -99,7 +99,7 @@ refInnerM v = inL $ do
 -- forces a lazy modifiable (encoded as a plain thunk)
 -- the layer is just for uniformity, but it does not matter for @M@
 {-# INLINE getInnerM #-}
-getInnerM :: (MonadIO m,Eq a,Layer Inside inc r m) => M Inside inc r m a -> Inside inc r m a
+getInnerM :: (Eq a,MonadIO m,IncK inc a,Layer Inside inc r m) => M Inside inc r m a -> Inside inc r m a
 getInnerM = \t -> {-debug ("getInnerM " ++ show (hashUnique $ idNM $ metaM t)) $ -} inL $  do
 	value <- readRef (dataM t)
 	addDependency (metaM t) (inL $ checkM t $! value) -- updates dependencies of callers
@@ -114,12 +114,12 @@ getOuterM = \t -> inL $ readRef (dataM t)
 
 -- force that does not return the value nor adds dependencies, but instead checks whether the value has not changed
 {-# INLINE checkM #-}
-checkM :: (Eq a,Layer Inside inc r m,MonadIO m) => M Inside inc r m a -> a -> m Bool
+checkM :: (Eq a,IncK inc a,Layer Inside inc r m,MonadIO m) => M Inside inc r m a -> a -> m Bool
 checkM = \t oldv -> do
 	v <- readRef (dataM t)
 	return (oldv == v)
 
-setM :: (Eq a,Layer Outside inc r m,MonadIO m,Layer l inc r m) => M l inc r m a -> a -> Outside inc r m ()
+setM :: (Eq a,IncK inc a,Layer Outside inc r m,MonadIO m,Layer l inc r m) => M l inc r m a -> a -> Outside inc r m ()
 setM t v' = debug ("changed " ++ show (hashUnique $ idNM $ metaM t)) $ inL $ do
 	v <- readRef (dataM t)
 	unless (v == v') $ do
@@ -128,7 +128,7 @@ setM t v' = debug ("changed " ++ show (hashUnique $ idNM $ metaM t)) $ inL $ do
 
 -- * Lazy modifiables
 
-instance (Layer Inside inc r m,MonadIO m) => Thunk L Inside inc r m where
+instance (Layer Inside Adapton r m,MonadIO m) => Thunk L Inside Adapton r m where
 	new = modL
 	{-# INLINE new #-}
 	newc = refL
@@ -136,7 +136,7 @@ instance (Layer Inside inc r m,MonadIO m) => Thunk L Inside inc r m where
 	read = getInnerL
 	{-# INLINE read #-}
 
-instance (Layer Outside inc r m,MonadIO m) => Thunk L Outside inc r m where
+instance (Layer Outside Adapton r m,MonadIO m) => Thunk L Outside Adapton r m where
 	new = modL
 	{-# INLINE new #-}
 	newc = refL
@@ -144,7 +144,7 @@ instance (Layer Outside inc r m,MonadIO m) => Thunk L Outside inc r m where
 	read = getOuterL
 	{-# INLINE read #-}
 
-instance (MonadIO m,Layer Inside inc r m,InLayer Outside inc r m) => Input L Inside inc r m where
+instance (MonadIO m,Layer Inside Adapton r m,InLayer Outside Adapton r m) => Input L Inside Adapton r m where
 	ref = refL
 	{-# INLINE ref #-}
 	mod = modL
@@ -160,7 +160,7 @@ instance (MonadIO m,Layer Inside inc r m,InLayer Outside inc r m) => Input L Ins
 	getOutside = inside . getNoDependentsInnerL
 	{-# INLINE getOutside #-}
 
-instance (MonadIO m,Layer Outside inc r m) => Input L Outside inc r m where
+instance (MonadIO m,Layer Outside Adapton r m) => Input L Outside Adapton r m where
 	ref = refL
 	{-# INLINE ref #-}
 	mod = modL
@@ -194,7 +194,7 @@ modL m = inL $ do
 
 -- forces a lazy modifiable (encoded as a plain thunk)
 {-# INLINE getInnerL #-}
-getInnerL :: (MonadIO m,Eq a,Layer Inside inc r m) => L Inside inc r m a -> Inside inc r m a
+getInnerL :: (Eq a,MonadIO m,IncK inc a,Layer Inside inc r m) => L Inside inc r m a -> Inside inc r m a
 getInnerL = \t -> {-debug ("getInnerL " ++ show (hashUnique $ idNM $ metaL t)) $ -} do
 	value <- getNoDependentsInnerL t
 	inL $ addDependency (metaL t) (inL $ checkL t $! value) -- updates dependencies of callers
@@ -202,12 +202,12 @@ getInnerL = \t -> {-debug ("getInnerL " ++ show (hashUnique $ idNM $ metaL t)) $
 
 -- forces a lazy modifiable (encoded as a plain thunk)
 {-# INLINE getOuterL #-}
-getOuterL :: (MonadIO m,Eq a,Layer Outside inc r m) => L Outside inc r m a -> Outside inc r m a
+getOuterL :: (MonadIO m,IncK inc a,Layer Outside inc r m) => L Outside inc r m a -> Outside inc r m a
 getOuterL = error "getting a lazy modifiable outside" --getNoDependentsOuterL
 
 -- force that does not return the value nor adds dependencies, but instead checks whether the value has not changed
 {-# INLINE checkL #-}
-checkL :: (Eq a,Layer Inside inc r m,MonadIO m) => L Inside inc r m a -> a -> m Bool
+checkL :: (Eq a,IncK inc a,Layer Inside inc r m,MonadIO m) => L Inside inc r m a -> a -> m Bool
 checkL = \t oldv -> do
 	d <- readRef (dataL t)
 	case d of
@@ -223,7 +223,7 @@ getNoDependentsInnerL = \t -> {-debug ("getNoDependentsInnerL " ++ show (hashUni
 		LConst _ value -> return value -- constant value
 
 {-# INLINE getNoDependentsOuterL #-}
-getNoDependentsOuterL :: (MonadIO m,Layer Outside inc r m) => L Outside inc r m a -> Outside inc r m a
+getNoDependentsOuterL :: (Eq a,MonadIO m,Layer Outside inc r m) => L Outside inc r m a -> Outside inc r m a
 getNoDependentsOuterL = \t -> do
 	d <- inL $ readRef (dataL t)
 	case d of
@@ -243,7 +243,7 @@ evaluateInnerL t force = debug ("re-evaluatingInnerL " ++ show (hashUnique $ idN
 -- does not add the modifiable to the stack, as we do with thunks
 -- does not store the result in the modifiable
 {-# INLINE evaluateOuterL #-}
-evaluateOuterL :: (MonadIO m,Layer Outside inc r m) => L Outside inc r m a -> Outside inc r m a -> Outside inc r m a
+evaluateOuterL :: (Eq a,MonadIO m,Layer Outside inc r m) => L Outside inc r m a -> Outside inc r m a -> Outside inc r m a
 evaluateOuterL t force = debug ("re-evaluatingOuterL " ++ show (hashUnique $ idNM $ metaL t)) $ do
 	inL $ liftIO $ pushStack (metaL t :!: SNothing)
 	value <- force
@@ -258,7 +258,7 @@ markForcedL t = inL $ do
 		LThunk _ force -> LThunk 1# force
 		LConst _ value -> LConst 1# value
 
-setL :: (Eq a,Layer Outside inc r m,MonadIO m,Layer l inc r m) => L l inc r m a -> a -> Outside inc r m ()
+setL :: (Eq a,IncK inc a,Layer Outside inc r m,MonadIO m,Layer l inc r m) => L l inc r m a -> a -> Outside inc r m ()
 setL l v' = debug ("changed " ++ show (hashUnique $ idNM $ metaL l)) $ inL $ do
 	d <- readRef (dataL l)
 	let value_changed isForced = do
@@ -309,7 +309,7 @@ isUnforcedL t = do
 
 -- * Thunks
 
-instance (MonadIO m,Layer Inside inc r m) => Thunk U Inside inc r m where
+instance (MonadIO m,Layer Inside Adapton r m) => Thunk U Inside Adapton r m where
 	new = thunkU
 	{-# INLINE new #-}
 	newc = constU
@@ -317,7 +317,7 @@ instance (MonadIO m,Layer Inside inc r m) => Thunk U Inside inc r m where
 	read = forceInnerU
 	{-# INLINE read #-}
 
-instance (MonadIO m,Layer Outside inc r m) => Thunk U Outside inc r m where
+instance (MonadIO m,Layer Outside Adapton r m) => Thunk U Outside Adapton r m where
 	new = thunkU
 	{-# INLINE new #-}
 	newc = constU
@@ -326,7 +326,7 @@ instance (MonadIO m,Layer Outside inc r m) => Thunk U Outside inc r m where
 	{-# INLINE read #-}
 
 -- no memoization at the outer layer
-instance (Layer Outside inc r m,MonadRef r m,WeakRef r,MonadIO m) => Output U Outside inc r m where
+instance (Layer Outside Adapton r m,MonadRef r m,WeakRef r,MonadIO m) => Output U Outside Adapton r m where
 	thunk = thunkU
 	{-# INLINE thunk #-}
 	const = constU
@@ -336,7 +336,7 @@ instance (Layer Outside inc r m,MonadRef r m,WeakRef r,MonadIO m) => Output U Ou
 	forceOutside = forceOuterU
 	{-# INLINE forceOutside #-}
 
-instance (Layer Inside inc r m,MonadRef r m,WeakRef r,MonadIO m) => Output U Inside inc r m where
+instance (Layer Inside Adapton r m,MonadRef r m,WeakRef r,MonadIO m) => Output U Inside Adapton r m where
 	thunk = thunkU
 	{-# INLINE thunk #-}
 	const = constU
@@ -368,12 +368,12 @@ constU v = inL $ do
 	return $ U (dta,(NodeMeta (idU,error "no dependents",error "no dirty",forgetUData wdta,Nothing,mkUDataOpWeak wdta)))
 
 -- | Force a computation without change propagation
-forceOuterU :: (MonadIO m,Eq a,Layer Outside inc r m) => U Outside inc r m a -> Outside inc r m a
+forceOuterU :: (MonadIO m,IncK inc a,Layer Outside inc r m) => U Outside inc r m a -> Outside inc r m a
 forceOuterU = error "forceOuter"
 
 -- | Force a computation with change propagation
 -- NOTE: if we allow @U@ thunks to be modified, then this constant optimization is unsound!
-forceInnerU :: (MonadIO m,Eq a,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a
+forceInnerU :: (Eq a,MonadIO m,IncK inc a,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a
 forceInnerU = \t -> {-debug ("forceInnerU " ++ show (hashUnique $ idU t)) $ -} do
 	value <- forceNoDependentsU t
 	has <- hasDependenciesU t -- for the case when a thunk is actually a constant computation (what arises frequently in generic code...), we don't need to record dependencies
@@ -401,7 +401,7 @@ oldvalueU t = do
 
 -- force that does not record any dependency on other thunks, e.g., (internally) when only displaying the contents or when only repairing
 {-# INLINE forceNoDependentsU #-}
-forceNoDependentsU :: (MonadIO m,Eq a,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a
+forceNoDependentsU :: (MonadIO m,IncK inc a,Layer Inside inc r m) => U Inside inc r m a -> Inside inc r m a
 forceNoDependentsU = \t -> {-debug ("forceNoDependentsU "++show (idNM $ metaU t)) $ -} do
 	d <- inL $ readRef (dataU t)
 	case d of
@@ -411,7 +411,7 @@ forceNoDependentsU = \t -> {-debug ("forceNoDependentsU "++show (idNM $ metaU t)
 		Const value -> return value -- constant value
 
 -- force that does not return the value nor adds dependencies, but instead checks whether the value has not changed
-checkU :: (MonadIO m,Eq a,Layer Inside inc r m) => U Inside inc r m a -> a -> Inside inc r m Bool
+checkU :: (Eq a,MonadIO m,IncK inc a,Layer Inside inc r m) => U Inside inc r m a -> a -> Inside inc r m Bool
 checkU t oldv = do
 	d <- inL $ readRef (dataU t)
 	case d of
@@ -469,10 +469,10 @@ isUnevaluatedU t = do
 
 -- | Explicit memoization for recursive functions, fixpoint
 -- A fixed-point operation returning thunks that in the process of tying the knot adds memoization.
-memoU :: (Typeable arg,Typeable a,MonadIO m,Eq a,Layer Outside inc r m,Memo arg) => ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
+memoU :: (Typeable a,Typeable arg,IncK inc a,MonadIO m,Layer Outside inc r m,Memo arg) => ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
 memoU f = let memo_func = memoNonRecU MemoLinear (thunkU . f memo_func) in memo_func
 
-gmemoQU :: (Typeable ctx,Typeable b,Eq b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
+gmemoQU :: (Typeable b,Typeable ctx,IncK inc b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
 gmemoQU ctx (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b)) =
 	let memo_func :: GenericQMemoU ctx Inside inc r m b
 	    memo_func = gmemoNonRecU MemoLinear ctx (f memo_func)
@@ -577,7 +577,7 @@ mkRefCreator = \idU -> liftIO $ do
 			return $ Just weak
 		otherwise -> {-debug (show (hashUnique idU) ++ "refparent NONE") $ -}return Nothing
 
-instance (Eq a,Layer l inc r m,Thunk M l inc r m,MData ctx (l inc r m) a
+instance (IncK inc a,Layer l inc r m,Thunk M l inc r m,MData ctx (l inc r m) a
 		, Sat (ctx (M l inc r m a)),DeepTypeable (M l inc r m a)
 		) => MData ctx (l inc r m) (M l inc r m a) where
 	gfoldl ctx k z t = z new >>= flip k (read t)
@@ -586,7 +586,7 @@ instance (Eq a,Layer l inc r m,Thunk M l inc r m,MData ctx (l inc r m) a
 	dataTypeOf ctx x = return ty
 		where ty = mkDataType "Control.Monad.Adapton.M" [mkConstr ty "M" [] Prefix]
 
-instance (Eq a,Layer l inc r m,Thunk L l inc r m,MData ctx (l inc r m) a
+instance (IncK inc a,Layer l inc r m,Thunk L l inc r m,MData ctx (l inc r m) a
 		, Sat (ctx (L l inc r m a)),DeepTypeable (L l inc r m a)
 		) => MData ctx (l inc r m) (L l inc r m a) where
 	gfoldl ctx k z t = z new >>= flip k (read t)
@@ -595,7 +595,7 @@ instance (Eq a,Layer l inc r m,Thunk L l inc r m,MData ctx (l inc r m) a
 	dataTypeOf ctx x = return ty
 		where ty = mkDataType "Control.Monad.Adapton.L" [mkConstr ty "L" [] Prefix]
 
-instance (Eq a,Layer l inc r m,Thunk U l inc r m,MData ctx (l inc r m) a
+instance (IncK inc a,Layer l inc r m,Thunk U l inc r m,MData ctx (l inc r m) a
 		, Sat (ctx (U l inc r m a)),DeepTypeable (U l inc r m a)
 		) => MData ctx (l inc r m) (U l inc r m a) where
 	gfoldl ctx k z t = z new >>= flip k (read t)

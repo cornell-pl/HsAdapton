@@ -21,6 +21,8 @@ data LazyNonInc deriving Typeable
 
 $( derive makeDeepTypeableAbstract ''LazyNonInc )
 
+type instance IncK LazyNonInc a = ()
+
 instance (Typeable r,Typeable m,MonadRef r m,WeakRef r) => Incremental LazyNonInc r m where
 	
 	newtype Outside LazyNonInc r m a = LazyNonIncOuter { runLazyNonIncOuter :: m a } deriving (Functor,Applicative,Monad,MonadIO,MonadRef r,MonadLazy)

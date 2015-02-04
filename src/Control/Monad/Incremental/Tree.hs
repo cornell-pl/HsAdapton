@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, ScopedTypeVariables, StandaloneDeriving, KindSignatures, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts, UndecidableInstances, DeriveDataTypeable #-}
+{-# LANGUAGE ConstraintKinds, TypeFamilies, ScopedTypeVariables, StandaloneDeriving, KindSignatures, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts, UndecidableInstances, DeriveDataTypeable #-}
 
 module Control.Monad.Incremental.Tree where
 
@@ -99,7 +99,7 @@ instance (Typeable mod,Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a)
 	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
 
 -- | tree fold
-foldTreeInc :: (Typeable a,Thunk mod l inc r m,Eq a,Memo (mod l inc r m (TreeMod' mod l inc r m a)),Output thunk l inc r m,Eq (TreeMod mod l inc r m a),Layer l inc r m) => a -> (a -> a -> l inc r m a) -> TreeMod mod l inc r m a -> l inc r m (thunk l inc r m a)
+foldTreeInc :: (IncK inc a,IncK inc (TreeMod' mod l inc r m a),Thunk mod l inc r m,Memo (mod l inc r m (TreeMod' mod l inc r m a)),Output thunk l inc r m,Layer l inc r m) => a -> (a -> a -> l inc r m a) -> TreeMod mod l inc r m a -> l inc r m (thunk l inc r m a)
 foldTreeInc z f = memo $ \recur mt -> read mt >>= \t -> case t of
 	EmptyMod -> return z
 	BinMod x ml mr -> do

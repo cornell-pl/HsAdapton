@@ -36,6 +36,8 @@ data Adapton deriving Typeable
 
 $( derive makeDeepTypeableAbstract ''Adapton )
 
+type instance IncK Adapton a = (Typeable a,Eq a)
+
 type Inner = Inside Adapton
 type Outer = Outside Adapton
 

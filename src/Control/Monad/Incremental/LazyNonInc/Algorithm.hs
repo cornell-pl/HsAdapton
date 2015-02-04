@@ -1,4 +1,4 @@
-{-# LANGUAGE UndecidableInstances, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts #-}
+{-# LANGUAGE ConstraintKinds, UndecidableInstances, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts #-}
 
 module Control.Monad.Incremental.LazyNonInc.Algorithm where
 
@@ -154,7 +154,7 @@ instance (MonadRef r m,Layer l inc r m) => Input LazyNonIncM l inc r m where
 	set = setLazyNonIncM
 	{-# INLINE set #-}
 
-instance (Eq a,Layer l inc r m,Thunk LazyNonIncM l inc r m,MData ctx (l inc r m) a
+instance (IncK inc a,Layer l inc r m,Thunk LazyNonIncM l inc r m,MData ctx (l inc r m) a
 		, Sat (ctx (LazyNonIncM l inc r m a)),DeepTypeable (LazyNonIncM l inc r m a)
 		) => MData ctx (l inc r m) (LazyNonIncM l inc r m a) where
 	gfoldl ctx k z t = z new >>= flip k (read t)
@@ -163,7 +163,7 @@ instance (Eq a,Layer l inc r m,Thunk LazyNonIncM l inc r m,MData ctx (l inc r m)
 	dataTypeOf ctx x = return ty
 		where ty = mkDataType "Control.Monad.Adapton.LazyNonIncM" [mkConstr ty "LazyNonIncM" [] Prefix]
 
-instance (Eq a,Layer l inc r m,Thunk LazyNonIncL l inc r m,MData ctx (l inc r m) a
+instance (IncK inc a,Layer l inc r m,Thunk LazyNonIncL l inc r m,MData ctx (l inc r m) a
 		, Sat (ctx (LazyNonIncL l inc r m a)),DeepTypeable (LazyNonIncL l inc r m a)
 		) => MData ctx (l inc r m) (LazyNonIncL l inc r m a) where
 	gfoldl ctx k z t = z new >>= flip k (read t)
@@ -172,7 +172,7 @@ instance (Eq a,Layer l inc r m,Thunk LazyNonIncL l inc r m,MData ctx (l inc r m)
 	dataTypeOf ctx x = return ty
 		where ty = mkDataType "Control.Monad.Adapton.LazyNonIncL" [mkConstr ty "LazyNonIncL" [] Prefix]
 
-instance (Eq a,Layer l inc r m,Thunk LazyNonIncU l inc r m,MData ctx (l inc r m) a
+instance (IncK inc a,Layer l inc r m,Thunk LazyNonIncU l inc r m,MData ctx (l inc r m) a
 		, Sat (ctx (LazyNonIncU l inc r m a)),DeepTypeable (LazyNonIncU l inc r m a)
 		) => MData ctx (l inc r m) (LazyNonIncU l inc r m a) where
 	gfoldl ctx k z t = z new >>= flip k (read t)

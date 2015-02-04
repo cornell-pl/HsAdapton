@@ -49,6 +49,8 @@ import Debug
 type TxInner = Inside TxAdapton
 type TxOuter = Outside TxAdapton
 
+type instance IncK TxAdapton a = (Typeable a,Eq a)
+
 {-# INLINE topTxStack #-}
 topTxStack :: TxLayer l r m => l TxAdapton r m (Maybe (TxStackElement r m))
 topTxStack = do

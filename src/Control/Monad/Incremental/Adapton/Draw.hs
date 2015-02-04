@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, TemplateHaskell, OverlappingInstances, UndecidableInstances, TypeSynonymInstances, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts #-}
+{-# LANGUAGE ConstraintKinds, DeriveDataTypeable, TemplateHaskell, OverlappingInstances, UndecidableInstances, TypeSynonymInstances, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts #-}
 
 module Control.Monad.Incremental.Adapton.Draw where
 
@@ -54,7 +54,7 @@ import Debug
 drawAdaptonProxy :: Proxy r -> Proxy m -> Proxy (DrawDict Adapton r m)
 drawAdaptonProxy r m = Proxy
 
-instance (MonadRef r m,MonadIO m,Eq a,Layer l inc r m,MData (DrawDict inc r m) (Outside inc r m) a,Input M l inc r m) => Draw inc r m (M l inc r m a) where
+instance (MonadRef r m,MonadIO m,IncK inc a,Layer l inc r m,MData (DrawDict inc r m) (Outside inc r m) a,Input M l inc r m) => Draw inc r m (M l inc r m a) where
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idNM $ metaM t
 		let thunkNode = mNode thunkID
@@ -64,7 +64,7 @@ instance (MonadRef r m,MonadIO m,Eq a,Layer l inc r m,MData (DrawDict inc r m) (
 		dependendentEdges <- drawDependents thunkID (dependentsNM $ metaM t)
 		return ([thunkID],DN thunkNode : childrenEdges ++ dependendentEdges ++ SG childrenRank : childrenDot)
 
-instance (Input L l inc r m,MonadRef r m,MonadIO m,Eq a,Layer l inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m (L l inc r m a) where
+instance (Input L l inc r m,MonadRef r m,MonadIO m,IncK inc a,Layer l inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m (L l inc r m a) where
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idNM $ metaL t
 		isUnevaluated <- isUnevaluatedL t
@@ -79,7 +79,7 @@ instance (Input L l inc r m,MonadRef r m,MonadIO m,Eq a,Layer l inc r m,MData (D
 				return ([thunkID],DN thunkNode : childrenEdges ++ dependentEdges ++ SG childrenRank : childrenDot)
 
 -- we do not draw any dependencies from thunks, since we assume that they have all already been drawn by following the dependents of modifiables
-instance (MonadRef r m,MonadIO m,Eq a,Layer l inc r m,Output U l inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m (U l inc r m a) where
+instance (MonadRef r m,MonadIO m,IncK inc a,Layer l inc r m,Output U l inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m (U l inc r m a) where
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idNM $ metaU t
 		isDirtyUnevaluated <- isDirtyUnevaluatedU t

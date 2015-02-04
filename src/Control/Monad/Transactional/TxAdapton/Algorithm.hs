@@ -99,13 +99,13 @@ instance (MonadIO m,TxLayer Outside r m) => Input TxM Outside TxAdapton r m wher
 	modOutside = \c -> c >>= refOutside
 	{-# INLINE modOutside #-}
 
-modInnerTxM :: (Typeable a,Eq a,MonadIO m,TxLayer Inside r m) => Inside TxAdapton r m a -> Inside TxAdapton r m (TxM Inside TxAdapton r m a)
+modInnerTxM :: (IncK TxAdapton a,MonadIO m,TxLayer Inside r m) => Inside TxAdapton r m a -> Inside TxAdapton r m (TxM Inside TxAdapton r m a)
 modInnerTxM m = m >>= refInnerTxM
 
-modOuterTxM :: (Typeable a,Eq a,TxLayer Outside r m,MonadIO m) => Outside TxAdapton r m a -> Outside TxAdapton r m (TxM Outside TxAdapton r m a)
+modOuterTxM :: (IncK TxAdapton a,TxLayer Outside r m,MonadIO m) => Outside TxAdapton r m a -> Outside TxAdapton r m (TxM Outside TxAdapton r m a)
 modOuterTxM m = m >>= refOuterTxM
 
-refOuterTxM :: (Typeable a,Eq a,TxLayer l r m,MonadIO m,TxLayer Outside r m) => a -> Outside TxAdapton r m (TxM l TxAdapton r m a)
+refOuterTxM :: (IncK TxAdapton a,TxLayer l r m,MonadIO m,TxLayer Outside r m) => a -> Outside TxAdapton r m (TxM l TxAdapton r m a)
 refOuterTxM v = do
 	idU <- inL $ liftIO newUnique
 	dta <- inL $ newRef v
@@ -117,7 +117,7 @@ refOuterTxM v = do
 	newTxMLog m
 	return m
 
-refInnerTxM :: (Typeable a,Eq a,TxLayer l r m,MonadIO m,TxLayer Inside r m) => a -> Inside TxAdapton r m (TxM l TxAdapton r m a)
+refInnerTxM :: (IncK TxAdapton a,TxLayer l r m,MonadIO m,TxLayer Inside r m) => a -> Inside TxAdapton r m (TxM l TxAdapton r m a)
 refInnerTxM v = do
 	idU <- inL $ liftIO newUnique
 	dta <- inL $ newRef v
@@ -131,23 +131,23 @@ refInnerTxM v = do
 	return m
 
 {-# INLINE getInnerTxM #-}
-getInnerTxM :: (Typeable a,MonadIO m,Eq a,TxLayer Inside r m) => TxM Inside TxAdapton r m a -> Inside TxAdapton r m a
+getInnerTxM :: (IncK TxAdapton a,MonadIO m,TxLayer Inside r m) => TxM Inside TxAdapton r m a -> Inside TxAdapton r m a
 getInnerTxM = \t -> do
 	value <- readTxMValue t -- read from the buffer
 	addDependencyTx (metaTxM t) (checkTxM t $! value) -- updates dependencies of callers
 	return value
 
 {-# INLINE getOuterTxM #-}	
-getOuterTxM :: (Typeable a,Eq a,MonadIO m,TxLayer l r m,TxLayer Outside r m) => TxM l TxAdapton r m a -> Outside TxAdapton r m a
+getOuterTxM :: (IncK TxAdapton a,MonadIO m,TxLayer l r m,TxLayer Outside r m) => TxM l TxAdapton r m a -> Outside TxAdapton r m a
 getOuterTxM = \t -> readTxMValue t
 
 {-# INLINE checkTxM #-}
-checkTxM :: (Typeable a,Eq a,TxLayer Inside r m,MonadIO m) => TxM Inside TxAdapton r m a -> a -> Inside TxAdapton r m Bool
+checkTxM :: (IncK TxAdapton a,TxLayer Inside r m,MonadIO m) => TxM Inside TxAdapton r m a -> a -> Inside TxAdapton r m Bool
 checkTxM t oldv = do
 	value <- readTxMValue t
 	return $ oldv == value
 
-setTxM :: (Typeable a,Eq a,TxLayer Outside r m,MonadIO m,TxLayer l r m) => TxM l TxAdapton r m a -> a -> Outside TxAdapton r m ()
+setTxM :: (IncK TxAdapton a,TxLayer Outside r m,MonadIO m,TxLayer l r m) => TxM l TxAdapton r m a -> a -> Outside TxAdapton r m ()
 setTxM t v' = do
 	v <- readTxMValue t
 	unless (v == v') $ do
@@ -199,10 +199,10 @@ instance (TxLayer Inside r m,MonadRef r m,WeakRef r,MonadIO m) => Output TxU Ins
 --	gmemoQ = gmemoQTxU
 --	{-# INLINE gmemoQ #-}
 
-memoTxU :: (Typeable a,Eq a,TxLayer Inside r m,Memo arg) => ((arg -> Inside TxAdapton r m (TxU Inside TxAdapton r m a)) -> arg -> Inside TxAdapton r m a) -> (arg -> Inside TxAdapton r m (TxU Inside TxAdapton r m a))
+memoTxU :: (IncK TxAdapton a,TxLayer Inside r m,Memo arg) => ((arg -> Inside TxAdapton r m (TxU Inside TxAdapton r m a)) -> arg -> Inside TxAdapton r m a) -> (arg -> Inside TxAdapton r m (TxU Inside TxAdapton r m a))
 memoTxU f = let memo_func = memoNonRecTxU MemoLinear (thunkTxU . f memo_func) in memo_func
 
-thunkTxU :: (Typeable a,Eq a,MonadIO m,TxLayer l r m,TxLayer l1 r m) => l1 TxAdapton r m a -> l TxAdapton r m (TxU l1 TxAdapton r m a)
+thunkTxU :: (IncK TxAdapton a,MonadIO m,TxLayer l r m,TxLayer l1 r m) => l1 TxAdapton r m a -> l TxAdapton r m (TxU l1 TxAdapton r m a)
 thunkTxU c = do
 	idU <- inL $ liftIO newUnique
 	dta <- inL $ newRef (TxThunk c)
@@ -213,7 +213,7 @@ thunkTxU c = do
 	newTxULog u
 	return u
 
-constTxU :: (Typeable a,Eq a,MonadIO m,TxLayer l r m,TxLayer l1 r m) => a -> l TxAdapton r m (TxU l1 TxAdapton r m a)
+constTxU :: (IncK TxAdapton a,MonadIO m,TxLayer l r m,TxLayer l1 r m) => a -> l TxAdapton r m (TxU l1 TxAdapton r m a)
 constTxU v = do
 	idU <- inL $ liftIO newUnique
 	dta <- inL $ newRef (TxConst v)
@@ -224,16 +224,16 @@ constTxU v = do
 	newTxULog u
 	return u
 
-forceOuterTxU :: (Typeable a,MonadIO m,Eq a,TxLayer Outside r m) => TxU Outside TxAdapton r m a -> Outside TxAdapton r m a
+forceOuterTxU :: (IncK TxAdapton a,MonadIO m,TxLayer Outside r m) => TxU Outside TxAdapton r m a -> Outside TxAdapton r m a
 forceOuterTxU = error "forceOuter"
 
-forceInnerTxU :: (Typeable a,MonadIO m,Eq a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m a
+forceInnerTxU :: (IncK TxAdapton a,MonadIO m,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m a
 forceInnerTxU = \t -> do
 	value <- forceNoDependentsTxU t
 	addDependencyTx (metaTxU t) (checkTxU t $! value)
 	return value
 
-hasDependenciesTxU :: (Typeable a,Eq a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m Bool
+hasDependenciesTxU :: (IncK TxAdapton a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m Bool
 hasDependenciesTxU t = do
 	d <- readTxUValue t (Read False)
 	case d of
@@ -243,7 +243,7 @@ hasDependenciesTxU t = do
 
 -- in case we repair the thunks, we need to make sure that the cached value/dependencies match
 {-# INLINE forceNoDependentsTxU #-}
-forceNoDependentsTxU :: (Typeable a,MonadIO m,Eq a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m a
+forceNoDependentsTxU :: (IncK TxAdapton a,MonadIO m,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m a
 forceNoDependentsTxU = forceNoDependentsTxU' (Read False) where
 	forceNoDependentsTxU' status = \t -> do
 		d <- readTxUValue t status
@@ -254,7 +254,7 @@ forceNoDependentsTxU = forceNoDependentsTxU' (Read False) where
 			TxConst value -> return value
 
 -- in case we repair the thunks, we need to make sure that the cached value/dependencies match
-checkTxU :: (Typeable a,MonadIO m,Eq a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> a -> Inside TxAdapton r m Bool
+checkTxU :: (IncK TxAdapton a,MonadIO m,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> a -> Inside TxAdapton r m Bool
 checkTxU = checkTxU' (Read False) where
 	checkTxU' status t oldv = do
 		d <- readTxUValue t status
@@ -264,16 +264,16 @@ checkTxU = checkTxU' (Read False) where
 			TxThunk _ -> return False 
 			TxConst value -> return False
 
-repairInnerTxU :: (Typeable a,Eq a,MonadIO m,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> a -> Inside TxAdapton r m a -> TxDependencies r m -> Inside TxAdapton r m a
+repairInnerTxU :: (IncK TxAdapton a,MonadIO m,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> a -> Inside TxAdapton r m a -> TxDependencies r m -> Inside TxAdapton r m a
 repairInnerTxU t value force txdependencies = do
 		tbl <- readTxLog
 		inL (readRef txdependencies) >>= Foldable.foldr (repair' t force tbl txdependencies) (norepair' t value tbl) . Strict.reverse --we need to reverse the dependency list to respect evaluation order
 	where
 	{-# INLINE norepair' #-}
-	norepair' :: (Typeable a,Eq a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> a -> TxLogs r m -> Inside TxAdapton r m a
+	norepair' :: (IncK TxAdapton a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> a -> TxLogs r m -> Inside TxAdapton r m a
 	norepair' t value tbl = inL (changeDirtyValueTx False Eval t tbl) >> return value
 	{-# INLINE repair' #-}
-	repair' :: (Typeable a,Eq a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m a -> TxLogs r m -> TxDependencies r m -> (TxDependency r m,Weak (TxDependency r m)) -> Inside TxAdapton r m a -> Inside TxAdapton r m a
+	repair' :: (IncK TxAdapton a,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m a -> TxLogs r m -> TxDependencies r m -> (TxDependency r m,Weak (TxDependency r m)) -> Inside TxAdapton r m a -> Inside TxAdapton r m a
 	repair' t force tbl txdependencies (d,w) m = do
 		isDirty <- inL $ readRef (dirtyTxW d)
 		if isDirty
@@ -285,7 +285,7 @@ repairInnerTxU t value force txdependencies = do
 			else m
 
 {-# INLINE evaluateInnerTxU #-}
-evaluateInnerTxU :: (Typeable a,Eq a,MonadIO m,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m a -> TxDependencies r m -> Inside TxAdapton r m a
+evaluateInnerTxU :: (IncK TxAdapton a,MonadIO m,TxLayer Inside r m) => TxU Inside TxAdapton r m a -> Inside TxAdapton r m a -> TxDependencies r m -> Inside TxAdapton r m a
 evaluateInnerTxU t force txdependencies = do
 	pushTxStack (metaTxU t :!: SJust txdependencies)
 	value <- force
@@ -293,7 +293,7 @@ evaluateInnerTxU t force txdependencies = do
 	popTxStack
 	return value
 
-isDirtyUnevaluatedTxU :: (Typeable a,Eq a,TxLayer l1 r m,TxLayer l r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m (Maybe Bool)
+isDirtyUnevaluatedTxU :: (IncK TxAdapton a,TxLayer l1 r m,TxLayer l r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m (Maybe Bool)
 isDirtyUnevaluatedTxU t = do
 	d <- readTxUValue t $ Read False
 	case d of
@@ -302,14 +302,14 @@ isDirtyUnevaluatedTxU t = do
 		TxValue 1# value force dependencies -> return $ Just True -- dirty
 		TxValue 0# value force dependencies -> return $ Just False -- not dirty
 
-isUnevaluatedTxU :: (Typeable a,Eq a,TxLayer l1 r m,TxLayer l r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m Bool
+isUnevaluatedTxU :: (IncK TxAdapton a,TxLayer l1 r m,TxLayer l r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m Bool
 isUnevaluatedTxU t = do
 	d <- readTxUValue t $ Read False
 	case d of
 		TxThunk force -> return True --unevaluated thunk
 		otherwise -> return False
 
-oldvalueTxU :: (Typeable a,Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m a
+oldvalueTxU :: (IncK TxAdapton a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m a
 oldvalueTxU t = do
 	d <- readTxUValue t $ Read False
 	case d of
@@ -320,11 +320,11 @@ oldvalueTxU t = do
 -- ** auxiliary functions
 	
 -- makes the new node an eval or a write
-changeDirtyValueTx :: (Typeable a,Eq a,TxLayer l r m,MonadRef r m,MonadIO m) => Bool -> TxStatus -> TxU l TxAdapton r m a -> TxLogs r m -> m ()
+changeDirtyValueTx :: (IncK TxAdapton a,TxLayer l r m,MonadRef r m,MonadIO m) => Bool -> TxStatus -> TxU l TxAdapton r m a -> TxLogs r m -> m ()
 changeDirtyValueTx dirty newstatus u txlog = changeTxU u (Just chgDirty) newstatus txlog >> return () where
 	chgDirty (TxValue _ value force dependencies , ori) = return (TxValue (if dirty then 1# else 0#) value force dependencies , ori)
 	
-forgetUDataTx :: (Typeable a,Eq a,TxLayer l r m,MonadRef r m,MonadIO m) => TxU l TxAdapton r m a -> TxLogs r m -> m ()
+forgetUDataTx :: (IncK TxAdapton a,TxLayer l r m,MonadRef r m,MonadIO m) => TxU l TxAdapton r m a -> TxLogs r m -> m ()
 forgetUDataTx u txlog = changeTxU u (Just forget) Write txlog >> return () where
 	forget (TxValue _ _ force dependencies , _) = clearDependenciesTx False dependencies >> return (TxThunk force , Nothing)
 	forget dta = return dta

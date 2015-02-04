@@ -57,3 +57,4 @@ instance Eq (LazyNonIncL l inc r m a) where
 instance Eq (LazyNonIncM l inc r m a) where
 	t1 == t2 = error "no equality"
 
+

@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes, GADTs, BangPatterns, TemplateHaskell, TupleSections, TypeFamilies, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, DeriveDataTypeable, ScopedTypeVariables, FlexibleContexts #-}
+{-# LANGUAGE ConstraintKinds, RankNTypes, GADTs, BangPatterns, TemplateHaskell, TupleSections, TypeFamilies, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, DeriveDataTypeable, ScopedTypeVariables, FlexibleContexts #-}
 
 module Main where
 
@@ -42,14 +42,13 @@ import System.Mem.WeakKey as WeakKey
 import System.IO.Unsafe
 import System.Mem.StableName
 
-toListRef :: (Typeable a,
-	Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
+toListRef :: (Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
 toListRef [] = ref NilMod
 toListRef (x:xs) = do
 	mxs <- toListRef xs
 	ref (ConsMod x mxs)
 
-setListModAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
+setListModAt :: (Input mod l inc r m,Layer Outside inc r m)
 	=> ListMod mod l inc r m a -> Int -> (ListMod' mod l inc r m a -> Outside inc r m (ListMod' mod l inc r m a)) -> Outside inc r m ()
 setListModAt mxs 0 f = getOutside mxs >>= f >>= set mxs
 setListModAt mxs i f = getOutside mxs >>= \xs -> case xs of
@@ -62,19 +61,19 @@ genList i = do
 	xs <- generate $ vectorOf i $ choose (minBound,0)
 	return xs
 
-topkInc :: (Typeable a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Ord a) =>
+topkInc :: (Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Ord a) =>
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 topkInc cmp i =
 	let sortInverse = quicksortInc (flip cmp)
 	in memo $ \_ mxs -> (mapInc return >=> sortInverse >=> takeInc' i) mxs >>= force
 
-leastkIncM :: (Typeable a,Eq a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,OrdM (l inc r m) a) =>
+leastkIncM :: (Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,OrdM (l inc r m) a) =>
 	Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 leastkIncM i =
 	let sort = quicksortIncM
 	in memo $ \_ mxs -> (mapInc return >=> sort >=> takeInc' i) mxs >>= force
 
-leastkInc :: (Typeable a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Eq a) =>
+leastkInc :: (Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m) =>
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 leastkInc cmp i =
 	let sort = quicksortInc cmp
@@ -444,9 +443,7 @@ testM' s t (chg:chgs) = do
 	return ()
 
 data ListChange a where
-	ListChg :: (forall mod l inc r m . (
-			Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m
-		)
+	ListChg :: (forall mod l inc r m . (IncK inc (ListMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m)
 		=> ListMod mod l inc r m a -> Outside inc r m ()) -> ListChange a
 
 genListPairs :: Int -> Int -> IO ([Int],[ListChange Int])
@@ -464,22 +461,20 @@ genListPairs i runs = do
 	print xs
 	return (xs,positions)
 
-insertListModAt :: (
-	Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> a -> ListMod mod l inc r m a -> Outside inc r m ()
-insertListModAt i x mxs = setListModAt mxs i $ \xs -> do
+insertListModAt :: (IncK inc (ListMod' mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> a -> ListMod mod l inc r m a -> Outside inc r m ()
+insertListModAt i x _ mxs = setListModAt mxs i $ \xs -> do
 	mxs' <- refOutside xs
 	return $ ConsMod x mxs'
 
-deleteListModAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> ListMod mod l inc r m a -> Outside inc r m ()
-deleteListModAt i mxs = setListModAt mxs i $ \xs -> case xs of
+deleteListModAt :: (IncK inc (ListMod' mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> ListMod mod l inc r m a -> Outside inc r m ()
+deleteListModAt i _ mxs = setListModAt mxs i $ \xs -> case xs of
 	ConsMod x mxs' -> getOutside mxs'
 	NilMod -> error "shouldn't be empty"
 
 -- creates an input list from a regular list
-toListRefInside :: (Typeable a,
-	Eq a,Eq (ListMod mod Inside inc r m a),Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
+toListRefInside :: (Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
 toListRefInside xs = inside $ toListRef xs
 
-applyListChange :: (Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m)
+applyListChange :: (IncK inc (ListMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m)
 	=> ListChange a -> ListMod mod l inc r m a -> Outside inc r m ()
-applyListChange (ListChg f) xs = f xs
+applyListChange (ListChg f) xs = f Proxy xs

@@ -11,13 +11,12 @@ module System.Mem.Concurrent.WeakMap (
 	, insertWithMkWeak, insertWeak, mergeWeak
 --	, finalize,
 	, deleteFinalized
---	, mapM_
 --	, mapMGeneric_,foldM
 	, copyWithKey
 	, unionWithKey, extendWithKey, unionWithKey', mergeWithKey
 	, atomicModifyWeakMap_
 	, toMap
-	, mapM_,mapM'',purge
+	, mapM_,mapM_',mapM'',purge
 	) where
 
 -- | Implementation of memo tables using hash tables and weak pointers as presented in http://community.haskell.org/~simonmar/papers/weak.pdf.
@@ -47,7 +46,7 @@ import Data.Strict.Tuple as Strict
 import Data.Map.Strict (Map(..))
 import qualified Data.Map.Strict as Map
 import Data.IORef
-import Data.Foldable as Foldable
+import qualified Data.Foldable as Foldable
 import Data.Strict.List as SList
 
 import Debug
@@ -299,6 +298,17 @@ purge (WeakMap (_ :!: w_map)) = purgeWeak w_map where
 {-# INLINE mapM'' #-}
 mapM'' :: Monad m => (forall x . IO x -> m x) -> (Weak v -> m a) -> WeakMap k v -> m [a]
 mapM'' liftIO f (WeakMap (tbl :!: _)) = liftIO (mfence >> readIORef tbl) >>= Control.Monad.mapM f . Map.elems
+
+mapM_' :: Monad m => (forall x . IO x -> m x) -> ((k,v) -> m a) -> WeakMap k v -> m ()
+mapM_' liftIO f (WeakMap (tbl :!: _)) = liftIO (mfence >> readIORef tbl) >>= Control.Monad.mapM_ g . Map.toAscList where
+	g (k,w) = do
+		mb <- liftIO $ Weak.deRefWeak w
+		case mb of
+			Nothing -> return ()
+			Just v -> f (k,v) >> return ()
+
+mapM_ :: MonadIO m => ((k,v) -> m a) -> WeakMap k v -> m ()			
+mapM_ = mapM_' liftIO
 
 -- not that this is highly unsafe to use in general, since the side-effects are not revocable
 atomicModifyWeakMap'CAS_ :: MonadIO m => WeakMap' k v -> (Map k (Weak v) -> m (Map k (Weak v))) -> m ()
