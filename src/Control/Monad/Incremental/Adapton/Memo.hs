@@ -53,7 +53,7 @@ gmemoNonRecU' :: (MonadRef r m,MonadIO m,Layer Inside inc r m) => MemoMode -> Pr
 gmemoNonRecU' mode ctx (NewGenericQ f) tbl = NewGenericQ $ \arg -> do
 	let (mkWeak,k) = memoKeyCtx dict ctx $! arg
 	let tyk = (typeRepOf arg,keyDynamicCtx dict ctx (proxyOf arg) k)
-	lkp <- debug ("memo search "++show tyk) $ inL $ liftIO $ WeakTable.lookup tbl tyk
+	lkp <- debug ("memo search ") $ inL $ liftIO $ WeakTable.lookup tbl tyk
 	case lkp of
 		Nothing -> do
 			thunk <- f arg
@@ -61,8 +61,8 @@ gmemoNonRecU' mode ctx (NewGenericQ f) tbl = NewGenericQ $ \arg -> do
 				MemoLinear -> MkWeak (WeakKey.mkWeakRefKey (dataU thunk)) `andMkWeak` mkWeak
 				MemoSuperlinear -> mkWeak
 			inL $ liftIO $ WeakTable.insertWithMkWeak tbl thunkWeak tyk thunk
-			debug (show tyk ++" => "++show thunk) $ return thunk
-		Just thunk -> debug ("memo hit "++show tyk ++ " " ++ show thunk) $ return thunk
+			debug (" => "++show thunk) $ return thunk
+		Just thunk -> debug ("memo hit " ++ " " ++ show thunk) $ return thunk
 
 -- *		
 
@@ -77,7 +77,7 @@ memoNonRecU mode f =
 memoNonRecU' :: (MonadRef r m,MonadIO m,Memo a,Layer Inside inc r m) => MemoMode -> (a -> Inside inc r m (U Inside inc r m b)) -> MemoTable (Key a) (U Inside inc r m b) -> a -> Inside inc r m (U Inside inc r m b)
 memoNonRecU' mode f tbl arg = do
 		let (mkWeak,k) = memoKey $! arg
-		lkp <- debug ("memo search with key " ++ show k) $ do
+		lkp <- debug ("memo search with key ") $ do
 			inL $ liftIO $ WeakTable.lookup tbl k
 		case lkp of
 			Nothing -> do
@@ -86,8 +86,8 @@ memoNonRecU' mode f tbl arg = do
 					MemoLinear -> MkWeak (WeakKey.mkWeakRefKey (dataU thunk)) `andMkWeak` mkWeak
 					MemoSuperlinear -> mkWeak
 				inL $ liftIO $ WeakTable.insertWithMkWeak tbl thunkWeak k thunk
-				debug (show k ++" => "++show thunk) $ return thunk
-			Just thunk -> debug ("memoM hit " ++show k ++ " " ++ show thunk) $ return thunk
+				debug (" => "++show thunk) $ return thunk
+			Just thunk -> debug ("memoM hit " ++ " " ++ show thunk) $ return thunk
 
 instance (Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (M l inc r m a) where
 	type Key (M l inc r m a) = Unique

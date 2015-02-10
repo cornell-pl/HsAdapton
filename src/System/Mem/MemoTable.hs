@@ -33,7 +33,7 @@ instance Show (StableName a) where
 
 -- | Class for indexing arbitrary values in a memotable
 -- the keys should uniquely identify the values, what is necessary for correct incrementality
-class (Typeable a,Typeable (Key a),Hashable (Key a),Show (Key a),Eq (Key a)) => Memo a where
+class (Typeable a,Typeable (Key a),Hashable (Key a),Eq (Key a)) => Memo a where
 	type Key a :: *
 	-- | returns a function that creates a weak pointers with the argument as key and unique key for a given value
 	memoKey :: a -> (MkWeak,Key a)

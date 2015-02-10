@@ -255,12 +255,10 @@ instance (MemoCtxK ctx a) => Sat (MemoCtx ctx a) where
 		dict
 
 data KeyDynamic where
-	KeyDyn :: (Typeable k,Show k,Eq k,Hashable k) => k -> KeyDynamic
+	KeyDyn :: (Typeable k,Eq k,Hashable k) => k -> KeyDynamic
 
 deriving instance Typeable KeyDynamic
 	
-instance Show KeyDynamic where
-	show (KeyDyn k) = show k
 instance Hashable KeyDynamic where
 	hashWithSalt i (KeyDyn k) = hashWithSalt i k
 instance Eq KeyDynamic where

@@ -39,6 +39,8 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Data.Map (Map(..))
 import qualified Data.Map as Map
+import Data.Set (Set(..))
+import qualified Data.Set as Set
 
 #ifdef __GLASGOW_HASKELL__
 #if __GLASGOW_HASKELL__ >= 611
@@ -285,21 +287,42 @@ instance (DeepTypeable a,DeepTypeable b) => DeepTypeable (a -> b) where
 
 instance (MData ctx m k, MData ctx m a, Ord k,Sat (ctx (k, a)),Sat (ctx [(k, a)]),Sat (ctx (Map k a))) => MData ctx m (Map k a) where
   gfoldl ctx f z m   = z (liftM Map.fromList) >>= flip f (return $ Map.toList m)
-  toConstr ctx _     = return $ fromListConstr
+  toConstr ctx _     = return $ mapFromListConstr
   gunfold ctx k z c  = case constrIndex c of
     1 -> z (liftM Map.fromList) >>= k
     _ -> error "gunfold"
   dataTypeOf ctx _   = return $ mapDataType
   dataCast2 ctx f    = liftM gcast2 f
 
-fromListConstr :: Constr
-fromListConstr = mkConstr mapDataType "fromList" [] Prefix
+mapFromListConstr :: Constr
+mapFromListConstr = mkConstr mapDataType "fromList" [] Prefix
 
 mapDataType :: DataType
-mapDataType = mkDataType "Data.Map.Base.Map" [fromListConstr]
+mapDataType = mkDataType "Data.Map.Base.Map" [mapFromListConstr]
 
 instance DeepTypeable Map where
 	typeTree _ = MkTypeTree (mkName "Data.Map.Map") [] []
 
 instance (DeepTypeable a,DeepTypeable b) => DeepTypeable (Map a b) where
 	typeTree (_::Proxy (Map a b)) = MkTypeTree (mkName "Data.Map.Map") [typeTree (Proxy::Proxy a),typeTree (Proxy::Proxy b)] [MkConTree (mkName "Data.Map.fromList") [typeTree (Proxy::Proxy [(a,b)])]]
+
+instance (MData ctx m k,Ord k,Sat (ctx k),Sat (ctx [k]),Sat (ctx (Set k))) => MData ctx m (Set k) where
+  gfoldl ctx f z m   = z (liftM Set.fromList) >>= flip f (return $ Set.toList m)
+  toConstr ctx _     = return $ setFromListConstr
+  gunfold ctx k z c  = case constrIndex c of
+    1 -> z (liftM Set.fromList) >>= k
+    _ -> error "gunfold"
+  dataTypeOf ctx _   = return $ setDataType
+  dataCast1 ctx f    = liftM gcast1 f
+
+setFromListConstr :: Constr
+setFromListConstr = mkConstr setDataType "fromList" [] Prefix
+
+setDataType :: DataType
+setDataType = mkDataType "Data.Set.Base.Set" [setFromListConstr]
+
+instance DeepTypeable Set where
+	typeTree _ = MkTypeTree (mkName "Data.Set.Set") [] []
+
+instance (DeepTypeable a) => DeepTypeable (Set a) where
+	typeTree (_::Proxy (Set a)) = MkTypeTree (mkName "Data.Set.Set") [typeTree (Proxy::Proxy a)] [MkConTree (mkName "Data.Set.fromList") [typeTree (Proxy::Proxy [a])]]

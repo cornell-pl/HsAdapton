@@ -9,7 +9,7 @@ import qualified Control.Concurrent.Map as CMap
 import Control.Monad.Incremental.Adapton.Types
 import Data.Concurrent.Deque.Class as Queue
 import Data.Concurrent.Deque.Reference.DequeInstance
-import Data.Time.Clock
+import Data.Time
 import Control.Concurrent.Chan
 import System.IO.Unsafe
 import Control.Monad.Fix
