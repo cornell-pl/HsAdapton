@@ -8,6 +8,7 @@
 module System.Mem.WeakKey where
 
 import GHC.IORef
+import GHC.MVar
 import GHC.STRef
 import GHC.Weak
 import GHC.Base
@@ -16,16 +17,24 @@ import System.Mem.Weak as Weak
 import Control.Monad.Reader
 import qualified Data.HashTable.ST.Basic as HT
 import Data.Typeable
+import Control.Concurrent.MVar
 
 class WeakRef r where
 	mkWeakRefKey :: r a -> b -> Maybe (IO ()) -> IO (Weak b)
 
 instance WeakRef IORef where
 	mkWeakRefKey = \r v mb -> mkWeakKeyIORef r v (maybe (return ()) id mb)
+	
+instance WeakRef MVar where
+	mkWeakRefKey = \r v mb -> mkWeakKeyMVar r v (maybe (return ()) id mb)
 
 mkWeakKeyIORef :: IORef a -> b -> IO () -> IO (Weak b)
 mkWeakKeyIORef k@(IORef (STRef r#)) v f = IO $ \s ->
   case mkWeak# r# v f s of (# s1, w #) -> (# s1, Weak w #)
+
+mkWeakKeyMVar :: MVar a -> b -> IO () -> IO (Weak b)
+mkWeakKeyMVar m@(MVar m#) v f = IO $ \s ->
+  case mkWeak# m# v f s of (# s1, w #) -> (# s1, Weak w #)
 
 -- | class to create weak pointers with references (typically IORef,STRef that have unique addresses) as keys
 class WeakKey r where
@@ -36,6 +45,10 @@ class WeakKey r where
 
 instance WeakKey (IORef a) where
 	mkWeakKey = \r v mb -> mkWeakKeyIORef r v (maybe (return ()) id mb)
+	{-# INLINE mkWeakKey #-}
+
+instance WeakKey (MVar a) where
+	mkWeakKey = \r v mb -> mkWeakKeyMVar r v (maybe (return ()) id mb)
 	{-# INLINE mkWeakKey #-}
 	
 {-# INLINE mkWeakKey' #-}
