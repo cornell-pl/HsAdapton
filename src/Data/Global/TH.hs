@@ -103,6 +103,8 @@ polymorphic ArrowT          = False
 polymorphic ListT           = False
 polymorphic (AppT s t) = polymorphic s || polymorphic t
 polymorphic (SigT t _) = polymorphic t
+polymorphic (PromotedT n) = False
+polymorphic t = error $ show t
 
 declare :: Q Type -> Q Exp -> String -> Q [Dec]
 declare mty newRef nameStr = do

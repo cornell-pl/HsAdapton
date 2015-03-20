@@ -9,7 +9,7 @@ module System.Mem.WeakTable (
 	, insertWith, insertWithMkWeak
 	, finalize,table_finalizer,finalizeEntry
 	, mapM_
-	, mapMGeneric_,foldM
+	, mapMGeneric_,mapMGeneric__,foldM
 	, debugWeakTable
 	, stableName
 	) where
@@ -149,7 +149,11 @@ mapM_ f (WeakTable (tbl_ref :!: weak_tbl)) = readIORef tbl_ref >>= \tbl -> HashI
 
 {-# INLINE mapMGeneric_ #-}
 mapMGeneric_ :: (Hashable k,MonadIO m,Eq k) => ((k,v) -> m ()) -> WeakTable k v -> m ()
-mapMGeneric_ f (WeakTable (tbl_ref :!: weak_tbl)) = liftIO (readIORef tbl_ref) >>= \tbl -> liftIO (HashIO.toList tbl) >>= Prelude.mapM_ g where
+mapMGeneric_ = mapMGeneric__ liftIO
+
+{-# INLINE mapMGeneric__ #-}
+mapMGeneric__ :: (Monad m,Hashable k,Eq k) => (forall a . IO a -> m a) -> ((k,v) -> m ()) -> WeakTable k v -> m ()
+mapMGeneric__ liftIO f (WeakTable (tbl_ref :!: weak_tbl)) = liftIO (readIORef tbl_ref) >>= \tbl -> liftIO (HashIO.toList tbl) >>= Prelude.mapM_ g where
 	g (k,weak) = do
 		mbv <- liftIO $ Weak.deRefWeak weak
 		case mbv of

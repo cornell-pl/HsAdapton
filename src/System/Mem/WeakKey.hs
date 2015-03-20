@@ -9,6 +9,7 @@ module System.Mem.WeakKey where
 
 import GHC.IORef
 import GHC.MVar
+import GHC.Conc
 import GHC.STRef
 import GHC.Weak
 import GHC.Base
@@ -78,9 +79,9 @@ orMkWeak (MkWeak mkWeak1) (MkWeak mkWeak2) = MkWeak $ \v f -> do
 	w2 <- mkWeak2 v Nothing -- the first reference cannot be dead unless the second one is, due to the value dependencies
 	return $ w2 `seq` w1
 
-instance (MonadRef r m) => MonadRef r (ReaderT a m) where
-	readRef r = lift $ readRef r
-	newRef x = lift $ newRef x
-	writeRef r x = lift $ writeRef r x
+--instance (MonadRef r m) => MonadRef r (ReaderT a m) where
+--	readRef r = lift $ readRef r
+--	newRef x = lift $ newRef x
+--	writeRef r x = lift $ writeRef r x
 
 	
