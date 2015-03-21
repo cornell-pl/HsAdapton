@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable, TypeOperators, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module System.Mem.WeakTable (
-	  WeakTable(..)
+	  WeakTable(..),WeakKey(..)
 	, new,newForMkWeak
 	, newFor
 	, lookup
@@ -45,6 +45,9 @@ import Data.Typeable
 -- an @IORef@ so that we have precise weak pointers
 newtype WeakTable k v = WeakTable (IORef (WeakTable' k v) :!: Weak (WeakTable' k v)) deriving Typeable
 type WeakTable' k v = HashIO.IOHashTable HashST.HashTable k (Weak v)
+	
+instance WeakKey (WeakTable k v) where
+	mkWeakKey (WeakTable (r :!: _)) = mkWeakKey r
 	
 new :: (Eq k,Hashable k) => IO (WeakTable k v)
 new = do
