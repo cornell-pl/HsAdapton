@@ -18,6 +18,8 @@ import System.IO.Unsafe
 import Control.Monad.Transactional.TxAdapton.Types
 import Control.Monad.Transactional.TxAdapton.Layers
 
+import qualified Control.Concurrent.STM as STM
+
 import System.Mem.WeakSet as WeakSet
 import Data.Unique
 import Control.Monad.Ref
@@ -112,7 +114,7 @@ refOuterTxM v = do
 	dependentsU <- inL $ liftIO $ CWeakMap.new
 	-- since the ref will never be reused, we don't need to worry about it's creator
 	waitQ <- inL $ liftIO newQ
-	lck <- inL $ liftIO Lock.new
+	lck <- inL $ liftIO newTLockIO
 	let m = TxM (dta,(TxNodeMeta (idU,dependentsU,(Prelude.const $ return ()),(Prelude.const $ return ()),bufferTxM m,Nothing,waitQ,lck)))
 	newTxMLog m
 	return m
@@ -125,7 +127,7 @@ refInnerTxM v = do
 	-- add a reference dependency (they are transitive up to the top-level calling thunk)
 	creator <- mkRefCreatorTx idU
 	waitQ <- inL $ liftIO newQ
-	lck <- inL $ liftIO Lock.new
+	lck <- inL $ liftIO newTLockIO
 	let m = TxM (dta,(TxNodeMeta (idU,dependentsU,(Prelude.const $ return ()),(Prelude.const $ return ()),bufferTxM m,creator,waitQ,lck)))
 	newTxMLog m
 	return m
@@ -208,7 +210,7 @@ thunkTxU c = do
 	dta <- inL $ newRef (TxThunk c)
 	dependentsU <- inL $ liftIO $ CWeakMap.new
 	waitQ <- inL $ liftIO $ newQ
-	lck <- inL $ liftIO Lock.new
+	lck <- inL $ liftIO newTLockIO
 	let u = TxU (dta,(TxNodeMeta (idU,dependentsU,changeDirtyValueTx True Write u,forgetUDataTx u,bufferTxU u,Nothing,waitQ,lck)))
 	newTxULog u
 	return u
@@ -219,7 +221,7 @@ constTxU v = do
 	dta <- inL $ newRef (TxConst v)
 	dependentsU <- inL $ liftIO $ CWeakMap.new
 	waitQ <- inL $ liftIO $ newQ
-	lck <- inL $ liftIO Lock.new
+	lck <- inL $ liftIO newTLockIO
 	let u = TxU (dta,(TxNodeMeta (idU,dependentsU,(Prelude.const $ return ()),forgetUDataTx u,bufferTxU u,Nothing,waitQ,lck)))
 	newTxULog u
 	return u
@@ -797,20 +799,25 @@ atomicTx :: (TxLayer Outside r m) => String -> Outside TxAdapton r m a -> Outsid
 atomicTx msg m = do
 	txlogs <- readTxLog
 	(write_lcks,read_lcks) <- liftM (Map.partition Prelude.snd) $ inL $ liftIO $ txLocks txlogs
---	debugTx $ "waiting to read" ++ msg ++ " " ++ show (Map.keys read_lcks)
 	-- wait on currently acquired read locks (to ensure that concurrent writes are seen by this tx's validation step)
-	inL $ liftIO $ Foldable.mapM_ (wait . Prelude.fst) read_lcks
 	debugTx $ "waiting " ++ msg ++ " " -- ++ show (Map.keys write_lcks)
-	withLocksTx (Map.map Prelude.fst write_lcks) $ do
+	withLocksTx (Map.map Prelude.fst read_lcks) (Map.map Prelude.fst write_lcks) $ do
 		debugTx $ "locked " ++ msg
---		debugTx $ "done waiting to read"
 		x <- m
 		debugTx $ "unlocked " ++ msg
 		return x
 
 -- acquiring the locks in sorted order is essential to avoid deadlocks!
-withLocksTx :: (TxLayer l r m) => Map Unique Lock -> l TxAdapton r m a -> l TxAdapton r m a
-withLocksTx = liftA2 Catch.bracket_ (inL . liftIO . Foldable.mapM_ acquire) (inL . liftIO . Foldable.mapM_ release)
+withLocksTx :: (TxLayer l r m) => Map Unique TLock -> Map Unique TLock -> l TxAdapton r m a -> l TxAdapton r m a
+withLocksTx reads writes m = do
+	
+	let waitAndAcquire wcks = inL $ liftIO $ STM.atomically $ do
+		-- wait on read locks
+		Foldable.mapM_ waitOrRetryTLock reads
+		-- acquire write locks or retry
+		Foldable.mapM_ acquireOrRetryTLock writes
+	
+	liftA2 Catch.bracket_ waitAndAcquire (inL . liftIO . STM.atomically . Foldable.mapM_ releaseTLock) writes m
 	
 throwM e = Catch.throwM e
 

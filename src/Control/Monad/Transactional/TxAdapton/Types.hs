@@ -14,6 +14,7 @@ import Control.Concurrent.Chan
 import System.IO.Unsafe
 import Control.Monad.Fix
 import Data.Global.TH as TH
+import qualified Control.Concurrent.STM as STM
 
 import Data.Maybe
 import Data.Unique
@@ -128,10 +129,22 @@ isNewDynTxVar t = dynTxStatus t == New
 isWriteDynTxVar :: DynTxVar r m -> Bool
 isWriteDynTxVar t = dynTxStatus t == Write
 
+type TLock = STM.TMVar ()
+
+newTLockIO = STM.newTMVarIO ()
+waitOrRetryTLock :: TLock -> STM.STM ()
+waitOrRetryTLock mv = STM.tryTakeTMVar mv >>= maybe STM.retry (STM.putTMVar mv)
+acquireTLock = STM.takeTMVar
+acquireOrRetryTLock :: TLock -> STM.STM ()
+acquireOrRetryTLock = STM.tryTakeTMVar >=> maybe STM.retry return
+releaseTLock mv = do
+	b <- STM.tryPutTMVar mv ()
+	when (not b) $ error "Control.Concurrent.Lock.release: Can't release unlocked Lock!"
+
 -- returns a set of locks for variables to which a txlog intends to write (@Eval@ and Write@) and to read from (@Read@)
-txLocks :: TxLogs r m -> IO (Map Unique (Lock,Bool))
+txLocks :: TxLogs r m -> IO (Map Unique (TLock,Bool))
 txLocks = Foldable.foldrM getLocks Map.empty where
-	getLocks :: TxLog r m -> Map Unique (Lock,Bool) -> IO (Map Unique (Lock,Bool))
+	getLocks :: TxLog r m -> Map Unique (TLock,Bool) -> IO (Map Unique (TLock,Bool))
 	getLocks txlog lcks = WeakTable.foldM add lcks (txLogBuff txlog) where
 		add xs (uid,tvar)
 		 	| isWriteLock tvar = return $ Map.insertWith merge uid (dynTxVarLock tvar,True) xs -- write
@@ -274,7 +287,7 @@ newtype TxNodeMeta (r :: * -> *) (m :: * -> *) = TxNodeMeta (
 	,   (TxStatus -> TxLogs r m -> m (DynTxVar r m)) -- function that writes a buffered copy of the original data to a transaction log
 	,   Maybe (TxCreator r m) -- the parent thunk under which the reference was created (modifiables only)
 	,   WaitQueue -- a sequence of wake-up actions for txs that are waiting on further updates to this node (modifiables only)
-	,   Lock -- a lock for writes to this variable
+	,   TLock -- a lock for writes to this variable
 	)
 
 -- (a new starttime,repairing actions over an invalid environment)
@@ -315,7 +328,7 @@ type Wakes = Map Unique Lock
 type TxCreator r m = WTxNodeMeta r m
 type WTxNodeMeta r m = Weak (TxNodeMeta r m)
 
-dynTxVarLock :: DynTxVar r m -> Lock
+dynTxVarLock :: DynTxVar r m -> TLock
 dynTxVarLock (DynTxM _ _ m _) = lockTxNM $ metaTxM m
 dynTxVarLock (DynTxU _ _ u _) = lockTxNM $ metaTxU u
 
