@@ -1,9 +1,17 @@
 ex:
 	ghc --make -O3 exadapton.hs -fforce-recomp -isrc
 	./exadapton --output exadapton.html
+exi:
+	ghci exadapton.hs -isrc
+txi:
+	ghci txadapton.hs -isrc
 tx:
 	ghc --make -O3 -threaded txadapton.hs -fforce-recomp -isrc
 	./txadapton --output txadapton.html
+txprof:
+	ghc --make -O3 txadapton.hs -fforce-recomp -rtsopts -isrc
+	ghc --make -O3 txadapton.hs -osuf p_o -prof -auto-all -caf-all -fforce-recomp -rtsopts -isrc
+	./txadapton +RTS -pa -s
 txfast:
 	ghc --make -O0 -threaded txadapton.hs -fforce-recomp -isrc
 	./txadapton --output txadapton.html
@@ -23,6 +31,12 @@ exprofspace:
 	./exadapton +RTS -hc -p -s
 	hp2ps -e8in -c exadapton.hp
 	ps2pdf exadapton.ps > exadapton.pdf
+txprofspace:
+	ghc --make -O3 txadapton.hs -fforce-recomp -isrc
+	ghc --make -O3 txadapton.hs -osuf p_o -prof -auto-all -caf-all -fforce-recomp -isrc
+	./txadapton +RTS -hc -p -s
+	hp2ps -e8in -c txadapton.hp
+	ps2pdf txadapton.ps > txadapton.pdf
 exprofspace2:
 	ghc --make -O3 exadapton.hs -fforce-recomp -isrc
 	ghc --make -O3 exadapton.hs -osuf p_o -prof -auto-all -caf-all -fforce-recomp -isrc

@@ -36,100 +36,153 @@ instance Show (StableName a) where
 class (Typeable a,Typeable (Key a),Hashable (Key a),Eq (Key a)) => Memo a where
 	type Key a :: *
 	-- | returns a function that creates a weak pointers with the argument as key and unique key for a given value
-	memoKey :: a -> (MkWeak,Key a)
+	memoKey :: a -> Key a
+	memoWeak :: a -> MkWeak
 
 instance Memo Int where
 	type Key Int = Int
 	{-# INLINE memoKey #-}
-	memoKey i = (MkWeak $ Weak.mkWeak i,i)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Integer where
 	type Key Integer = Integer
 	{-# INLINE memoKey #-}
-	memoKey i = (MkWeak $ Weak.mkWeak i,i)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Bool where
 	type Key Bool = Bool
 	{-# INLINE memoKey #-}
-	memoKey b = (MkWeak $ Weak.mkWeak b,b)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Char where
 	type Key Char = Char
 	{-# INLINE memoKey #-}
-	memoKey c = (MkWeak $ Weak.mkWeak c,c)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Float where
 	type Key Float = Float
 	{-# INLINE memoKey #-}
-	memoKey f = (MkWeak $ Weak.mkWeak f,f)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Double where
 	type Key Double = Double
 	{-# INLINE memoKey #-}
-	memoKey d = (MkWeak $ Weak.mkWeak d,d)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Word where
 	type Key Word = Word
 	{-# INLINE memoKey #-}
-	memoKey d = (MkWeak $ Weak.mkWeak d,d)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Word8 where
 	type Key Word8 = Word8
 	{-# INLINE memoKey #-}
-	memoKey d = (MkWeak $ Weak.mkWeak d,d)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Word16 where
 	type Key Word16 = Word16
 	{-# INLINE memoKey #-}
-	memoKey d = (MkWeak $ Weak.mkWeak d,d)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Word32 where
 	type Key Word32 = Word32
 	{-# INLINE memoKey #-}
-	memoKey d = (MkWeak $ Weak.mkWeak d,d)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Word64 where
 	type Key Word64 = Word64
 	{-# INLINE memoKey #-}
-	memoKey d = (MkWeak $ Weak.mkWeak d,d)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Int8 where
 	type Key Int8 = Int8
 	{-# INLINE memoKey #-}
-	memoKey d = (MkWeak $ Weak.mkWeak d,d)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Int16 where
 	type Key Int16 = Int16
 	{-# INLINE memoKey #-}
-	memoKey d = (MkWeak $ Weak.mkWeak d,d)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Int32 where
 	type Key Int32 = Int32
 	{-# INLINE memoKey #-}
-	memoKey d = (MkWeak $ Weak.mkWeak d,d)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Memo Int64 where
 	type Key Int64 = Int64
 	{-# INLINE memoKey #-}
-	memoKey d = (MkWeak $ Weak.mkWeak d,d)
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 
 instance (Typeable a,Typeable b) => Memo (Map a b) where
 	type Key (Map a b) = StableName (Map a b)
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ mkWeak x,stableName x)
-instance Typeable a => Memo (Maybe a) where
-	type Key (Maybe a) = StableName (Maybe a)
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
+instance Memo a => Memo (Maybe a) where
+	type Key (Maybe a) = Maybe (Key a)
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ mkWeak x,stableName x)
-instance (Typeable a,Typeable b) => Memo (Either a b) where
-	type Key (Either a b) = StableName (Either a b)
+	memoKey = fmap memoKey
+	{-# INLINE memoWeak #-}
+	memoWeak Nothing = MkWeak $ mkWeak Nothing
+	memoWeak (Just a) = MkWeak $ mkWeak a
+instance (Memo a,Memo b) => Memo (Either a b) where
+	type Key (Either a b) = Either (Key a) (Key b)
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ mkWeak x,stableName x)
+	memoKey = either (Left . memoKey) (Right . memoKey)
+	{-# INLINE memoWeak #-}
+	memoWeak = either memoWeak memoWeak
 instance Typeable a => Memo (Set a) where
 	type Key (Set a) = StableName (Set a)
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ mkWeak x,stableName x)
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 instance Typeable a => Memo [a] where
 	type Key [a] = StableName [a]
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ mkWeak x,stableName x)
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
+
+instance Memo () where
+	type Key () = ()
+	{-# INLINE memoKey #-}
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 
 -- for standard memoization over any other data type besides primitive types, use this instance
 --instance Memo a where
 --	type Key a = StableName a
 --	{-# INLINE memoKey #-}
---	memoKey x = (MkWeak $ mkWeak x,stableName x)
+--	memoKey = stableName
+--	{-# INLINE memoWeak #-}
+--	memoWeak = \x -> MkWeak $ mkWeak x
 -- or for no memoization at all, this instance
 --instance Memo a where
 --	type Key a = Neq
 --	{-# INLINE memoKey #-}
---	memoKey x = (MkWeak mkDeadWeak,Neq)
+--	memoKey = \x -> Neq
+--	{-# INLINE memoWeak #-}
+--	memoWeak = \x -> MkWeak mkDeadWeak
 
 -- | An empty type whose values are always different
 data Neq = Neq deriving (Show,Typeable)
@@ -193,12 +246,12 @@ memoStrictM = memoM True
 --this is only to be used with our internal moinads, memoizing in this way, e.g., a State monad would not produce valid results
 memoM :: (Typeable m,Typeable b,Typeable a,MonadIO m,Memo a) => Bool -> (a -> m b) -> a -> m b
 memoM isStrict f =
-	let tbl = declareWeakTable f
+	let tbl = declareWeakTable f (stableName f)
 	in memoM' isStrict f tbl
 
 memoM' :: (MonadIO m,Memo a) => Bool -> (a -> m b) -> MemoTable (Key a) b -> a -> m b
 memoM' isStrict f tbl arg = do
-		let (mkWeak,k) = if isStrict then memoKey $! arg else memoKey arg
+		let (mkWeak,k) = if isStrict then (memoWeak $! arg,memoKey $! arg) else (memoWeak arg,memoKey arg)
 		lkp <- debug ("memo search2 ") $ liftIO $ WeakTable.lookup tbl k
 		case lkp of
 			Nothing -> do
@@ -216,17 +269,16 @@ instance Hashable Unique where
 instance (Memo a,Memo b) => Memo (a,b) where
 	type Key (a,b) = (Key a,Key b)
 	{-# INLINE memoKey #-}
-	memoKey (x,y) = (andMkWeak wx wy,(kx,ky))
-		where (wx,kx) = memoKey x
-		      (wy,ky) = memoKey y
+	memoKey (x,y) = (memoKey x,memoKey y)
+	{-# INLINE memoWeak #-}
+	memoWeak (x,y) = memoWeak x `andMkWeak` memoWeak y
 
 instance (Memo a,Memo b,Memo c) => Memo (a,b,c) where
 	type Key (a,b,c) = (Key a,Key b,Key c)
 	{-# INLINE memoKey #-}
-	memoKey (x,y,z) = (andMkWeak wx (andMkWeak wy wz),(kx,ky,kz))
-		where (wx,kx) = memoKey x
-		      (wy,ky) = memoKey y
-		      (wz,kz) = memoKey z
+	memoKey (x,y,z) = (memoKey x,memoKey y,memoKey z)
+	{-# INLINE memoWeak #-}
+	memoWeak (x,y,z) = memoWeak x `andMkWeak` memoWeak y `andMkWeak` memoWeak z
 
 
 

@@ -1,7 +1,7 @@
 {-# LANGUAGE ConstraintKinds, UndecidableInstances, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module Control.Monad.Transactional.TxAdapton.Memo (
-	memoNonRecTxU, Memo(..), Hashable(..)
+	memoNonRecTxU, memoNonRecTxUNamed, Memo(..), Hashable(..)
 	) where
 
 --	, GenericQMemoU(..),MemoCtx(..),Sat(..),gmemoNonRecU,proxyMemoCtx,NewGenericQ(..),NewGenericQMemo(..),NewGenericQMemoU(..)
@@ -41,17 +41,22 @@ import qualified Data.HashTable.ST.Basic as HashST
 
 --- * Generic memoization
 
--- *		
-
 memoNonRecTxU :: (Typeable b,Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => MemoMode -> (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
 memoNonRecTxU mode f =
-	let buff_tbls = declareCMap (stableName f)
-	    ori_tbl = declareWeakTable f
+	let buff_tbls = declareCMap f (stableName f)
+	    ori_tbl = declareWeakTable f (stableName f)
+	in memoNonRecTxU' mode f $! (ori_tbl :!: buff_tbls)
+
+memoNonRecTxUNamed :: (Memo name,Typeable b,Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => MemoMode -> name -> (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
+memoNonRecTxUNamed mode name f =
+	let key = memoKey name
+	    buff_tbls = declareCMap f key
+	    ori_tbl = declareWeakTable f key
 	in memoNonRecTxU' mode f $! (ori_tbl :!: buff_tbls)
 
 memoNonRecTxU' :: (Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => MemoMode -> (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> TxMemoTable r m (Key a) b -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
 memoNonRecTxU' mode f tbls@(ori_tbl :!: buff_tbls) arg = do
-		let (mkWeak,k) = memoKey $! arg
+		let (mkWeak,k) = (memoWeak $! arg,memoKey $! arg)
 		lkp <- lookupMemoTx tbls k
 		case lkp of
 			Nothing -> do
@@ -102,12 +107,16 @@ insertMemoTx tbls@(ori_tbl :!: buff_tbls) mkWeak k thunk = do
 instance (Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (TxM l inc r m a) where
 	type Key (TxM l inc r m a) = Unique
 	{-# INLINE memoKey #-}
-	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataTxM t),idTxNM $ metaTxM t)
+	memoKey = idTxNM . metaTxM
+	{-# INLINE memoWeak #-}
+	memoWeak = \t -> MkWeak $ WeakKey.mkWeakRefKey (dataTxM t)
                                  
 instance (Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (TxU l inc r m a) where
 	type Key (TxU l inc r m a) = Unique
 	{-# INLINE memoKey #-}
-	memoKey t = (MkWeak $ WeakKey.mkWeakRefKey (dataTxU t),idTxNM $ metaTxU t)
+	memoKey = idTxNM . metaTxU
+	{-# INLINE memoWeak #-}
+	memoWeak = \t -> MkWeak $ WeakKey.mkWeakRefKey (dataTxU t)
 
 --instance WeakKey r => Memo (TxL l inc r m a) where
 --	type Key (L l inc r m a) = Unique

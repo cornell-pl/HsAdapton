@@ -173,10 +173,10 @@ deriving instance Typeable HashST.HashTable
 deriving instance Typeable CMap.Map
 
 lookupOrInsertCMap
-    :: (Typeable k,Typeable v,Typeable b,Hashable b,Eq b)
-    => b
+    :: (Eq name,Hashable name,Typeable name,Typeable k,Typeable v,Typeable b)
+    => b -> name
     -> IO (CMap.Map k v)
-lookupOrInsertCMap n = lookupOrInsert2 globalRegistry (\k v -> CMap.empty) n (error "lookupOrInsertCMap") (error "lookupOrInsertCMap")
+lookupOrInsertCMap n name = lookupOrInsert2 globalRegistry (\k v -> CMap.empty) name (error "lookupOrInsertCMap") (error "lookupOrInsertCMap")
 {-# NOINLINE lookupOrInsertCMap #-}
 
 lookupOrInsertIOHashTable
@@ -187,10 +187,10 @@ lookupOrInsertIOHashTable n = lookupOrInsert2 globalRegistry (\k v -> HashIO.new
 {-# NOINLINE lookupOrInsertIOHashTable #-}
 
 lookupOrInsertWeakTable
-    :: (Eq k,Hashable k,Typeable k,Typeable v,Typeable b)
-    => b
+    :: (Eq name,Hashable name,Eq k,Hashable k,Typeable k,Typeable v,Typeable b,Typeable name)
+    => b -> name
     -> IO (WeakTable k v)
-lookupOrInsertWeakTable n = lookupOrInsert2 globalRegistry (\k v -> WeakTable.newFor n) (stableName n) (error "lookupOrInsertWeakTable") (error "lookupOrInsertWeakTable")
+lookupOrInsertWeakTable n name = lookupOrInsert2 globalRegistry (\k v -> WeakTable.newFor n) name (error "lookupOrInsertWeakTable") (error "lookupOrInsertWeakTable")
 {-# NOINLINE lookupOrInsertWeakTable #-}
 
 lookupOrInsertTVar
@@ -201,12 +201,12 @@ lookupOrInsertTVar
 lookupOrInsertTVar = lookupOrInsert globalRegistry newTVarIO
 {-# NOINLINE lookupOrInsertTVar #-}
 
-declareCMap :: (Eq a,Hashable a,Typeable a,Typeable k,Typeable v,Eq k,Hashable k) => a -> (CMap.Map k v)
-declareCMap a = unsafeDupablePerformIO $ lookupOrInsertCMap a
+declareCMap :: (Typeable a,Eq name,Hashable name,Typeable name,Typeable k,Typeable v,Eq k,Hashable k) => a -> name -> (CMap.Map k v)
+declareCMap a name = unsafeDupablePerformIO $ lookupOrInsertCMap a name
 {-# NOINLINE declareCMap #-}
 
-declareWeakTable :: (Typeable a,Typeable k,Typeable v,Eq k,Hashable k) => a -> (WeakTable k v)
-declareWeakTable a = unsafeDupablePerformIO $ lookupOrInsertWeakTable a
+declareWeakTable :: (Typeable a,Eq name,Hashable name,Typeable name,Typeable k,Typeable v,Eq k,Hashable k) => a -> name -> (WeakTable k v)
+declareWeakTable a name = unsafeDupablePerformIO $ lookupOrInsertWeakTable a name
 {-# NOINLINE declareWeakTable #-}
 
 -- | @declareIORef name val@ maps a variable name to an 'IORef'. Calling it multiple times with the same

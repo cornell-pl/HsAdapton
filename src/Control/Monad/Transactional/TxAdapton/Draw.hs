@@ -60,8 +60,9 @@ import Debug
 
 statusColor :: TxStatus -> Color
 statusColor status = X11Color $ case status of
-	Read False -> Black
-	Read True -> CornFlowerBlue
+	Read 1 -> Black
+	Read 2 -> CornFlowerBlue
+	Read 3 -> Blue4
 	Eval -> Blue4
 	Write -> Crimson
 	New -> Green3
@@ -75,7 +76,7 @@ instance (MonadRef r m,MonadIO m,Eq a,TxLayer Inside r m,TxLayer Outside r m,TxL
 		(childrenIDs,childrenDot) <- drawDict dict inc r m =<< getOutside t
 		let childrenEdges = map (DE . constructorEdge thunkID) childrenIDs
 		let childrenRank = sameRank childrenIDs
-		(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog (metaTxM t) $ Read False
+		(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog (metaTxM t) $ Read 1
 		dependendentEdges <- drawTxDependents thunkID dependents
 		let thunkNode = addAttribute (FontColor $ statusColor status) $ mNode thunkID
 		return ([thunkID],DN thunkNode : childrenEdges ++ dependendentEdges ++ SG childrenRank : childrenDot)
@@ -85,7 +86,7 @@ instance (MonadRef r m,MonadIO m,Eq a,TxLayer Outside r m,TxLayer Inside r m,TxL
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idTxNM $ metaTxU t
 		isDirtyUnevaluated <- isDirtyUnevaluatedTxU t
-		(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog (metaTxU t) $ Read False
+		(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog (metaTxU t) $ Read 1
 		dependentEdges <- drawTxDependents thunkID dependents
 		thunkDependencies <- drawTxDependencies $ metaTxU t
 		let thunkNode = addAttribute (FontColor $ statusColor status) $ uNode isDirtyUnevaluated thunkID ('_':thunkDependencies)
@@ -107,7 +108,7 @@ drawTxDependent fromID weak = do
 			isOriginal <- inL $ readRef oriW
 			ithunkDependencies <- drawTxDependencies tgtMetaW
 			let ithunkID = show $ hashUnique $ idTxNM tgtMetaW
-			(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog tgtMetaW $ Read False
+			(dependents,status) <- readTxLog >>= \txlog -> inL $ getTxDependentsStatus txlog tgtMetaW $ Read 1
 			edges <- drawTxDependents ithunkID dependents
 			isDirty <- inL $ readRef dirtyW
 			let ithunkNode = addAttribute (FontColor $ statusColor status) $ iuNode ithunkID ('_':ithunkDependencies)

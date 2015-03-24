@@ -102,7 +102,7 @@ newTxULog u = do
 readTxMValue :: (Typeable a,Eq a,TxLayer l r m,TxLayer l1 r m) => TxM l1 TxAdapton r m a -> l TxAdapton r m a
 readTxMValue m = do
 	tbl <- readTxLog
-	dyntxvar <- inL $ bufferTxM m (Read False) tbl
+	dyntxvar <- inL $ bufferTxM m (Read 1) tbl
 	case dyntxvar of
 		DynTxM (Just (BuffTxM (v , _))) _ _ _ -> return $ coerce v
 		DynTxM Nothing _ wm _ -> inL $ readRef (dataTxM m)

@@ -18,10 +18,9 @@ class Incremental inc r m => Transactional inc r m where
 	
 	atomically :: STxM inc r m a -> m a
 	
-	-- A read-only transaction with the nice property that it always suceeds in the presence of other concurrent read-only transactions.
-	-- It can still fail due to concurrent read-write transactions.
+	-- A read-only transaction.
 	-- Note that it can still allocate new data.
-	-- Note also that we can't use the other transactional blocks in a read-only transaction, since they are unsafe at the inner layer.
+	-- Note also that we can't use the other transactional blocks in a read-only transaction.
 	readAtomically :: ReadOnlySTxM inc r m a -> m a
 	readAtomically = atomically . inside
 	

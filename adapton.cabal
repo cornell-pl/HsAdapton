@@ -45,6 +45,7 @@ Library
     Control.Monad.Incremental.Generics
     Control.Monad.Incremental
     Control.Monad.Transactional
+    Control.Monad.Transactional.STM
     Control.Monad.Transactional.TxAdapton
     Control.Monad.Transactional.TxAdapton.Algorithm
     Control.Monad.Transactional.TxAdapton.Layers

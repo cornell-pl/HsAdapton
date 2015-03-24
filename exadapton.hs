@@ -15,6 +15,7 @@ import Control.Monad.Incremental hiding (LiftInc(..))
 import Control.Monad.Incremental.Draw
 import Control.Monad.Incremental.Display
 import Control.Monad.Incremental.LazyNonInc
+import Control.Monad.Incremental.List (JoinListMod')
 import Control.Monad.Incremental.Adapton hiding (MData)
 import qualified Control.Monad.Incremental.Adapton as Adapton
 import Data.Proxy
@@ -63,76 +64,76 @@ import Control.Monad.Incremental.Tree
 
 -- creates an input list from a regular list
 toListRefInside :: (
-	Typeable a,Eq a,Eq (ListMod mod Inside inc r m a),Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
+	IncK inc (ListMod' mod Inside inc r m a),Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
 toListRefInside xs = inside $ toListRef xs
 
 toListRef :: (
-	Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
+	IncK inc (ListMod' mod l inc r m a),Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
 toListRef [] = ref NilMod
 toListRef (x:xs) = do
 	mxs <- toListRef xs
 	ref (ConsMod x mxs)
 
 toTreeRef :: (
-	Typeable a,Eq a,Eq (TreeMod mod l inc r m a),Input mod l inc r m) => Tree a -> l inc r m (TreeMod mod l inc r m a)
+	IncK inc (TreeMod' mod l inc r m a),Input mod l inc r m) => Tree a -> l inc r m (TreeMod mod l inc r m a)
 toTreeRef Empty = ref EmptyMod
 toTreeRef (Bin x l r) = do
 	ml <- toTreeRef l
 	mr <- toTreeRef r
 	ref (BinMod x ml mr)
 	
-toListModInside :: (
-	Typeable a,Eq a,Eq (ListMod mod Inside inc r m a),Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
+toListModInside :: (IncK inc (ListMod' mod Inside inc r m a),
+	Input mod Inside inc r m,Layer l inc r m) => [a] -> l inc r m (ListMod mod Inside inc r m a)
 toListModInside xs = inside $ toListMod xs
 
-toListMod :: (
-	Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
+toListMod :: (IncK inc (ListMod' mod l inc r m a),
+	Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
 toListMod [] = ref NilMod
 toListMod (x:xs) = mod $ do
 	mxs <- toListMod xs
 	return $ ConsMod x mxs
 
-modifyListModAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Layer Outside inc r m,Input mod l inc r m)
+modifyListModAt :: (IncK inc (ListMod' mod l inc r m a),Layer Outside inc r m,Input mod l inc r m)
 	=> ListMod mod l inc r m a -> Int -> (ListMod' mod l inc r m a -> l inc r m (ListMod' mod l inc r m a)) -> Outside inc r m ()
 modifyListModAt mxs 0 f = modify mxs f
 modifyListModAt mxs i f = getOutside mxs >>= \xs -> case xs of
 	ConsMod x mxs -> modifyListModAt mxs (pred i) f
 	NilMod -> error "position not found"
 
-setListModAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
+setListModAt :: (IncK inc (ListMod' mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
 	=> ListMod mod l inc r m a -> Int -> (ListMod' mod l inc r m a -> Outside inc r m (ListMod' mod l inc r m a)) -> Outside inc r m ()
 setListModAt mxs 0 f = getOutside mxs >>= f >>= set mxs
 setListModAt mxs i f = getOutside mxs >>= \xs -> case xs of
 	ConsMod x mxs -> setListModAt mxs (pred i) f
 	NilMod -> error "position not found"
 
-setListModHeadAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
+setListModHeadAt :: (IncK inc (ListMod' mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
 	=> ListMod mod l inc r m a -> Int -> a -> Outside inc r m ()
 setListModHeadAt mxs i x' = setListModAt mxs i $ \xs -> case xs of
 	ConsMod x mxs -> return $ ConsMod x' mxs
 	NilMod -> return NilMod
 
-deleteListModAt :: (Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> ListMod mod l inc r m a -> Outside inc r m ()
+deleteListModAt :: (IncK inc (ListMod' mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> ListMod mod l inc r m a -> Outside inc r m ()
 deleteListModAt i mxs = setListModAt mxs i $ \xs -> case xs of
 	ConsMod x mxs' -> getOutside mxs'
 	NilMod -> error "shouldn't be empty"
 
-insertListModAt :: (
-	Typeable a,Eq a,Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer Outside inc r m) => Int -> a -> ListMod mod l inc r m a -> Outside inc r m ()
+insertListModAt :: (IncK inc (ListMod' mod l inc r m a),
+	Input mod l inc r m,Layer Outside inc r m) => Int -> a -> ListMod mod l inc r m a -> Outside inc r m ()
 insertListModAt i x mxs = setListModAt mxs i $ \xs -> do
 	mxs' <- refOutside xs
 	return $ ConsMod x mxs'
 
 -- * Incremental length
 	
-updown1Inc :: (Memo a,Eq (ListMod mod l inc r m a),MonadIO m,Output mod l inc r m,Eq a,Ord a,Memo (ListMod mod l inc r m a))
+updown1Inc :: (IncK inc (ListMod' mod l inc r m a),IncK inc Bool,Memo a,MonadIO m,Output mod l inc r m,Ord a,Memo (ListMod mod l inc r m a))
 	=> mod l inc r m Bool -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 updown1Inc mb mxs = do
 	let up = quicksortInc (\x y -> return $ compare x y)
 	let down = quicksortInc (\x y -> return $ compare y x)
 	thunk $ force mb >>= \b -> (if b then up mxs else down mxs) >>= force
 
-updown2Inc :: (Memo a,Eq (ListMod mod l inc r m a),MonadIO m,Output mod l inc r m,Eq a,Ord a,Memo (ListMod mod l inc r m a))
+updown2Inc :: (IncK inc (ListMod' mod l inc r m a),IncK inc Bool,Memo a,MonadIO m,Output mod l inc r m,Ord a,Memo (ListMod mod l inc r m a))
 	=> mod l inc r m Bool -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 updown2Inc mb mxs = do
 	let up = quicksortInc (\x y -> return $ compare x y) mxs
@@ -162,7 +163,7 @@ testFilterMemoMU' = do
 	s :: ListM Inside IORef IO Int <- toListModInside [1,2,3,4]
 	t :: ListU Inside IORef IO Int <- inside $ filterInc (return . even) s
 	drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
-	!() <- rnfInc t
+	!() <- rnfInc Proxy Proxy Proxy Proxy t
 	drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
 	setListModHeadAt s 2 6
 --	s' :: ListM Inside IORef IO Int <- toListModInside [6,7]
@@ -229,7 +230,7 @@ exNonInc' = do
 
 data TreeChange a where
 	TreeChg :: (forall mod l inc r m . (
-			Eq (TreeMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m
+			IncK inc (TreeMod' mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m
 		)
 		=> TreeMod mod l inc r m a -> Outside inc r m ()) -> TreeChange a
 
@@ -254,7 +255,7 @@ genTreeChg depth = do
 	j::Int <- generate $ frequency [(2,return 0),(10,choose (1,2))]
 	case j of
 		0 -> do
-			y <- generate $ choose (minBound,maxBound)
+			y::Int <- generate $ choose (minBound,maxBound)
 			return $ TreeChg $ \mt -> modify mt $ \t -> case t of
 				BinMod x l r -> return $ BinMod y l r
 				EmptyMod -> return EmptyMod
@@ -289,7 +290,7 @@ genList i runs = do
 
 data ListChange a where
 	ListChg :: (forall mod l inc r m . (
-			Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m
+			IncK inc (ListMod' mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m
 		)
 		=> ListMod mod l inc r m a -> Outside inc r m ()) -> ListChange a
 
@@ -298,15 +299,17 @@ genListPairs i runs = do
 	let max = i
 	xs <- generate $ vectorOf max $ choose (minBound,maxBound)
 	positionsDelete <- generate $ vectorOf runs $ choose (0,max-1)
-	positionsInsert <- generate $ vectorOf runs $ choose (0,max-2)
-	let merge [] [] = return []
-	    merge (x:xs) (y:ys) = do
-		tail <- merge xs ys
-		v <- generate $ choose (minBound::Int,maxBound)
-		return $ ListChg (deleteListModAt x) : ListChg (insertListModAt y v) : tail
+	positionsInsert <- generate $ vectorOf runs $ choose (0,max-2)	    
 	positions <- merge positionsDelete positionsInsert
 	print xs
 	return (xs,positions)
+  where
+	merge :: [Int] -> [Int] -> IO [ListChange Int]
+	merge [] [] = return []
+	merge (x:xs) (y:ys) = do
+		tail <- merge xs ys
+		v <- generate $ choose (minBound::Int,maxBound)
+		return $ ListChg (deleteListModAt x) : ListChg (insertListModAt y v) : tail
 	
 genProblem :: Int -> Int -> IO ([Int],[ListChange Int])
 genProblem i runs = do
@@ -314,10 +317,12 @@ genProblem i runs = do
 	let xs = [1,2,4,5,6,8]
 	positionsDelete <- generate $ vectorOf (runs-1) $ choose (0,6-1)
 	positionsInsert <- generate $ vectorOf runs $ choose (0,6-2)
-	let merge [] [] = []
-	    merge (x:xs) (y:ys) = ListChg (deleteListModAt x) : ListChg (insertListModAt y y) : merge xs ys
 	let positions = merge (2:positionsDelete) positionsInsert
 	return (xs,positions)
+  where
+	merge :: [Int] -> [Int] -> [ListChange Int]
+	merge [] [] = []
+	merge (x:xs) (y:ys) = ListChg (deleteListModAt x) : ListChg (insertListModAt y y) : merge xs ys
 
 testM :: (ListM Inside IORef IO Int -> Inner IORef IO (ListU Inside IORef IO Int)) -> ([Int],[ListChange Int]) -> Int -> Outer IORef IO (Double,Double,Double)
 testM f (xs,chgs) runs = do
@@ -325,7 +330,7 @@ testM f (xs,chgs) runs = do
 		s :: ListM Inside IORef IO Int <- toListRefInside xs
 		t :: ListU Inside IORef IO Int <- inside $ f s
 --		drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
-		!() <- rnfInc t
+		!() <- rnfInc Proxy Proxy Proxy Proxy t
 --		drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
 		return (s,t)
 	(dirty,propagate) <- testM' s t chgs
@@ -336,7 +341,7 @@ testM' s t [] = return (0,0)
 testM' s t (chg:chgs) = do
 	(dirty,()) <- timeOuterT $ applyListChange chg s
 --	drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
-	(propagate,()) <- timeOuterT $ rnfInc t
+	(propagate,()) <- timeOuterT $ rnfInc Proxy Proxy Proxy Proxy t
 --	drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
 	(dirty',propagate') <- testM' s t chgs
 	return (dirty+dirty',propagate+propagate')
@@ -347,7 +352,7 @@ testL f (xs,chgs) runs = do
 		s :: ListL Inside IORef IO Int <- toListModInside xs
 		t :: ListU Inside IORef IO Int <- inside $ f s
 --		drawPDF proxyIORef proxyIO (Merge s t)
-		!() <- rnfInc t
+		!() <- rnfInc Proxy Proxy Proxy Proxy t
 --		drawPDF proxyIORef proxyIO (Merge s t)
 		return (s,t)
 	(cycles,()) <- timeOuterT $ testL' s t chgs
@@ -358,7 +363,7 @@ testL' s t [] = return ()
 testL' s t (chg:chgs) = do
 	applyListChange chg s
 --	drawPDF proxyIORef proxyIO (Merge s t)
-	!() <- rnfInc t
+	!() <- rnfInc Proxy Proxy Proxy Proxy t
 --	drawPDF proxyIORef proxyIO (Merge s t)
 	testL' s t chgs
 
@@ -367,7 +372,7 @@ testNonIncL f (xs,chgs) runs = do
 	(scratch,(s,t)) <- timeLazyNonIncOuterT $ do
 		s :: ListLazyNonIncL Inside IORef IO Int <- toListModInside xs
 		t :: ListLazyNonIncU Inside IORef IO Int <- inside $ f s
-		!() <- rnfInc t
+		!() <- rnfInc Proxy Proxy Proxy Proxy t
 		return (s,t)
 	(cycles,()) <- timeLazyNonIncOuterT $ testNonIncL' s t chgs
 	return (scratch,cycles / toEnum runs)
@@ -376,7 +381,7 @@ testNonIncL' :: ListLazyNonIncL Inside IORef IO Int -> ListLazyNonIncU Inside IO
 testNonIncL' s t [] = return ()
 testNonIncL' s t (chg:chgs) = do
 	applyListChange chg s
-	!() <- rnfInc t
+	!() <- rnfInc Proxy Proxy Proxy Proxy t
 	testNonIncL' s t chgs
 	
 testNonIncM :: (ListLazyNonIncM Inside IORef IO Int -> Inside LazyNonInc IORef IO (ListLazyNonIncU Inside IORef IO Int)) -> ([Int],[ListChange Int]) -> Int -> Outside LazyNonInc IORef IO (Double,Double,Double)
@@ -384,7 +389,7 @@ testNonIncM f (xs,chgs) runs = do
 	(scratch,(s,t)) <- timeLazyNonIncOuterT $ do
 		s :: ListLazyNonIncM Inside IORef IO Int <- toListRefInside xs
 		t :: ListLazyNonIncU Inside IORef IO Int <- inside $ f s
-		!() <- rnfInc t
+		!() <- rnfInc Proxy Proxy Proxy Proxy t
 		return (s,t)
 	(dirty,propagate) <- testNonIncM' s t chgs
 	return (scratch,dirty / toEnum runs,propagate / toEnum runs)
@@ -393,7 +398,7 @@ testNonIncM' :: ListLazyNonIncM Inside IORef IO Int -> ListLazyNonIncU Inside IO
 testNonIncM' s t [] = return (0,0)
 testNonIncM' s t (chg:chgs) = do
 	(dirty,()) <- timeLazyNonIncOuterT $ applyListChange chg s
-	(propagate,()) <- timeLazyNonIncOuterT $ rnfInc t
+	(propagate,()) <- timeLazyNonIncOuterT $ rnfInc Proxy Proxy Proxy Proxy t
 	(dirty',propagate') <- testNonIncM' s t chgs
 	return (dirty+dirty',propagate+propagate')
 
@@ -446,7 +451,7 @@ testTreeM f (xs,chgs) runs = do
 		s :: TreeM Inside IORef IO Int <- inside $ toTreeRef xs
 		t :: U Inside Adapton IORef IO b <- inside $ f s
 		drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
-		!() <- rnfInc t
+		!() <- rnfInc Proxy Proxy Proxy Proxy t
 		drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
 		return (s,t)
 	(cycles,()) <- timeOuterT $ testTreeM' s t chgs
@@ -457,7 +462,7 @@ testTreeM' s t [] = return ()
 testTreeM' s t (chg:chgs) = do
 	applyTreeChange chg s
 	drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
-	!() <- rnfInc t
+	!() <- rnfInc Proxy Proxy Proxy Proxy t
 	drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
 	testTreeM' s t chgs
 
@@ -467,7 +472,7 @@ testNonIncTreeM f (xs,chgs) runs = do
 		s :: TreeLazyNonIncM Inside IORef IO Int <- inside $ toTreeRef xs
 		t :: LazyNonIncU Inside LazyNonInc IORef IO Int <- inside $ f s
 --		drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
-		!() <- rnfInc t
+		!() <- rnfInc Proxy Proxy Proxy Proxy t
 --		drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
 		return (s,t)
 	(cycles,()) <- timeLazyNonIncOuterT $ testNonIncTreeM' s t chgs
@@ -478,7 +483,7 @@ testNonIncTreeM' s t [] = return ()
 testNonIncTreeM' s t (chg:chgs) = do
 	applyTreeChange chg s
 --	drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
-	!() <- rnfInc t
+	!() <- rnfInc Proxy Proxy Proxy Proxy t
 --	drawPDF proxyAdapton proxyIORef proxyIO (Merge s t)
 	testNonIncTreeM' s t chgs
 
@@ -501,11 +506,11 @@ testNonIncTreeM' s t (chg:chgs) = do
 --	return (dirty+dirty',propagate+propagate')
 
 
-applyListChange :: (Eq (ListMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m)
+applyListChange :: (IncK inc (ListMod' mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m)
 	=> ListChange a -> ListMod mod l inc r m a -> Outside inc r m ()
 applyListChange (ListChg f) xs = f xs
 
-applyTreeChange :: (Eq (TreeMod mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m)
+applyTreeChange :: (IncK inc (TreeMod' mod l inc r m a),Input mod l inc r m,Layer l inc r m,Layer Outside inc r m)
 	=> TreeChange a -> TreeMod mod l inc r m a -> Outside inc r m ()
 applyTreeChange (TreeChg f) xs = f xs
 
@@ -632,30 +637,32 @@ timeOuterT (Outer m) = Outer $ timeItT m
 timeLazyNonIncOuterT :: Outside LazyNonInc r IO a -> Outside LazyNonInc r IO (Double,a)
 timeLazyNonIncOuterT (LazyNonIncOuter m) = LazyNonIncOuter $ timeItT m
 
-sumTree :: (MData (MemoCtx NoCtx) (Inside inc r m) (TreeMod mod Inside inc r m Int),Output U Inside inc r m,MonadIO m) => TreeMod mod Inside inc r m Int -> Inside inc r m (U Inside inc r m Int)
+sumTree :: (IncK inc Int,MData (MemoCtx NoCtx) (Inside inc r m) (TreeMod mod Inside inc r m Int),Output U Inside inc r m,MonadIO m) => TreeMod mod Inside inc r m Int -> Inside inc r m (U Inside inc r m Int)
 sumTree = gsumInc
 
-listifyTree :: (MData (MemoCtx NoCtx) (Inside inc r m) (TreeMod mod Inside inc r m Int),Output U Inside inc r m,MonadIO m) => TreeMod mod Inside inc r m Int -> Inside inc r m (JoinListMod U Inside inc r m Int)
+listifyTree :: (IncK inc (JoinListMod' U Inside inc r m Int),MData (MemoCtx NoCtx) (Inside inc r m) (TreeMod mod Inside inc r m Int),Output U Inside inc r m,MonadIO m) => TreeMod mod Inside inc r m Int -> Inside inc r m (JoinListMod U Inside inc r m Int)
 listifyTree = listifyInc proxyNoCtx (\(i::Int) -> return True)
 
 
 -- * Customer example
 
-topkInc :: (Eq a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m) =>
+topkInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Eq a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m) =>
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 topkInc cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortInc (flip cmp) >=> takeInc' i) mxs >>= force
 
-leastkIncM :: (Eq a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,OrdM (l inc r m) a) =>
+leastkIncM :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Eq a,Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,OrdM (l inc r m) a) =>
 	Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 leastkIncM i =
 	let sort = quicksortIncM
 	in memo $ \_ mxs -> (mapInc return >=> sort >=> takeInc' i) mxs >>= force
 
-leastkInc :: (Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Eq a) =>
+leastkInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Eq a) =>
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 leastkInc cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortInc cmp >=> takeInc' i) mxs >>= force
 
-
+leastkIncNamed :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Eq a) =>
+	name -> (a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+leastkIncNamed name cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortIncNamed name cmp >=> takeInc' i) mxs >>= force
 
 
 type Warehouse = ListM Inside IORef IO Item
@@ -671,7 +678,18 @@ instance OrdM (Inside Adapton IORef IO) Item where
 		p2 <- get $ itemPrice i2 
 		return $ compare p1 p2
 
-leastItem = inside . leastkIncM 1
+data LeastItem = LeastItem deriving (Typeable,Eq)
+instance Hashable LeastItem where
+	hash _ = 0
+	hashWithSalt salt _ = salt
+instance Memo LeastItem where
+	type Key LeastItem = LeastItem
+	{-# INLINE memoKey #-}
+	memoKey = id
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
+
+leastItem = inside . leastkIncNamed LeastItem compareM 1
 -- finds the cheapest item
 cheapestItem :: String -> Warehouse -> ListU Inside IORef IO Item -> Outside Adapton IORef IO Item
 cheapestItem msg warehouse leastItem = do
@@ -751,7 +769,7 @@ customer_thread i warehouse leastItem customer = do
 		customer_thread (pred i) warehouse leastItem customer
 
 main = main_Customers
-main_Customers = flip finally (mergePDFsInto' "ex.pdf") $ do
+main_Customers = {-flip finally (mergePDFsInto' "ex.pdf") $ -} do
 	let numItems = 10^4
 	
 	hSetBuffering stdout NoBuffering
@@ -784,43 +802,47 @@ genDB numItems = do
 	return (warehouse,customers)
 	
 instance (Display l1 inc r m (M Inside Adapton IORef IO Int)) => Display l1 inc r m Item where
-	displaysPrec (Item itemName itemPrice itemInflation itemQuantity) r = do
-		sq <- displaysPrec itemQuantity (')':r)
-		si <- displaysPrec itemInflation (' ':sq)
-		sp <- displaysPrec itemPrice (' ':si)
-		sn <- displaysPrec itemName (' ':sp)
+	displaysPrec proxyL proxyInc proxyR proxyM (Item itemName itemPrice itemInflation itemQuantity) r = do
+		sq <- displaysPrec proxyL proxyInc proxyR proxyM itemQuantity (')':r)
+		si <- displaysPrec proxyL proxyInc proxyR proxyM itemInflation (' ':sq)
+		sp <- displaysPrec proxyL proxyInc proxyR proxyM itemPrice (' ':si)
+		sn <- displaysPrec proxyL proxyInc proxyR proxyM itemName (' ':sp)
 		return $ "(Item " ++ sn
 
 instance (Display l1 inc r m (M Inside Adapton IORef IO Int),Display l1 inc r m (ListM Inside IORef IO (String, Int))) => Display l1 inc r m Customer where
-	displaysPrec (Customer customerName customerBalance customerPurchases) r = do
-		sp <- displaysPrec customerPurchases (')':r)
-		sb <- displaysPrec customerBalance (' ':sp)
-		sn <- displaysPrec customerName (' ':sb)
+	displaysPrec proxyL proxyInc proxyR proxyM (Customer customerName customerBalance customerPurchases) r = do
+		sp <- displaysPrec proxyL proxyInc proxyR proxyM customerPurchases (')':r)
+		sb <- displaysPrec proxyL proxyInc proxyR proxyM customerBalance (' ':sp)
+		sn <- displaysPrec proxyL proxyInc proxyR proxyM customerName (' ':sb)
 		return $ "(Customer " ++ sn
 
 instance (NFDataInc l1 inc r m (M Inside Adapton IORef IO Int)) => NFDataInc l1 inc r m Item where
-	rnfInc (Item itemName itemPrice itemInflation itemQuantity) = do
-		n <- rnfInc itemName
-		p <- rnfInc itemPrice
-		i <- rnfInc itemInflation
-		q <- rnfInc itemQuantity
+	rnfInc proxyL proxyInc proxyR proxyM (Item itemName itemPrice itemInflation itemQuantity) = do
+		n <- rnfInc proxyL proxyInc proxyR proxyM itemName
+		p <- rnfInc proxyL proxyInc proxyR proxyM itemPrice
+		i <- rnfInc proxyL proxyInc proxyR proxyM itemInflation
+		q <- rnfInc proxyL proxyInc proxyR proxyM itemQuantity
 		return $ n `seq` p `seq` i `seq` q
 
 instance (NFDataInc l1 inc r m (M Inside Adapton IORef IO Int),NFDataInc l1 inc r m (ListM Inside IORef IO (String, Int))) => NFDataInc l1 inc r m Customer where
-	rnfInc (Customer customerName customerBalance customerPurchases) = do
-		n <- rnfInc customerName
-		b <- rnfInc customerBalance
-		p <- rnfInc customerPurchases
+	rnfInc proxyL proxyInc proxyR proxyM (Customer customerName customerBalance customerPurchases) = do
+		n <- rnfInc proxyL proxyInc proxyR proxyM customerName
+		b <- rnfInc proxyL proxyInc proxyR proxyM customerBalance
+		p <- rnfInc proxyL proxyInc proxyR proxyM customerPurchases
 		return $ n `seq` b `seq` p
 
 instance Memo Item where
 	type Key Item = StableName Item
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ Weak.mkWeak x
 instance Memo Customer where
 	type Key Customer = StableName Customer
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ Weak.mkWeak x
 		
 
 $( derive makeMData ''Item )

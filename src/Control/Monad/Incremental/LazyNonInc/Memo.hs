@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module Control.Monad.Incremental.LazyNonInc.Memo (
 	Memo(..), Hashable(..)
@@ -22,20 +22,26 @@ import System.Mem.StableName
 import System.Mem.WeakKey as WeakKey
 import Data.Typeable
 
-instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (LazyNonIncM l inc r m a) where
+instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakKey (r a),WeakRef r) => Memo (LazyNonIncM l inc r m a) where
 	type Key (LazyNonIncM l inc r m a) = StableName (LazyNonIncM l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x@(LazyNonIncM r) = (MkWeak $ WeakKey.mkWeakRefKey r,stableName x)
-                                 
-instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (LazyNonIncU l inc r m a) where
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \(LazyNonIncM r) -> MkWeak $ WeakKey.mkWeakRefKey r
+           
+instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakKey (r a),WeakRef r) => Memo (LazyNonIncU l inc r m a) where
 	type Key (LazyNonIncU l inc r m a) = StableName (LazyNonIncU l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x@(LazyNonIncU r) = (MkWeak $ WeakKey.mkWeakRefKey r,stableName x)
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \(LazyNonIncU r) -> MkWeak $ WeakKey.mkWeakRefKey r
 
-instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (LazyNonIncL l inc r m a) where
+instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakKey (r a),WeakRef r) => Memo (LazyNonIncL l inc r m a) where
 	type Key (LazyNonIncL l inc r m a) = StableName (LazyNonIncL l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x@(LazyNonIncL r) = (MkWeak $ WeakKey.mkWeakRefKey r,stableName x)
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \(LazyNonIncL r) -> MkWeak $ WeakKey.mkWeakRefKey r
 
 instance Hashable (LazyNonIncU l inc r m a) where
 	hashWithSalt i u = hashWithSalt i (hashStableName $ stableName u)

@@ -29,6 +29,8 @@ import System.Mem.WeakTable
 -- | @STM@ as an incremental computation class
 data IncSTM deriving Typeable
 
+type instance IncK IncSTM a = ()
+
 instance Incremental IncSTM IORef IO where
 	newtype Outside IncSTM IORef IO a = OutsideSTM { unOutsideSTM :: STM a } deriving (MonadLazy,Monad,Applicative,Functor)
 	newtype Inside IncSTM IORef IO a = InsideSTM { unInsideSTM :: STM a } deriving (MonadLazy,Monad,Applicative,Functor)
@@ -80,7 +82,9 @@ instance MonadLazy STM
 instance (Typeable inc,Typeable l,Typeable r,Typeable m,Typeable a,WeakRef r) => Memo (IncTVar l inc r m a) where
 	type Key (IncTVar l inc r m a) = StableName (IncTVar l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ mkWeak x,stableName x)
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ mkWeak x
 
 
 

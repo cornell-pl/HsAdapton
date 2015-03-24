@@ -115,7 +115,7 @@ instance (Draw inc r m a) => Sat (DrawDict inc r m a) where
 
 drawPDF :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m ()
 drawPDF label inc r m v = do
---	inL $ liftIO $ performGC >> threadDelay 2000000
+	inL $ liftIO $ performGC >> threadDelay 2000000
 	dir <- inL $ liftIO getTemporaryDirectory -- $ return "/Users/hpacheco/Desktop/tmp/"
 	filename <- inL $ liftIO $ liftM toString $ nextUUIDSafe
 	let pdfFile = dir </> addExtension filename "pdf"

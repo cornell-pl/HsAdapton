@@ -115,9 +115,17 @@ class (Thunk mod l inc r m,Layer l inc r m) => Output mod l inc r m where
 	memo :: (IncK inc a,Memo arg) => ((arg -> l inc r m (mod l inc r m a)) -> arg -> l inc r m a) -> (arg -> l inc r m (mod l inc r m a))
 	memo f arg = thunk $ f (memo f) arg
 	
+	-- memoization function with a name
+	memoNamed :: (Memo name,IncK inc a,Memo arg) => name -> ((arg -> l inc r m (mod l inc r m a)) -> arg -> l inc r m a) -> (arg -> l inc r m (mod l inc r m a))
+	memoNamed name f arg = thunk $ f (memoNamed name f) arg
+	
 	memo2 :: (IncK inc a,Memo arg1,Memo arg2) => ((arg1 -> arg2 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> l inc r m a) -> (arg1 -> arg2 -> l inc r m (mod l inc r m a))
 	memo2 f = curry (memo (uncurry . f . curry))
 	{-# INLINE memo2 #-}
+	
+	memo2Named :: (Memo name,IncK inc a,Memo arg1,Memo arg2) => name -> ((arg1 -> arg2 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> l inc r m a) -> (arg1 -> arg2 -> l inc r m (mod l inc r m a))
+	memo2Named name f = curry (memoNamed name (uncurry . f . curry))
+	{-# INLINE memo2Named #-}
 	
 	memo3 :: (IncK inc a,Memo arg1,Memo arg2,Memo arg3) => ((arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> arg3 -> l inc r m a) -> (arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a))
 	memo3 f = curry3 (memo (uncurry3 . f . curry3))
@@ -125,6 +133,13 @@ class (Thunk mod l inc r m,Layer l inc r m) => Output mod l inc r m where
 		curry3 f x y z = f (x,y,z)
 		uncurry3 f (x,y,z) = f x y z
 	{-# INLINE memo3 #-}
+	
+	memo3Named :: (Memo name,IncK inc a,Memo arg1,Memo arg2,Memo arg3) => name -> ((arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> arg3 -> l inc r m a) -> (arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a))
+	memo3Named name f = curry3 (memoNamed name (uncurry3 . f . curry3))
+		where
+		curry3 f x y z = f (x,y,z)
+		uncurry3 f (x,y,z) = f x y z
+	{-# INLINE memo3Named #-}
 	
 	-- | fix-point memoization for incremental generic queries
 	gmemoQ :: (Typeable ctx,IncK inc b) => Proxy ctx -> (GenericQMemo ctx mod l inc r m b -> GenericQMemo ctx mod l inc r m b) -> GenericQMemo ctx mod l inc r m b
@@ -228,20 +243,24 @@ instance (Typeable a,IncK inc a,Sat (ctx (mod l1 inc r m a)),Eq a,MData ctx (l2 
 instance (Typeable inc,Typeable r,Typeable m,Typeable a) => Memo (Inside inc r m a) where
 	type Key (Inside incr r m a) = Neq
 	{-# INLINE memoKey #-}
-	memoKey m = (MkWeak mkDeadWeak,Neq)
+	memoKey m = Neq
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak mkDeadWeak
 
 -- for evaluation-order reasons related to @gfoldl@ we need to treat layer computations as traversable types, but for correctness of IC we can't memoize them
 instance (Typeable inc,Typeable r,Typeable m,Typeable a) => Memo (Outside inc r m a) where
 	type Key (Outside incr r m a) = Neq
 	{-# INLINE memoKey #-}
-	memoKey m = (MkWeak mkDeadWeak,Neq)
+	memoKey m = Neq
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak mkDeadWeak
 
 -- | A generic query type with a memoization context
 type GenericQMemo ctx (thunk :: (* -> (* -> *) -> (* -> *) -> * -> *) -> * -> (* -> *) -> (* -> *) -> * -> *) l inc r m b = GenericQ (MemoCtx ctx) (l inc r m) (thunk l inc r m b)
 
 -- | A generic memoization context type
 data MemoCtx ctx a = MemoCtx {
-	  memoKeyCtx :: Proxy ctx -> a -> (MkWeak,Key a)
+	  memoWeakKeyCtx :: Proxy ctx -> a -> (MkWeak,Key a)
 	, keyDynamicCtx :: Proxy ctx -> Proxy a -> Key a -> KeyDynamic
 	, memoCtx :: ctx a
 	} deriving Typeable
@@ -250,7 +269,7 @@ type MemoCtxK ctx a = (Typeable a,Typeable (Key a),Memo a,Sat (ctx a))
 
 instance (MemoCtxK ctx a) => Sat (MemoCtx ctx a) where
 	dict = MemoCtx
-		(\ctx -> memoKey)
+		(\ctx x -> (memoWeak x,memoKey x))
 		(\ctx a -> KeyDyn)
 		dict
 

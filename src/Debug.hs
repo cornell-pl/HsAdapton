@@ -20,8 +20,8 @@ import Data.UUID
 import Data.UUID.V1
 
 debug :: String -> a -> a
---debug str = id
-debug str x = trace str x
+debug str = id
+--debug str x = trace str x
 
 debugM :: MonadIO m => String -> m a -> m a
 debugM str m = do

@@ -113,6 +113,9 @@ instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepTy
 takeInc' :: (IncK inc (ListMod' thunk l inc r m a),Memo (ListMod thunk l inc r m a),Output thunk l inc r m) => Int -> ListMod thunk l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 takeInc' = takeInc
 
+takeIncNamed' :: (Memo name,IncK inc (ListMod' thunk l inc r m a),Memo (ListMod thunk l inc r m a),Output thunk l inc r m) => name -> Int -> ListMod thunk l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+takeIncNamed' = takeIncNamed
+
 -- | take
 takeInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Memo (ListMod mod l inc r m a),Output thunk l inc r m,Thunk mod l inc r m) => Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 takeInc = memo2 $ \recur i mxs -> case i of
@@ -121,8 +124,23 @@ takeInc = memo2 $ \recur i mxs -> case i of
 		ConsMod x mxs' -> liftM (ConsMod x) $ recur (n-1) mxs'
 		NilMod -> return NilMod
 
+takeIncNamed :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Memo (ListMod mod l inc r m a),Output thunk l inc r m,Thunk mod l inc r m) => name -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+takeIncNamed name = memo2Named name $ \recur i mxs -> case i of
+	0 -> return NilMod
+	n -> read mxs >>= \xs -> case xs of
+		ConsMod x mxs' -> liftM (ConsMod x) $ recur (n-1) mxs'
+		NilMod -> return NilMod
+
+filterIncNamed :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
+	=> name -> (a -> l inc r m Bool) -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+filterIncNamed name p = memoNamed name $ \recur mxs -> read mxs >>= \xs -> case xs of
+	ConsMod x mxs -> p x >>= \b -> if b
+		then liftM (ConsMod x) $ recur mxs
+		else recur mxs >>= force
+	NilMod -> return NilMod
+
 -- | filter
-filterInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,MonadIO m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
+filterInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
 	=> (a -> l inc r m Bool) -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 filterInc p = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
 	ConsMod x mxs -> p x >>= \b -> if b
@@ -131,7 +149,7 @@ filterInc p = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
 	NilMod -> return NilMod
 	
 -- | filter=
-filterWithKeyInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Memo a,Thunk mod l inc r m,MonadIO m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
+filterWithKeyInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Memo a,Thunk mod l inc r m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
 	=> (a -> a -> l inc r m Bool) -> a -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 filterWithKeyInc cmp = memo2 $ \recur k mxs -> read mxs >>= \xs -> case xs of
 	ConsMod x mxs -> cmp k x >>= \b -> if b
@@ -140,13 +158,13 @@ filterWithKeyInc cmp = memo2 $ \recur k mxs -> read mxs >>= \xs -> case xs of
 	NilMod -> return NilMod
 
 -- | length
-lengthInc :: (IncK inc Int,IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,MonadIO m,Memo (ListMod mod l inc r m a),Layer l inc r m,Output thunk l inc r m) => ListMod mod l inc r m a -> l inc r m (thunk l inc r m Int)
+lengthInc :: (IncK inc Int,IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,Memo (ListMod mod l inc r m a),Layer l inc r m,Output thunk l inc r m) => ListMod mod l inc r m a -> l inc r m (thunk l inc r m Int)
 lengthInc = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
 	ConsMod x mxs' -> recur mxs' >>= force >>= return . succ
 	NilMod -> return 0
 
 -- | list map
-mapInc :: (IncK inc (ListMod' thunk l inc r m b),IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,MonadIO m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
+mapInc :: (IncK inc (ListMod' thunk l inc r m b),IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
 	=> (a -> l inc r m b) -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m b)
 mapInc f = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
 	NilMod -> return NilMod
@@ -155,8 +173,17 @@ mapInc f = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
 		mys <- recur mxs
 		return $ ConsMod y mys
 
+mapIncNamed :: (Memo name,IncK inc (ListMod' thunk l inc r m b),IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
+	=> name -> (a -> l inc r m b) -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m b)
+mapIncNamed name f = memoNamed name $ \recur mxs -> read mxs >>= \xs -> case xs of
+	NilMod -> return NilMod
+	ConsMod x mxs -> do
+		y <- f x
+		mys <- recur mxs
+		return $ ConsMod y mys
+
 -- | fold1 with an associative operation
-fold1Inc :: (IncK inc a,IncK inc (ListMod' mod l inc r m a),Memo (ListMod mod l inc r m a),MonadIO m,Hashable (ListMod mod l inc r m a),Output mod l inc r m)
+fold1Inc :: (MonadIO m,IncK inc a,IncK inc (ListMod' mod l inc r m a),Memo (ListMod mod l inc r m a),Hashable (ListMod mod l inc r m a),Output mod l inc r m)
 	=> (a -> a -> l inc r m a) -> ListMod mod l inc r m a -> l inc r m (mod l inc r m a)
 fold1Inc f mxs = do
 	g <- inL (liftIO newStdGen)
@@ -196,8 +223,8 @@ partitionInc p = memo $ \recur mxs -> force mxs >>= \xs -> case xs of
 class Monad m => OrdM m a where
 	compareM :: a -> a -> m Ordering
 
--- if we pass the comparison function as an argument, GHC will sometimes create different memotables for the same filter functions; implementing comparison behind a typeclass solves this issue
-quicksortIncM :: (IncK inc (ListMod' mod l inc r m a),OrdM (l inc r m) a,Memo a,Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m)
+-- if we pass the comparison function as an argument, GHC will sometimes create different memotables for the same filter functions; implementing comparison behind a typeclass works around this issue
+quicksortIncM :: (IncK inc (ListMod' mod l inc r m a),OrdM (l inc r m) a,Memo a,Output mod l inc r m,Memo (ListMod mod l inc r m a))
 	=> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 quicksortIncM (mxs :: ListMod mod l inc r m a) = do
 	let filter_left = filterWithKeyInc (\k y -> liftM (==LT) $ compareM y k)
@@ -211,8 +238,20 @@ quicksortIncM (mxs :: ListMod mod l inc r m a) = do
 		NilMod -> force rest
 	quicksortInc' mxs nil
 
+quicksortIncNamed :: (Memo name,IncK inc (ListMod' mod l inc r m a),Memo a,Output mod l inc r m,Memo (ListMod mod l inc r m a))
+	=> name -> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
+quicksortIncNamed name cmp (mxs :: ListMod mod l inc r m a) = do
+	(nil :: ListMod mod l inc r m a) <- const NilMod
+	let quicksortInc' = memo2Named name $ \recur mxs rest -> force mxs >>= \xs -> case xs of
+		ConsMod x mxs' -> do
+			left <- filterIncNamed (name,Left x :: Either a a) (\y -> liftM (==LT) $ cmp y x) mxs'
+			right <- filterIncNamed (name,Right x :: Either a a) (\y -> liftM (/=LT) $ cmp y x) mxs'
+			recur right rest >>= const . ConsMod x >>= recur left >>= force
+		NilMod -> force rest
+	quicksortInc' mxs nil
+
 -- | quicksort
-quicksortInc :: (IncK inc (ListMod' mod l inc r m a),Memo a,Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m)
+quicksortInc :: (IncK inc (ListMod' mod l inc r m a),Memo a,Output mod l inc r m,Memo (ListMod mod l inc r m a))
 	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 quicksortInc cmp (mxs :: ListMod mod l inc r m a) = do
 	let filter_left = filterWithKeyInc (\k y -> liftM (==LT) $ cmp y k)
@@ -226,7 +265,7 @@ quicksortInc cmp (mxs :: ListMod mod l inc r m a) = do
 		NilMod -> force rest
 	quicksortInc' mxs nil
 	
-quicksortInverseInc :: (IncK inc (ListMod' mod l inc r m a),Ord a,Memo a,Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m)
+quicksortInverseInc :: (IncK inc (ListMod' mod l inc r m a),Ord a,Memo a,Output mod l inc r m,Memo (ListMod mod l inc r m a))
 	=> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 quicksortInverseInc (mxs :: ListMod mod l inc r m a) = do
 	let filter_left = filterWithKeyInc (\k y -> return $ compare y k == GT)
@@ -241,11 +280,11 @@ quicksortInverseInc (mxs :: ListMod mod l inc r m a) = do
 	quicksortInc' mxs nil
 
 -- | quicksort with partition (this IC version is actually slower than using two filters)
-quicksortInc2 :: (IncK inc (ListMod' mod l inc r m a),IncK inc (ListMod mod l inc r m a, ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m)
+quicksortInc2 :: (IncK inc (ListMod' mod l inc r m a),IncK inc (ListMod mod l inc r m a, ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a))
 	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 quicksortInc2 cmp mxs = const NilMod >>= (quicksortInc2' cmp) mxs
   where
-	quicksortInc2' :: (IncK inc (ListMod' mod l inc r m a),IncK inc (ListMod mod l inc r m a, ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m)
+	quicksortInc2' :: (IncK inc (ListMod' mod l inc r m a),IncK inc (ListMod mod l inc r m a, ListMod mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a))
 		=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 	quicksortInc2' cmp = memo2 (\recur mxs rest -> force mxs >>= \xs -> case xs of
 		ConsMod x mxs' -> do
@@ -254,7 +293,7 @@ quicksortInc2 cmp mxs = const NilMod >>= (quicksortInc2' cmp) mxs
 			recur left tright >>= force
 		NilMod -> force rest)
 
-quicksortInc3 :: (IncK inc (ListMod' mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a),MonadIO m)
+quicksortInc3 :: (IncK inc (ListMod' mod l inc r m a),Output mod l inc r m,Memo (ListMod mod l inc r m a))
 	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 quicksortInc3 cmp (mxs :: ListMod mod l inc r m a) = do
 	(nil :: ListMod mod l inc r m a) <- const NilMod
@@ -268,7 +307,7 @@ quicksortInc3 cmp (mxs :: ListMod mod l inc r m a) = do
 	quicksortInc' mxs nil
 
 -- | mergesort
-mergesortInc :: (IncK inc (ListMod' mod l inc r m (ListMod mod l inc r m a)),IncK inc (ListMod' mod l inc r m a),IncK inc (ListMod mod l inc r m a),Memo (ListMod mod l inc r m (ListMod mod l inc r m a)),Memo a,Memo (mod l inc r m (ListMod' mod l inc r m a)),MonadIO m,Hashable (ListMod mod l inc r m (ListMod mod l inc r m a)),Output mod l inc r m)
+mergesortInc :: (MonadIO m,IncK inc (ListMod' mod l inc r m (ListMod mod l inc r m a)),IncK inc (ListMod' mod l inc r m a),IncK inc (ListMod mod l inc r m a),Memo (ListMod mod l inc r m (ListMod mod l inc r m a)),Memo a,Memo (mod l inc r m (ListMod' mod l inc r m a)),Hashable (ListMod mod l inc r m (ListMod mod l inc r m a)),Output mod l inc r m)
 	=> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
 mergesortInc cmp mxs = do
 	nil <- const NilMod
@@ -277,7 +316,7 @@ mergesortInc cmp mxs = do
 		NilMod -> return NilMod) mxs
   where
 	-- | appends a list to each element of a list
-	liftInc :: (IncK inc (ListMod' mod l inc r m (ListMod mod l inc r m a)),IncK inc (ListMod' mod l inc r m a),MonadIO m,Output mod l inc r m,Memo a,Memo (ListMod mod l inc r m a)) => ListMod mod l inc r m a -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m (ListMod mod l inc r m a))
+	liftInc :: (IncK inc (ListMod' mod l inc r m (ListMod mod l inc r m a)),IncK inc (ListMod' mod l inc r m a),Output mod l inc r m,Memo a,Memo (ListMod mod l inc r m a)) => ListMod mod l inc r m a -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m (ListMod mod l inc r m a))
 	liftInc nil = mapInc (memo (\_ x -> return $ ConsMod x nil))
 
 -- | merges two sorted lists
@@ -341,7 +380,7 @@ insertInc cmp = memo2 $ \recur x mys -> force mys >>= \ys -> case ys of
 --	(mxs',NilMod) -> return mxs'
 
 -- | Merges two sorted key-value lists into a sorted list, using a merging operation on pairs with the same key
-mergeMapInc :: (IncK inc (ListMod' mod l inc r m (k, v)),IncK inc (Maybe (k, v)),Typeable k,Typeable v,Eq (ListMod mod l inc r m (ListMod mod l inc r m (k, v))),Hashable (ListMod mod l inc r m (ListMod mod l inc r m (k, v))),Memo k,Memo v,Memo (ListMod mod l inc r m (ListMod mod l inc r m (k, v))),MonadIO m,Eq v,Eq (ListMod mod l inc r m (k,v)),Memo (ListMod mod l inc r m (k, v)),Eq k,Output mod l inc r m) => ((k,v) -> (k,v) -> Ordering) -> (v -> v -> l inc r m v) -> ListMod mod l inc r m (k,v) -> ListMod mod l inc r m (k,v) -> l inc r m (ListMod mod l inc r m (k,v))
+mergeMapInc :: (IncK inc (ListMod' mod l inc r m (k, v)),IncK inc (Maybe (k, v)),Typeable k,Typeable v,Eq (ListMod mod l inc r m (ListMod mod l inc r m (k, v))),Hashable (ListMod mod l inc r m (ListMod mod l inc r m (k, v))),Memo k,Memo v,Memo (ListMod mod l inc r m (ListMod mod l inc r m (k, v))),Eq v,Eq (ListMod mod l inc r m (k,v)),Memo (ListMod mod l inc r m (k, v)),Eq k,Output mod l inc r m) => ((k,v) -> (k,v) -> Ordering) -> (v -> v -> l inc r m v) -> ListMod mod l inc r m (k,v) -> ListMod mod l inc r m (k,v) -> l inc r m (ListMod mod l inc r m (k,v))
 mergeMapInc cmp mrg mxs mys = do
 	let samekey (kx,vx) (ky,vy) = kx == ky
 	let mrg' (kx,vx) (ky,vy) = liftM (kx,) $ mrg vx vy
@@ -480,7 +519,7 @@ joinListPruneInc tx ty = thunk $ do
 				then return x
 				else return $ JoinMod tx ty
 
-mapJoinListInc :: (IncK inc (JoinListMod' thunk l inc r m b),IncK inc (JoinListMod' mod l inc r m a),Thunk mod l inc r m,Eq (JoinListMod thunk l inc r m b),MonadIO m,Memo (JoinListMod mod l inc r m a),Output thunk l inc r m)
+mapJoinListInc :: (IncK inc (JoinListMod' thunk l inc r m b),IncK inc (JoinListMod' mod l inc r m a),Thunk mod l inc r m,Eq (JoinListMod thunk l inc r m b),Memo (JoinListMod mod l inc r m a),Output thunk l inc r m)
 	=> (a -> l inc r m b) -> JoinListMod mod l inc r m a -> l inc r m (JoinListMod thunk l inc r m b)
 mapJoinListInc f = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
 	EmptyMod -> return EmptyMod
@@ -513,15 +552,20 @@ popSeed (Seeds i s) = s `seq` (i,s)
 		
 instance Memo Seeds where
 	type Key Seeds = Int
-	memoKey (Seeds i _) = (MkWeak $ Weak.mkWeak i,i)
+	memoKey (Seeds i _) = i
+	memoWeak (Seeds i _) = MkWeak $ Weak.mkWeak i
 		
 instance (Typeable mod,Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a) => Memo (ListMod' mod l inc r m a) where
 	type Key (ListMod' mod l inc r m a) = StableName (ListMod' mod l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ Weak.mkWeak x
 
 instance (Typeable mod,Typeable l,Typeable inc,Typeable r,Typeable m,Typeable a) => Memo (JoinListMod' mod l inc r m a) where
 	type Key (JoinListMod' mod l inc r m a) = StableName (JoinListMod' mod l inc r m a)
 	{-# INLINE memoKey #-}
-	memoKey x = (MkWeak $ Weak.mkWeak x,stableName x)
+	memoKey = stableName
+	{-# INLINE memoWeak #-}
+	memoWeak = \x -> MkWeak $ Weak.mkWeak x
 
