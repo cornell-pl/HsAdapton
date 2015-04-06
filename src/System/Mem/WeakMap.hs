@@ -1,6 +1,6 @@
 {-# LANGUAGE TupleSections, TypeOperators, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
-module System.Mem.Concurrent.WeakMap (
+module System.Mem.WeakMap (
 	  WeakMap(..)
 	, new,new'
 	, lookup
@@ -45,10 +45,10 @@ import Data.Strict.List as SList
 import Debug
 
 newtype WeakMap k v = WeakMap (WeakMap' k v :!: Weak (WeakMap' k v))
-type WeakMap' k v = MVar (Map k (Weak v))
+type WeakMap' k v = IORef (Map k (Weak v))
 
 toMap :: MonadIO m => WeakMap k v -> m (Map k (Weak v))
-toMap (WeakMap (tbl :!: _)) = liftIO $ readMVar tbl
+toMap (WeakMap (tbl :!: _)) = liftIO $ readIORef tbl
 
 toMap' :: (MonadIO m,Ord k) => WeakMap k v -> m (Map k v)
 toMap' w = do
@@ -63,7 +63,7 @@ toMap' w = do
 {-# NOINLINE new #-}
 new :: (Eq k,Hashable k) => IO (WeakMap k v)
 new = do
-	tbl <- newMVar Map.empty
+	tbl <- newIORef Map.empty
 	weak_tbl <- mkWeakKey tbl tbl $ Just $ table_finalizer tbl
 	return $ WeakMap (tbl :!: weak_tbl)
 
@@ -71,7 +71,7 @@ new = do
 {-# NOINLINE new' #-}
 new' :: (Eq k,Hashable k) => IO (WeakMap k v)
 new' = do
-	tbl <- newMVar Map.empty
+	tbl <- newIORef Map.empty
 	weak_tbl <- mkWeakKey tbl tbl Nothing
 	return $ WeakMap (tbl :!: weak_tbl)
 
@@ -99,7 +99,7 @@ finalize w_tbl@(WeakMap (_ :!: weak_tbl)) = do
 
 table_finalizer :: (Eq k,Hashable k) => WeakMap' k v -> IO ()
 table_finalizer tbl = do
-	pairs <- readMVar tbl
+	pairs <- readIORef tbl
 	Foldable.mapM_ Weak.finalize pairs
 
 finalizeEntry :: Ord k => WeakMap k v -> k -> IO ()
@@ -108,7 +108,7 @@ finalizeEntry (WeakMap (_ :!: weak_tbl)) k = do
 	case mb of
 		Nothing -> return ()
 		Just weak_tbl' -> do
-			tbl <- readMVar weak_tbl'
+			tbl <- readIORef weak_tbl'
 			case Map.lookup k tbl of
 				Nothing -> return ()
 				Just w -> Weak.finalize w
@@ -127,11 +127,11 @@ insertWithMkWeak :: (Ord k,Hashable k) => WeakMap k v -> MkWeak -> k -> v -> IO 
 insertWithMkWeak w_tbl@(WeakMap (tbl :!: _)) (MkWeak mkWeak) k v = do
 	weak <- mkWeak v $ Just $ deleteFinalized w_tbl k
 	finalizeEntry w_tbl k
-	modifyMVar_ tbl (return . Map.insert k weak)
+	flip mapRefM_ tbl (return . Map.insert k weak)
 	
 {-# INLINE insertWeak #-}
 insertWeak :: (Ord k,Hashable k,MonadIO m) => WeakMap k v -> k -> Weak v -> m ()
-insertWeak (WeakMap (tbl :!: _)) k weak = liftIO $ modifyMVar_ tbl (return . Map.insert k weak)
+insertWeak (WeakMap (tbl :!: _)) k weak = liftIO $ flip mapRefM_ tbl (return . Map.insert k weak)
 
 -- non-overlapping union
 extendWeak :: (Ord k,Hashable k) => WeakMap k v -> k -> Weak v -> IO ()
@@ -139,7 +139,7 @@ extendWeak = mergeWeak (\_ _ -> return False)
 
 -- non-overlapping union
 mergeWeak :: (Ord k,Hashable k) => (v -> v -> IO Bool) -> WeakMap k v -> k -> Weak v -> IO ()
-mergeWeak doOverwrite (WeakMap (tbl :!: _)) k weak = modifyMVar_ tbl $ \m -> do
+mergeWeak doOverwrite (WeakMap (tbl :!: _)) k weak = flip mapRefM_ tbl $ \m -> do
 	case Map.lookup k m of
 		Nothing -> do
 			return $ Map.insert k weak m
@@ -164,7 +164,7 @@ deleteFinalized (WeakMap (_ :!: weak_tbl)) = finalizeEntry' weak_tbl where
 		mb <- Weak.deRefWeak weak_tbl
 		case mb of
 			Nothing -> return ()
-			Just r -> modifyMVar_ r $ \m -> do
+			Just r -> flip mapRefM_ r $ \m -> do
 				case Map.lookup k m of
 					Nothing -> return m
 					Just w -> do
@@ -175,7 +175,7 @@ deleteFinalized (WeakMap (_ :!: weak_tbl)) = finalizeEntry' weak_tbl where
 
 lookup :: (Ord k,Hashable k,MonadIO m) => WeakMap k v -> k -> m (Maybe v)
 lookup (WeakMap (tbl :!: weak_tbl)) k = liftIO $ do
-	xs <- readMVar tbl
+	xs <- readIORef tbl
 	let mb = Map.lookup k xs
 	case mb of
 		Nothing -> return Nothing
@@ -185,7 +185,7 @@ lookup (WeakMap (tbl :!: weak_tbl)) k = liftIO $ do
 -- the second @WeakMap@ is not accessed concurrently
 unionWithKey :: (Ord k,Hashable k,MonadIO m) => (v -> MkWeak) -> WeakMap k v -> WeakMap k v -> m ()
 unionWithKey getKey wmap m@(WeakMap (tbl :!: _)) = do
-	xs <- liftM Map.toList $ liftIO $ readMVar tbl
+	xs <- liftM Map.toList $ liftIO $ readIORef tbl
 	
 	let addFinalizers (k,w) = do
 		mb <- Weak.deRefWeak w
@@ -203,7 +203,7 @@ unionWithKey getKey wmap m@(WeakMap (tbl :!: _)) = do
 -- without adding finalizers
 unionWithKey' :: (Ord k,Hashable k,MonadIO m) => WeakMap k v -> WeakMap k v -> m ()
 unionWithKey' wmap m@(WeakMap (tbl :!: _)) = do
-	xs <- liftM Map.toList $ liftIO $ readMVar tbl
+	xs <- liftM Map.toList $ liftIO $ readIORef tbl
 	
 	let addFinalizers (k,w) = do
 		mb <- Weak.deRefWeak w
@@ -218,7 +218,7 @@ extendWithKey = mergeWithKey (\_ _ -> return False)
 
 mergeWithKey :: (Ord k,Hashable k) => (v -> v -> IO Bool) -> (v -> MkWeak) -> WeakMap k v -> WeakMap k v -> IO ()
 mergeWithKey merge getKey wmap m@(WeakMap (tbl :!: _)) = do
-	xs <- liftM Map.toList $ liftIO $ readMVar tbl
+	xs <- liftM Map.toList $ liftIO $ readIORef tbl
 	
 	let addFinalizers (k,w) = do
 		mb <- liftIO $ Weak.deRefWeak w
@@ -238,7 +238,7 @@ purge (WeakMap (_ :!: w_map)) = purgeWeak w_map where
 		mb <- Weak.deRefWeak w_map
 		case mb of
 			Nothing -> return ()
-			Just wm -> modifyMVar_ wm (\m -> Foldable.foldlM purgeMap Map.empty (Map.toList m))
+			Just wm -> mapRefM_ (\m -> Foldable.foldlM purgeMap Map.empty (Map.toList m)) wm
 	
 	purgeMap :: (Ord k,Hashable k) => Map k (Weak v) -> (k,Weak v) -> IO (Map k (Weak v))
 	purgeMap m (k,w) = do
@@ -249,10 +249,10 @@ purge (WeakMap (_ :!: w_map)) = purgeWeak w_map where
 
 {-# INLINE mapM'' #-}
 mapM'' :: Monad m => (forall x . IO x -> m x) -> (Weak v -> m a) -> WeakMap k v -> m [a]
-mapM'' liftIO f (WeakMap (tbl :!: _)) = liftIO (readMVar tbl) >>= Control.Monad.mapM f . Map.elems
+mapM'' liftIO f (WeakMap (tbl :!: _)) = liftIO (readIORef tbl) >>= Control.Monad.mapM f . Map.elems
 
 mapM_' :: Monad m => (forall x . IO x -> m x) -> ((k,v) -> m a) -> WeakMap k v -> m ()
-mapM_' liftIO f (WeakMap (tbl :!: _)) = liftIO (readMVar tbl) >>= Control.Monad.mapM_ g . Map.toAscList where
+mapM_' liftIO f (WeakMap (tbl :!: _)) = liftIO (readIORef tbl) >>= Control.Monad.mapM_ g . Map.toAscList where
 	g (k,w) = do
 		mb <- liftIO $ Weak.deRefWeak w
 		case mb of

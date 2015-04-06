@@ -660,9 +660,9 @@ leastkInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 leastkInc cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortInc cmp >=> takeInc' i) mxs >>= force
 
-leastkIncNamed :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Eq a) =>
+leastkIncAs :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Eq (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Eq (ListMod mod l inc r m a),Eq (ListMod thunk l inc r m a),Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Eq a) =>
 	name -> (a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
-leastkIncNamed name cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortIncNamed name cmp >=> takeInc' i) mxs >>= force
+leastkIncAs name cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortIncAs name cmp >=> takeInc' i) mxs >>= force
 
 
 type Warehouse = ListM Inside IORef IO Item
@@ -689,7 +689,7 @@ instance Memo LeastItem where
 	{-# INLINE memoWeak #-}
 	memoWeak = \x -> MkWeak $ mkWeak x
 
-leastItem = inside . leastkIncNamed LeastItem compareM 1
+leastItem = inside . leastkIncAs LeastItem compareM 1
 -- finds the cheapest item
 cheapestItem :: String -> Warehouse -> ListU Inside IORef IO Item -> Outside Adapton IORef IO Item
 cheapestItem msg warehouse leastItem = do

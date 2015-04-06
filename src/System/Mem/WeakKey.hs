@@ -64,6 +64,9 @@ mkDeadWeak v f = do
 	Weak.finalize w
 	return w
 	
+deadWeak :: IO (Weak a)
+deadWeak = mkDeadWeak (error "deadWeak") Nothing
+
 newtype MkWeak = MkWeak { unMkWeak :: forall v . v -> Maybe (IO ()) -> IO (Weak v) } deriving Typeable
 
 -- | Creates a weak reference that is alive as long as two keys are
@@ -81,9 +84,19 @@ orMkWeak (MkWeak mkWeak1) (MkWeak mkWeak2) = MkWeak $ \v f -> do
 	w2 <- mkWeak2 v Nothing -- the first reference cannot be dead unless the second one is, due to the value dependencies
 	return $ w2 `seq` w1
 
-instance (MonadRef r m) => MonadRef r (ReaderT a m) where
-	readRef r = lift $ readRef r
-	newRef x = lift $ newRef x
-	writeRef r x = lift $ writeRef r x
+--instance (MonadRef r m) => MonadRef r (ReaderT a m) where
+--	readRef r = lift $ readRef r
+--	newRef x = lift $ newRef x
+--	writeRef r x = lift $ writeRef r x
 
-	
+mapRef :: MonadRef r m => (a -> a) -> r a -> m ()
+mapRef f r = do
+	v <- readRef r
+	let v' = f v
+	v' `seq` writeRef r v'
+
+mapRefM_ :: MonadRef r m => (a -> m a) -> r a -> m ()
+mapRefM_ f r = do
+	v <- readRef r
+	v' <- f v
+	v' `seq` writeRef r v'

@@ -212,18 +212,6 @@ instance Eq (M l inc r m a) where
 instance Eq (L l inc r m a) where
 	t1 == t2 = idNM (metaL t1) == idNM (metaL t2)
 
-mapRef :: MonadRef r m => (a -> a) -> r a -> m ()
-mapRef f r = do
-	v <- readRef r
-	let v' = f v
-	v' `seq` writeRef r v'
-
-mapRefM_ :: MonadRef r m => (a -> m a) -> r a -> m ()
-mapRefM_ f r = do
-	v <- readRef r
-	v' <- f v
-	v' `seq` writeRef r v'
-
 --intMapM_ :: Monad m => (a -> m ()) -> IntMap a -> m ()
 --intMapM_ f = IntMap.foldr (\a m -> f a >> m) (return ())
 

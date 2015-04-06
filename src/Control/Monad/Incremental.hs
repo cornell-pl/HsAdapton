@@ -33,6 +33,8 @@ class (MonadRef r m,WeakRef r
 	data Outside inc (r :: * -> *) (m :: * -> *) a :: *
 	data Inside inc (r :: * -> *) (m :: * -> *) a :: *
 	
+	showIncK :: IncK inc a => a -> Inside inc r m String
+	
 	-- lifts a computation at the inner layer to one at the outer layer
 	world :: Inside inc r m a -> Outside inc r m a
 	-- unlifts a computation at the outer layer to one at the inner layer. This function is not to be used normally, as it is unsafe for many IC idioms.
@@ -116,16 +118,16 @@ class (Thunk mod l inc r m,Layer l inc r m) => Output mod l inc r m where
 	memo f arg = thunk $ f (memo f) arg
 	
 	-- memoization function with a name
-	memoNamed :: (Memo name,IncK inc a,Memo arg) => name -> ((arg -> l inc r m (mod l inc r m a)) -> arg -> l inc r m a) -> (arg -> l inc r m (mod l inc r m a))
-	memoNamed name f arg = thunk $ f (memoNamed name f) arg
+	memoAs :: (Memo name,IncK inc a,Memo arg) => name -> ((arg -> l inc r m (mod l inc r m a)) -> arg -> l inc r m a) -> (arg -> l inc r m (mod l inc r m a))
+	memoAs name f arg = thunk $ f (memoAs name f) arg
 	
 	memo2 :: (IncK inc a,Memo arg1,Memo arg2) => ((arg1 -> arg2 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> l inc r m a) -> (arg1 -> arg2 -> l inc r m (mod l inc r m a))
 	memo2 f = curry (memo (uncurry . f . curry))
 	{-# INLINE memo2 #-}
 	
-	memo2Named :: (Memo name,IncK inc a,Memo arg1,Memo arg2) => name -> ((arg1 -> arg2 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> l inc r m a) -> (arg1 -> arg2 -> l inc r m (mod l inc r m a))
-	memo2Named name f = curry (memoNamed name (uncurry . f . curry))
-	{-# INLINE memo2Named #-}
+	memo2As :: (Memo name,IncK inc a,Memo arg1,Memo arg2) => name -> ((arg1 -> arg2 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> l inc r m a) -> (arg1 -> arg2 -> l inc r m (mod l inc r m a))
+	memo2As name f = curry (memoAs name (uncurry . f . curry))
+	{-# INLINE memo2As #-}
 	
 	memo3 :: (IncK inc a,Memo arg1,Memo arg2,Memo arg3) => ((arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> arg3 -> l inc r m a) -> (arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a))
 	memo3 f = curry3 (memo (uncurry3 . f . curry3))
@@ -134,12 +136,12 @@ class (Thunk mod l inc r m,Layer l inc r m) => Output mod l inc r m where
 		uncurry3 f (x,y,z) = f x y z
 	{-# INLINE memo3 #-}
 	
-	memo3Named :: (Memo name,IncK inc a,Memo arg1,Memo arg2,Memo arg3) => name -> ((arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> arg3 -> l inc r m a) -> (arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a))
-	memo3Named name f = curry3 (memoNamed name (uncurry3 . f . curry3))
+	memo3As :: (Memo name,IncK inc a,Memo arg1,Memo arg2,Memo arg3) => name -> ((arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a)) -> arg1 -> arg2 -> arg3 -> l inc r m a) -> (arg1 -> arg2 -> arg3 -> l inc r m (mod l inc r m a))
+	memo3As name f = curry3 (memoAs name (uncurry3 . f . curry3))
 		where
 		curry3 f x y z = f (x,y,z)
 		uncurry3 f (x,y,z) = f x y z
-	{-# INLINE memo3Named #-}
+	{-# INLINE memo3As #-}
 	
 	-- | fix-point memoization for incremental generic queries
 	gmemoQ :: (Typeable ctx,IncK inc b) => Proxy ctx -> (GenericQMemo ctx mod l inc r m b -> GenericQMemo ctx mod l inc r m b) -> GenericQMemo ctx mod l inc r m b

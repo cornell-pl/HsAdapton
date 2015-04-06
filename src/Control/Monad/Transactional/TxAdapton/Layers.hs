@@ -49,8 +49,6 @@ import Debug
 type TxInner = Inside TxAdapton
 type TxOuter = Outside TxAdapton
 
-type instance IncK TxAdapton a = (Typeable a,Eq a)
-
 {-# INLINE topTxStack #-}
 topTxStack :: TxLayer l r m => l TxAdapton r m (Maybe (TxStackElement r m))
 topTxStack = do
@@ -70,7 +68,7 @@ topThunkTxStack = do
 pushTxStack :: TxLayer l r m => TxStackElement r m -> l TxAdapton r m ()
 pushTxStack = \x -> do
 	callstack <- readTxStack
-	inL $ liftIO $ modifyIORef' callstack (\xs -> SCons x xs)
+	inL $ liftIO $ atomicModifyIORef' callstack (\xs -> (SCons x xs,()))
 
 {-# INLINE popTxStack #-}
 popTxStack :: TxLayer l r m => l TxAdapton r m (TxStackElement r m)
@@ -84,50 +82,59 @@ topTxStackThunkElement SNil = Nothing
 
 {-# INLINE isThunkTxStackElement #-}
 isThunkTxStackElement :: TxStackElement r m -> Bool
-isThunkTxStackElement (_ :!: (SJust _)) = True
-isThunkTxStackElement (_ :!: SNothing) = False
+isThunkTxStackElement (_ :!: (SJust _) :!: _) = True
+isThunkTxStackElement (_ :!: SNothing :!: _) = False
 
 -- registers a new transaction-local allocation
-newTxMLog :: (Typeable a,Eq a,TxLayer l r m,TxLayer l1 r m) => TxM l1 TxAdapton r m a -> l TxAdapton r m ()
+newTxMLog :: (IncK TxAdapton a,TxLayer l r m,TxLayer l1 r m) => TxM l1 TxAdapton r m a -> l TxAdapton r m ()
 newTxMLog m = do
 	txlogs <- readTxLog
-	inL $ liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxM m) (idTxNM $ metaTxM m) $! DynTxM Nothing Nothing m New
-newTxULog :: (Typeable a,Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m ()
+	inL $ liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $! dataTxM m) (idTxNM $ metaTxM m) $! DynTxM Nothing Nothing m (TxStatus (New False,False))
+newTxULog :: (IncK TxAdapton a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> l TxAdapton r m ()
 newTxULog u = do
 	txlogs <- readTxLog	
-	inL $ liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $ dataTxU u) (idTxNM $ metaTxU u) $! DynTxU Nothing Nothing u New
+	inL $ liftIO $ WeakTable.insertWithMkWeak (txLogBuff $ Strict.head txlogs) (MkWeak $ mkWeakRefKey $! dataTxU u) (idTxNM $ metaTxU u) $! DynTxU Nothing Nothing u (TxStatus (New False,False))
 
 -- reads a value from a transactional variable
 -- uses @unsafeCoerce@ since we know that the types match
-readTxMValue :: (Typeable a,Eq a,TxLayer l r m,TxLayer l1 r m) => TxM l1 TxAdapton r m a -> l TxAdapton r m a
+readTxMValue :: (IncK TxAdapton a,TxLayer l r m,TxLayer l1 r m) => TxM l1 TxAdapton r m a -> l TxAdapton r m (a,TxStatus)
 readTxMValue m = do
 	tbl <- readTxLog
-	dyntxvar <- inL $ bufferTxM m (Read 1) tbl
+	dyntxvar <- inL $ bufferTxM m (TxStatus (Read,False)) tbl
 	case dyntxvar of
-		DynTxM (Just (BuffTxM (v , _))) _ _ _ -> return $ coerce v
-		DynTxM Nothing _ wm _ -> inL $ readRef (dataTxM m)
+		DynTxM (Just (BuffTxM v)) _ _ st -> return (coerce v,st)
+		DynTxM Nothing _ wm st -> do
+			v <- inL $ readRef (dataTxM m)
+			return (v,st)
 
-writeTxMValue :: (Typeable a,Eq a,TxLayer l r m,TxLayer l1 r m) => TxM l1 TxAdapton r m a -> a -> l TxAdapton r m ()
+writeTxMValue :: (IncK TxAdapton a,TxLayer l r m,TxLayer l1 r m) => TxM l1 TxAdapton r m a -> a -> l TxAdapton r m ()
 writeTxMValue m v' = do
 	tbl <- readTxLog
-	inL $ changeTxM m (Just v') tbl
+	inL $ changeTxM m (Just v') (TxStatus (Write,False)) tbl
 	return ()
 
-readTxUValue :: (Typeable a,Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> TxStatus -> l TxAdapton r m (TxUData l1 TxAdapton r m a)
+readTxUValue :: (IncK TxAdapton a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> TxStatus -> l TxAdapton r m (TxUData l1 TxAdapton r m a,TxStatus)
 readTxUValue u status = do
 	tbl <- readTxLog
 	dyntxvar <- inL $ bufferTxU u status tbl
 	case dyntxvar of
-		DynTxU (Just (BuffTxU (buff_dta , _))) _ _ _ -> do
+		DynTxU (Just (BuffTxU buff_dta)) _ _ st -> do
 			(dta,_) <- inL $ readRef buff_dta
-			return $ coerce dta
-		DynTxU Nothing _ wu _ -> inL $ readRef (dataTxU u)
+			return (coerce dta,st)
+		DynTxU Nothing _ wu st -> do
+			v <- inL $ readRef (dataTxU u)
+			return (v,st)
 
-writeTxUValue :: (Typeable a,Eq a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> BuffTxUData l1 TxAdapton r m a -> TxStatus -> l TxAdapton r m ()
+writeTxUValue :: (IncK TxAdapton a,TxLayer l r m,TxLayer l1 r m) => TxU l1 TxAdapton r m a -> TxUData l1 TxAdapton r m a -> TxStatus -> l TxAdapton r m TxStatus
 writeTxUValue t dta' status = do
 	tbl <- readTxLog
-	inL $ changeTxU t (Just $ Prelude.const $! return $! dta') status tbl
-	return ()
+	let chg (_,ori) = do
+		ori' <- case ori of
+			Left deps -> liftM Right $ liftIO $ mkWeakRefKey deps deps Nothing
+			Right wdeps -> return $ Right wdeps
+		return (dta',ori')
+	dyn <- inL $ changeTxU t (Just chg) status tbl
+	return (dynTxStatus dyn)
 
 -- ** Transactions
 
@@ -145,6 +152,9 @@ instance Hashable DoneTxsID where
 doneTxs :: (Typeable m,Typeable r) => MVar (Map UTCTime (TxUnmemo r m,TxWrite))
 doneTxs = Dyn.declareMVar DoneTxsID Map.empty
 
+mergeDoneTxs :: (TxUnmemo r m,TxWrite) -> (TxUnmemo r m,TxWrite) -> (TxUnmemo r m,TxWrite)
+mergeDoneTxs (unmemo1,writes1) (unmemo2,writes2) = (\txlog -> unmemo1 txlog >> unmemo2 txlog,Map.unionWith max writes1 writes2)
+
 -- we need to acquire a lock, but this should be minimal
 startTx :: IO UTCTime
 startTx = getCurrentTime >>= \t -> addRunningTx t >> return t
@@ -156,9 +166,13 @@ addRunningTx time = modifyMVarMasked_ runningTxs (\xs -> return $ List.insertBy 
 
 updateRunningTx oldtime newtime = modifyMVarMasked_ runningTxs (\xs -> return $ List.insertBy (\x y -> compare y x) newtime $ List.delete oldtime xs)
 
---restartMemoTx :: TxLogs r m -> IO ()
---restartMemoTx = Strict.mapM_ restartMemoTx' where
---	restartMemoTx' (TxLog (uid :!: buff :!: memos)) = writeIORef memos []
+-- restarts a tx with a new starting time
+-- note that the time has already been added to the @runningTxs@
+restartTx :: TxLayer Outside r m => UTCTime -> Outside TxAdapton r m a -> Outside TxAdapton r m a
+restartTx newtime m = do
+ 	(timeref :!: stack :!: logs) <- Reader.ask
+	writeRef timeref newtime
+	m
 
 resetTx :: TxLayer Outside r m => Outside TxAdapton r m a -> Outside TxAdapton r m a
 resetTx m = do
@@ -168,15 +182,8 @@ resetTx m = do
 	Reader.local (\_ -> (now :!: stack :!: SCons tbl SNil)) m
 
 -- updating a modifiable may propagate to multiple thunks; they are all logged
--- a mapping from identifiers to a boolean that indicates whether it has been written (True) or evaluated (False)
+-- a map from written modifiables/thunks to a boolean indicating whether it is a node write (True) or a dependents write (False)
 type TxWrite = Map Unique Bool
-
-concatMaybesM :: Monad m => [Maybe (m a)] -> Maybe (m a)
-concatMaybesM [] = Nothing
-concatMaybesM (Nothing:xs) = concatMaybesM xs
-concatMaybesM (Just chg:xs) = case concatMaybesM xs of
-	Nothing -> Just chg
-	Just chgs -> Just (chg >> chgs)
 
 wakeUpWaits :: TxLayer Outside r m => TxNodeMeta r m -> m Wakes
 wakeUpWaits meta = liftIO $ wakeQueue $ waitTxNM meta

@@ -38,6 +38,8 @@ data ListMod'
 	(m :: * -> *)
 	a
 	= NilMod | ConsMod a (ListMod mod l inc r m a)
+	
+deriving instance (Show a,Show (ListMod mod l inc r m a)) => Show (ListMod' mod l inc r m a)
 
 type ListMod mod l inc r m a = mod l inc r m (ListMod' mod l inc r m a)
 
@@ -113,8 +115,8 @@ instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepTy
 takeInc' :: (IncK inc (ListMod' thunk l inc r m a),Memo (ListMod thunk l inc r m a),Output thunk l inc r m) => Int -> ListMod thunk l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 takeInc' = takeInc
 
-takeIncNamed' :: (Memo name,IncK inc (ListMod' thunk l inc r m a),Memo (ListMod thunk l inc r m a),Output thunk l inc r m) => name -> Int -> ListMod thunk l inc r m a -> l inc r m (ListMod thunk l inc r m a)
-takeIncNamed' = takeIncNamed
+takeIncAs' :: (Memo name,IncK inc (ListMod' thunk l inc r m a),Memo (ListMod thunk l inc r m a),Output thunk l inc r m) => name -> Int -> ListMod thunk l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+takeIncAs' = takeIncAs
 
 -- | take
 takeInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Memo (ListMod mod l inc r m a),Output thunk l inc r m,Thunk mod l inc r m) => Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
@@ -124,16 +126,16 @@ takeInc = memo2 $ \recur i mxs -> case i of
 		ConsMod x mxs' -> liftM (ConsMod x) $ recur (n-1) mxs'
 		NilMod -> return NilMod
 
-takeIncNamed :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Memo (ListMod mod l inc r m a),Output thunk l inc r m,Thunk mod l inc r m) => name -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
-takeIncNamed name = memo2Named name $ \recur i mxs -> case i of
+takeIncAs :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Memo (ListMod mod l inc r m a),Output thunk l inc r m,Thunk mod l inc r m) => name -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
+takeIncAs name = memo2As name $ \recur i mxs -> case i of
 	0 -> return NilMod
 	n -> read mxs >>= \xs -> case xs of
 		ConsMod x mxs' -> liftM (ConsMod x) $ recur (n-1) mxs'
 		NilMod -> return NilMod
 
-filterIncNamed :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
+filterIncAs :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
 	=> name -> (a -> l inc r m Bool) -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
-filterIncNamed name p = memoNamed name $ \recur mxs -> read mxs >>= \xs -> case xs of
+filterIncAs name p = memoAs name $ \recur mxs -> read mxs >>= \xs -> case xs of
 	ConsMod x mxs -> p x >>= \b -> if b
 		then liftM (ConsMod x) $ recur mxs
 		else recur mxs >>= force
@@ -173,9 +175,9 @@ mapInc f = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
 		mys <- recur mxs
 		return $ ConsMod y mys
 
-mapIncNamed :: (Memo name,IncK inc (ListMod' thunk l inc r m b),IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
+mapIncAs :: (Memo name,IncK inc (ListMod' thunk l inc r m b),IncK inc (ListMod' mod l inc r m a),Thunk mod l inc r m,Memo (ListMod mod l inc r m a),Output thunk l inc r m)
 	=> name -> (a -> l inc r m b) -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m b)
-mapIncNamed name f = memoNamed name $ \recur mxs -> read mxs >>= \xs -> case xs of
+mapIncAs name f = memoAs name $ \recur mxs -> read mxs >>= \xs -> case xs of
 	NilMod -> return NilMod
 	ConsMod x mxs -> do
 		y <- f x
@@ -238,14 +240,14 @@ quicksortIncM (mxs :: ListMod mod l inc r m a) = do
 		NilMod -> force rest
 	quicksortInc' mxs nil
 
-quicksortIncNamed :: (Memo name,IncK inc (ListMod' mod l inc r m a),Memo a,Output mod l inc r m,Memo (ListMod mod l inc r m a))
+quicksortIncAs :: (Memo name,IncK inc (ListMod' mod l inc r m a),Memo a,Output mod l inc r m,Memo (ListMod mod l inc r m a))
 	=> name -> (a -> a -> l inc r m Ordering) -> ListMod mod l inc r m a -> l inc r m (ListMod mod l inc r m a)
-quicksortIncNamed name cmp (mxs :: ListMod mod l inc r m a) = do
+quicksortIncAs name cmp (mxs :: ListMod mod l inc r m a) = do
 	(nil :: ListMod mod l inc r m a) <- const NilMod
-	let quicksortInc' = memo2Named name $ \recur mxs rest -> force mxs >>= \xs -> case xs of
+	let quicksortInc' = memo2As name $ \recur mxs rest -> force mxs >>= \xs -> case xs of
 		ConsMod x mxs' -> do
-			left <- filterIncNamed (name,Left x :: Either a a) (\y -> liftM (==LT) $ cmp y x) mxs'
-			right <- filterIncNamed (name,Right x :: Either a a) (\y -> liftM (/=LT) $ cmp y x) mxs'
+			left <- filterIncAs (name,Left x :: Either a a) (\y -> liftM (==LT) $ cmp y x) mxs'
+			right <- filterIncAs (name,Right x :: Either a a) (\y -> liftM (/=LT) $ cmp y x) mxs'
 			recur right rest >>= const . ConsMod x >>= recur left >>= force
 		NilMod -> force rest
 	quicksortInc' mxs nil

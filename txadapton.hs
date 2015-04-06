@@ -79,9 +79,9 @@ leastkInc cmp i =
 	let sort = quicksortInc cmp
 	in memo $ \_ mxs -> (mapInc return >=> sort >=> takeInc' i) mxs >>= force
 	
-leastkIncNamed :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m) =>
+leastkIncAs :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m) =>
 	name -> (a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
-leastkIncNamed name cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortIncNamed name cmp >=> takeInc' i) mxs >>= force
+leastkIncAs name cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortIncAs name cmp >=> takeInc' i) mxs >>= force
 
 -- * concurrent non-incremental code
 
@@ -172,7 +172,7 @@ changeDB_TxAdapton size db = do
 instance Monad m => OrdM m Int where
 	compareM x y = return $ compare y x
 
-main_Adapton = flip Exception.finally (mergePDFsInto' "tx.pdf") $ runIncremental $ do
+main_Adapton = flip Exception.finally (mergeGraphsInto' "tx.pdf") $ runIncremental $ do
 	let (size::Int) = 10^4
 	xs <- inL $ liftIO $ genList size
 	db <- inside $ toListRef xs
@@ -223,10 +223,10 @@ type TxAdaptonM a = TxM Inside TxAdapton IORef IO a
 
 type Warehouse = ListTxAdaptonM Item
 data Item = Item { itemName :: String, itemPrice :: TxAdaptonM Int, itemInflation :: Int, itemQuantity :: TxAdaptonM Int }
-	deriving (Typeable,Eq)
+	deriving (Typeable,Eq,Show)
 
 data Customer = Customer { customerName :: String, customerBalance :: TxAdaptonM Int, customerPurchases :: ListTxAdaptonM (String,Int) }
-	deriving (Typeable,Eq)
+	deriving (Typeable,Eq,Show)
 
 -- compare items by their price
 instance OrdM (Inside TxAdapton IORef IO) Item where
@@ -246,7 +246,7 @@ instance Memo LeastItem where
 	{-# INLINE memoWeak #-}
 	memoWeak = \x -> MkWeak $ mkWeak x
 
-leastItem = inside . leastkIncNamed LeastItem compareM 1
+leastItem = inside . leastkIncAs LeastItem compareM 1
 -- finds the cheapest item
 cheapestItem :: String -> Warehouse -> ListTxAdaptonU Item -> STxAdaptonM Item
 cheapestItem msg warehouse leastItem = do
@@ -258,7 +258,9 @@ cheapestItem msg warehouse leastItem = do
 --	showInc leastItem >>= debugTx . ("cheapestItem: "++)
 	xs <- forceOutside leastItem
 	case xs of
-		NilMod -> throw $ NoBalance $ "NO ITEMS LEFT " ++ msg
+		NilMod -> do
+			time <- readTxTime
+			throw $ NoBalance $ "NO ITEMS LEFT " ++ show time ++ " " ++ msg
 		ConsMod item _ -> do
 			quantity <- getOutside $ itemQuantity item
 			when (quantity <= 0) $ wrongQuantity item
@@ -309,29 +311,29 @@ instance Exception NoBalance
 customer_thread :: Warehouse -> ListTxAdaptonU Item -> Customer -> IO ()
 customer_thread warehouse leastItem customer = do
 	let noBalance (NoBalance msg) = do
-		drawPDF ("customer exception" ++ customerName customer) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--		drawDot ("customer exception " ++ customerName customer ++ " " ++ msg) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
 		throw (NoBalance msg)
 	let action i = unless (i == 0) $ do
 		choice <- generate $ choose (False,True)
 		if choice
 			then do -- list the cheapest item
-				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer " ++ customerName customer) $ flip catch noBalance $ do
+				(time,(tx,item)) <- timeItT $ atomicallyTx False ("customer " ++ customerName customer) $ flip catch noBalance $ do
 					tx <- readTxTime
-					drawPDF ("customer listing" ++ customerName customer) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--					drawDot ("customer listing" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
 					item <- cheapestItem ("customer " ++ customerName customer) warehouse leastItem
 					str <- showInc item
-					let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str ++ " " ++ show tx
-					drawPDF msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--					let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str ++ " " ++ show tx
+--					drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
 					return (tx,str)
 				writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
 			else do -- buy the cheapest item
-				(time,(tx,item)) <- timeItT $ atomicallyTx ("customer "++ customerName customer) $ flip catch noBalance $ do
+				(time,(tx,item)) <- timeItT $ atomicallyTx False ("customer "++ customerName customer) $ flip catch noBalance $ do
 					tx <- readTxTime
-					drawPDF ("customer buying" ++ customerName customer) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--					drawDot ("customer buying" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
 					item <- buyCheapestItem ("customer " ++ customerName customer) warehouse leastItem customer
 					str <- showInc item
-					let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str ++ " " ++ show tx
-					drawPDF msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--					let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str ++ " " ++ show tx
+--					drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
 					return (tx,str)
 				writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
 		threadDelay 300
@@ -340,13 +342,13 @@ customer_thread warehouse leastItem customer = do
 	action 40 `Catch.catch` noBalance2
 
 main = main_Customers
-main_Customers = flip Exception.finally (mergePDFsInto' "tx.pdf") $ do
-	let numItems = 5
-	let numCustomers = 2
+main_Customers = {-flip Exception.finally (mergeGraphsInto' "tx.pdf") $-} do
+	let numItems = 10^3
+	let numCustomers = 10
 	
 	hSetBuffering stdout NoBuffering
 	
-	(warehouse,leastItem,customers) <- atomically $ genDB numItems numCustomers
+	(warehouse,leastItem,customers) <- atomicallyTx False "" $ genDB numItems numCustomers
 	
 	concurrently debugger $ mapConcurrently (customer_thread warehouse leastItem) customers
 	return ()
@@ -433,7 +435,7 @@ main_Tx = do
 	
 	hSetBuffering stdout NoBuffering
 	
-	res2 <- race_ debugger $ testM inc_func gen (runs * 2) >> mergePDFsInto' "filterInc.pdf"
+	res2 <- race_ debugger $ testM inc_func gen (runs * 2) >> mergeGraphsInto' "filterInc.pdf"
 	print res2
 
 testM :: (ListTxM Inside IORef IO Int -> Inside TxAdapton IORef IO (ListTxU Inside IORef IO Int)) -> ([Int],[ListChange Int]) -> Int -> IO ()

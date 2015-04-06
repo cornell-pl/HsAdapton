@@ -1,13 +1,14 @@
 {-# LANGUAGE ConstraintKinds, UndecidableInstances, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module Control.Monad.Transactional.TxAdapton.Memo (
-	memoNonRecTxU, memoNonRecTxUNamed, Memo(..), Hashable(..)
+	memoNonRecTxU, memoNonRecTxUAs, Memo(..), Hashable(..)
 	) where
 
 --	, GenericQMemoU(..),MemoCtx(..),Sat(..),gmemoNonRecU,proxyMemoCtx,NewGenericQ(..),NewGenericQMemo(..),NewGenericQMemoU(..)
 
 import System.Mem.WeakKey as WeakKey
 import System.Mem.WeakTable as WeakTable
+import Data.Time.Clock
 import System.Mem.MemoTable
 import Data.Hashable
 import Control.Monad.Transactional.TxAdapton.Types
@@ -47,8 +48,8 @@ memoNonRecTxU mode f =
 	    ori_tbl = declareWeakTable f (stableName f)
 	in memoNonRecTxU' mode f $! (ori_tbl :!: buff_tbls)
 
-memoNonRecTxUNamed :: (Memo name,Typeable b,Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => MemoMode -> name -> (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
-memoNonRecTxUNamed mode name f =
+memoNonRecTxUAs :: (Memo name,Typeable b,Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => MemoMode -> name -> (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
+memoNonRecTxUAs mode name f =
 	let key = memoKey name
 	    buff_tbls = declareCMap f key
 	    ori_tbl = declareWeakTable f key
@@ -56,22 +57,23 @@ memoNonRecTxUNamed mode name f =
 
 memoNonRecTxU' :: (Eq b,MonadRef r m,MonadIO m,Memo a,TxLayer Inside r m) => MemoMode -> (a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)) -> TxMemoTable r m (Key a) b -> a -> Inside TxAdapton r m (TxU Inside TxAdapton r m b)
 memoNonRecTxU' mode f tbls@(ori_tbl :!: buff_tbls) arg = do
+		starttime <- readTxTime
 		let (mkWeak,k) = (memoWeak $! arg,memoKey $! arg)
-		lkp <- lookupMemoTx tbls k
+		lkp <- lookupMemoTx starttime tbls k
 		case lkp of
 			Nothing -> do
 				thunk <- f arg
 				let thunkWeak = case mode of
-					MemoLinear -> MkWeak (WeakKey.mkWeakRefKey (dataTxU thunk)) `andMkWeak` mkWeak
-					MemoSuperlinear -> mkWeak
+					MemoLinear -> MkWeak (WeakKey.mkWeakRefKey (dataTxU thunk)) `andMkWeak` mkWeak -- while both the source and the target exist
+					MemoSuperlinear -> mkWeak -- while the source exists
 				insertMemoTx tbls thunkWeak k thunk
 				return thunk
 			Just thunk -> do
 				return thunk
 
 -- looks up a value in a transactional memotable by searching for it in the current and enclosing buffered memotables
-lookupMemoTx :: (Eq k,Hashable k,TxLayer Inside r m) => TxMemoTable r m k b -> k -> Inside TxAdapton r m (Maybe (TxU Inside TxAdapton r m b))
-lookupMemoTx tbls k = readTxLog >>= inL . liftIO . lookupMemoTx' tbls k
+lookupMemoTx :: (Eq k,Hashable k,TxLayer Inside r m) => UTCTime -> TxMemoTable r m k b -> k -> Inside TxAdapton r m (Maybe (TxU Inside TxAdapton r m b))
+lookupMemoTx starttime tbls k = readTxLog >>= inL . liftIO . lookupMemoTx' tbls k
 	where
 	lookupMemoTx' :: (Eq k,Hashable k,TxLayer Inside r m) => TxMemoTable r m k b -> k -> TxLogs r m -> IO (Maybe (TxU Inside TxAdapton r m b))
 	lookupMemoTx' tbls@(ori_tbl :!: buff_tbls) k SNil = WeakTable.lookup ori_tbl k

@@ -348,8 +348,8 @@ instance (Layer Inside Adapton r m,MonadRef r m,WeakRef r,MonadIO m) => Output U
 	{-# INLINE forceOutside #-}
 	memo = memoU
 	{-# INLINE memo #-}
-	memoNamed = memoUNamed
-	{-# INLINE memoNamed #-}
+	memoAs = memoUAs
+	{-# INLINE memoAs #-}
 	gmemoQ = gmemoQU
 	{-# INLINE gmemoQ #-}
 
@@ -475,8 +475,8 @@ isUnevaluatedU t = do
 memoU :: (Typeable a,Typeable arg,IncK inc a,MonadIO m,Layer Outside inc r m,Memo arg) => ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
 memoU f = let memo_func = memoNonRecU MemoLinear (thunkU . f memo_func) in memo_func
 
-memoUNamed :: (Memo name,Typeable a,Typeable arg,IncK inc a,MonadIO m,Layer Outside inc r m,Memo arg) => name -> ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
-memoUNamed name f = let memo_func = memoNonRecUNamed MemoLinear name (thunkU . f memo_func) in memo_func
+memoUAs :: (Memo name,Typeable a,Typeable arg,IncK inc a,MonadIO m,Layer Outside inc r m,Memo arg) => name -> ((arg -> Inside inc r m (U Inside inc r m a)) -> arg -> Inside inc r m a) -> (arg -> Inside inc r m (U Inside inc r m a))
+memoUAs name f = let memo_func = memoNonRecUAs MemoLinear name (thunkU . f memo_func) in memo_func
 
 gmemoQU :: (Typeable b,Typeable ctx,IncK inc b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) -> GenericQMemoU ctx Inside inc r m b
 gmemoQU ctx (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b)) =
@@ -484,10 +484,10 @@ gmemoQU ctx (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Insid
 	    memo_func = gmemoNonRecU MemoLinear ctx (f memo_func)
 	in memo_func
 
-gmemoQUNamed :: (Memo name,Typeable b,Typeable ctx,IncK inc b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> name -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) ->  GenericQMemoU ctx Inside inc r m b
-gmemoQUNamed ctx name (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b)) =
+gmemoQUAs :: (Memo name,Typeable b,Typeable ctx,IncK inc b,Output U Inside inc r m,MonadIO m) => Proxy ctx -> name -> (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b) ->  GenericQMemoU ctx Inside inc r m b
+gmemoQUAs ctx name (f :: (GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b)) =
 	let memo_func :: GenericQMemoU ctx Inside inc r m b
-	    memo_func = gmemoNonRecUNamed MemoLinear ctx name (f memo_func)
+	    memo_func = gmemoNonRecUAs MemoLinear ctx name (f memo_func)
 	in memo_func
 
 -- * Auxiliary functions

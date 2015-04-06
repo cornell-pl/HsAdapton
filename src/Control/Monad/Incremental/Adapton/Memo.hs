@@ -1,8 +1,8 @@
 {-# LANGUAGE DeriveDataTypeable, UndecidableInstances, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module Control.Monad.Incremental.Adapton.Memo (
-	memoNonRecU,memoNonRecUNamed, Memo(..), Hashable(..),MemoMode(..)
-	, GenericQMemoU(..),MemoCtx(..),Sat(..),gmemoNonRecU,gmemoNonRecUNamed,proxyMemoCtx,NewGenericQ(..),NewGenericQMemo(..),NewGenericQMemoU(..)
+	memoNonRecU,memoNonRecUAs, Memo(..), Hashable(..),MemoMode(..)
+	, GenericQMemoU(..),MemoCtx(..),Sat(..),gmemoNonRecU,gmemoNonRecUAs,proxyMemoCtx,NewGenericQ(..),NewGenericQMemo(..),NewGenericQMemoU(..)
 	) where
 
 import System.Mem.WeakKey as WeakKey
@@ -48,8 +48,8 @@ gmemoNonRecU mode ctx f = unNewGenericQ (newGmemoNonRecU ctx (NewGenericQ f)) wh
 	newGmemoNonRecU ctx f = gmemoNonRecU' mode ctx f (debug "NewTable!!" $ declareWeakTable f (stableName f))
 
 -- The Haskell type system is very reluctant to accept this type signature, so we need a newtype to work around it
-gmemoNonRecUNamed :: (Memo name,Typeable ctx,Typeable b,MonadRef r m,MonadIO m,Layer Inside inc r m) => MemoMode -> Proxy ctx -> name -> GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b
-gmemoNonRecUNamed mode ctx name f = unNewGenericQ (newGmemoNonRecU ctx (NewGenericQ f)) where
+gmemoNonRecUAs :: (Memo name,Typeable ctx,Typeable b,MonadRef r m,MonadIO m,Layer Inside inc r m) => MemoMode -> Proxy ctx -> name -> GenericQMemoU ctx Inside inc r m b -> GenericQMemoU ctx Inside inc r m b
+gmemoNonRecUAs mode ctx name f = unNewGenericQ (newGmemoNonRecU ctx (NewGenericQ f)) where
 	newGmemoNonRecU ctx f = gmemoNonRecU' mode ctx f (debug "NewTable!!" $ declareWeakTable f (memoKey name))
 
 -- | memoizes a generic function on values
@@ -78,8 +78,8 @@ memoNonRecU mode f =
 	let tbl = debug "NewTable!!!" $ declareWeakTable f (stableName f)
 	in memoNonRecU' mode f tbl
 
-memoNonRecUNamed :: (Memo name,Typeable a,Typeable b,MonadRef r m,MonadIO m,Memo a,Layer Inside inc r m) => MemoMode -> name -> (a -> Inside inc r m (U Inside inc r m b)) -> a -> Inside inc r m (U Inside inc r m b)
-memoNonRecUNamed mode name f =
+memoNonRecUAs :: (Memo name,Typeable a,Typeable b,MonadRef r m,MonadIO m,Memo a,Layer Inside inc r m) => MemoMode -> name -> (a -> Inside inc r m (U Inside inc r m b)) -> a -> Inside inc r m (U Inside inc r m b)
+memoNonRecUAs mode name f =
 	let tbl = debug "NewTable!!!" $ declareWeakTable f (memoKey name)
 	in memoNonRecU' mode f tbl
 

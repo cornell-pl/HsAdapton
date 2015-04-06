@@ -10,6 +10,7 @@ import Control.Monad.Ref
 import System.Mem.WeakSet as WeakSet
 import Control.Monad.Trans
 import System.Mem.WeakKey
+import Control.DeepSeq as Seq
 
 import Control.Monad
 import Control.Monad.IO.Class
@@ -22,11 +23,16 @@ import qualified Data.Set as Set
 import Data.UUID.V1
 import Control.Concurrent
 import qualified Data.Sequence as Seq
+import qualified Data.Text as Strict
+import qualified Data.Text.IO as Strict
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.IO as T
 
 import Data.GraphViz.Types
+import qualified Data.GraphViz.Types.Canonical as Can
 import Data.GraphViz.Types.Generalised
+import qualified Data.GraphViz.Types.Generalised as Gen
+import Data.GraphViz.Attributes.HTML as HTML hiding (Attribute,Color)
 import Data.GraphViz.Attributes
 import Data.GraphViz.Attributes.Complete
 import Data.GraphViz.Commands hiding (addExtension)
@@ -69,7 +75,7 @@ $( derive makeDeepTypeable ''Merge )
 
 -- hack to automatize drawing sequences
 
-declareMVar "tempPDFs"  [t| [FilePath] |] [e| [] |]
+declareMVar "tempGraphs"  [t| [(FilePath,Bool)] |] [e| [] |]
 declareMVar "drawnDependents"  [t| Map ThreadId [String] |] [e| Map.empty |]
 declareMVar "drawnDependencies"  [t| Map ThreadId [String] |] [e| Map.empty |]
 
@@ -82,13 +88,13 @@ declareMVar "drawnDependencies"  [t| Map ThreadId [String] |] [e| Map.empty |]
 --		then inL (liftIO $ putMVar drawnDependencies nodesmap) >> return []
 --		else inL (liftIO $ putMVar drawnDependencies $ node:nodesmap) >> m
 
-checkDrawnDependents :: (Layer l inc r m,MonadIO m) => String -> l inc r m [a] -> l inc r m [a]
+checkDrawnDependents :: (Layer l inc r m,MonadIO m) => String -> l inc r m ([a],Map k v) -> l inc r m ([a],Map k v)
 checkDrawnDependents node m = do
 	threadid <- inL $ liftIO myThreadId
 	nodesmap <- inL $ liftIO $ takeMVar drawnDependents
 	let nodes = maybe [] id $ Map.lookup threadid nodesmap
 	if node `elem` nodes
-		then inL (liftIO $ putMVar drawnDependents nodesmap) >> (return [])
+		then inL (liftIO $ putMVar drawnDependents nodesmap) >> (return ([],Map.empty))
 		else inL (liftIO $ putMVar drawnDependents $ Map.insertWith (++) threadid [node] nodesmap) >> m
 
 resetDrawnNodes :: MonadIO m => m ()
@@ -100,8 +106,8 @@ resetDrawnNodes = do
 
 -- * Graphviz Drawing classes
 
--- a list of top-level ids and (elements of) a graph
-type DrawDot = ([String],[DotStatement String])
+-- a list of top-level ids and (elements of) a graph, and a table mapping node identifiers to read values
+type DrawDot = ([String],[Gen.DotStatement String],Map String String)
 
 class (MonadRef r m,MonadIO m,Layer Outside inc r m) => Draw inc r m a where
 	draw :: Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m DrawDot
@@ -115,20 +121,40 @@ instance (Draw inc r m a) => Sat (DrawDict inc r m a) where
 
 drawPDF :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m ()
 drawPDF label inc r m v = do
-	inL $ liftIO $ performGC >> threadDelay 2000000
+--	inL $ liftIO $ performGC >> threadDelay 2000000
 	dir <- inL $ liftIO getTemporaryDirectory -- $ return "/Users/hpacheco/Desktop/tmp/"
 	filename <- inL $ liftIO $ liftM toString $ nextUUIDSafe
 	let pdfFile = dir </> addExtension filename "pdf"
 	drawToPDF label inc r m v pdfFile
-	inL $ liftIO $ modifyMVar_ tempPDFs (return . (pdfFile:))
-	inL $ liftIO $ putStrLn $ "drew " ++ filename ++ ".pdf"
-
-mergePDFsInto :: (MonadRef r m,MonadIO m,Layer Outside inc r m) => FilePath -> Outside inc r m ()
-mergePDFsInto = inL . liftIO . mergePDFsInto'
+	inL $ liftIO $ modifyMVar_ tempGraphs (return . ((pdfFile,True):))
+--	inL $ liftIO $ putStrLn $ "drew " ++ filename ++ ".pdf"
 	
-mergePDFsInto' :: FilePath -> IO ()
-mergePDFsInto' pdfFile = do
-	pdfs <- modifyMVar tempPDFs (\pdfs -> return ([],pdfs))
+drawDot :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m ()
+drawDot label inc r m v = do
+--	inL $ liftIO $ performGC >> threadDelay 2000000
+	dir <- inL $ liftIO getTemporaryDirectory -- $ return "/Users/hpacheco/Desktop/tmp/"
+	filename <- inL $ liftIO $ liftM toString $ nextUUIDSafe
+	let dotFile = dir </> addExtension filename "dot"
+	drawToDot label inc r m v dotFile
+	inL $ liftIO $ modifyMVar_ tempGraphs (return . ((dotFile,False):))
+--	inL $ liftIO $ putStrLn $ "drew " ++ filename ++ ".dot"
+
+mergeGraphsInto :: (MonadRef r m,MonadIO m,Layer Outside inc r m) => FilePath -> Outside inc r m ()
+mergeGraphsInto = inL . liftIO . mergeGraphsInto'
+	
+dotToPDF :: FilePath -> IO FilePath
+dotToPDF dot = do
+	let pdf = replaceExtension dot "pdf"
+	system $ "dot -Tpdf " ++ dot ++ " -o " ++ pdf
+	return pdf
+	
+mergeGraphsInto' :: FilePath -> IO ()
+mergeGraphsInto' pdfFile = do
+	graphs <- modifyMVar tempGraphs (\pdfs -> return ([],pdfs))
+	let convert (file,typ) = case typ of
+		False -> dotToPDF file
+		True -> return file
+	pdfs <- mapM convert graphs
 	system $ "pdftk " ++ unwords (reverse pdfs) ++ " cat output " ++ pdfFile
 	return ()
 
@@ -137,7 +163,7 @@ mergePDFsInto' pdfFile = do
 drawToDot :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> FilePath -> Outside inc r m ()
 drawToDot label inc r m v dotFile = do
 	graph <- drawGraph label inc r m v
-	let txt = printDotGraph graph
+	let txt = Seq.force $ printDotGraph graph
 	inL $ liftIO $ T.writeFile dotFile txt
 	return ()
 	
@@ -151,14 +177,26 @@ drawGraph :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a ->
 drawGraph label inc r m x = do
 	inL resetDrawnNodes
 --	inL $ liftIO printAllRefs
-	let labelNode = DN $ DotNode {nodeID = label, nodeAttributes = [Shape PlainText,Label (StrLabel $ T.pack label)]}
-	dot <- liftM (\(x,y) -> drawGraphStatements $ labelNode : y) (draw inc r m x)
+	let labelNode = Gen.DN $ DotNode {nodeID = label, nodeAttributes = [Shape PlainText,Label (StrLabel $ T.pack label)]}
+	dot <- liftM (\(x,y,z) -> drawGraphStatements $ labelNode : y ++ drawTable z) (draw inc r m x)
 	inL resetDrawnNodes
 	return dot
 
-drawGraphStatements :: [DotStatement String] -> DotGraph String
-drawGraphStatements dot = DotGraph {strictGraph = False, directedGraph = True, graphID = Just (Str $ T.pack "AdaptonGraph"), graphStatements = Seq.fromList $ attributes++dot }
-	where attributes = [GA $ GraphAttrs {attrs = [Ordering OutEdges]}]
+drawTable :: Map String String -> [DotStatement String]
+drawTable tbl = [DN (DotNode {nodeID = "memos", nodeAttributes = [Shape PlainText,Label (HtmlLabel (Table (HTable {tableFontAttrs = Nothing, tableAttrs = [Border 1,CellBorder 1,CellSpacing 0], tableRows = rows })))]})]
+	where
+	rows = Map.elems $ Map.mapWithKey drawCell tbl
+	drawCell k v = HTML.Cells [LabelCell [] (Text [HTML.Str $ T.pack k]),HTML.LabelCell [] (Text [HTML.Str $ T.pack v])]
+	
+	
+
+
+	
+
+
+drawGraphStatements :: [Gen.DotStatement String] -> DotGraph String
+drawGraphStatements dot = DotGraph {strictGraph = False, directedGraph = True, graphID = Just (Gen.Str $ T.pack "AdaptonGraph"), graphStatements = Seq.fromList $ attributes++dot }
+	where attributes = [Gen.GA $ GraphAttrs {attrs = [Ordering OutEdges]}]
 
 constructorNode :: String -> String -> DotNode String
 constructorNode nodeID nodeLabel = DotNode {nodeID = nodeID, nodeAttributes = [Shape PlainText,Label (StrLabel $ T.pack nodeLabel)]}
@@ -178,11 +216,11 @@ addEdgeLabel :: String -> DotEdge n -> DotEdge n
 addEdgeLabel lbl edge = edge { edgeAttributes = Label (StrLabel $ T.pack lbl) : edgeAttributes edge }
 
 sameRank :: [String] -> DotSubGraph String
-sameRank nodeIDs = DotSG {isCluster = False, subGraphID = Nothing, subGraphStmts = Seq.fromList $ GA (GraphAttrs {attrs = [Rank SameRank]}) : nodes }
-	where nodes = map (\nID -> DN (DotNode {nodeID = nID, nodeAttributes = []})) nodeIDs
+sameRank nodeIDs = DotSG {isCluster = False, subGraphID = Nothing, subGraphStmts = Seq.fromList $ Gen.GA (GraphAttrs {attrs = [Rank SameRank]}) : nodes }
+	where nodes = map (\nID -> Gen.DN (DotNode {nodeID = nID, nodeAttributes = []})) nodeIDs
 
 mergeDrawDot :: Monad m => DrawDot -> DrawDot -> m DrawDot
-mergeDrawDot (xs1,dot1) (xs2,dot2) = return (xs1++xs2,dot1++dot2)
+mergeDrawDot (xs1,dot1,tbl1) (xs2,dot2,tbl2) = return (xs1++xs2,dot1++dot2,Map.union tbl1 tbl2)
 
 lNode :: Bool -> String -> DotNode String
 lNode isUnevaluated thunkID = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {wColor = color, weighting = Nothing}],Shape Square,Label (StrLabel $ T.pack thunkID),Style [SItem Filled []],FillColor [WC {wColor = fillcolor, weighting = Nothing}]]}
@@ -194,8 +232,8 @@ deadNode i = DotNode {nodeID = i, nodeAttributes = [Color [WC {wColor = color, w
 	where fillcolor = X11Color Goldenrod4
 	      color = X11Color Goldenrod4
 
-mNode :: String -> DotNode String
-mNode thunkID = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {wColor = color, weighting = Nothing}],Shape MSquare,Label (StrLabel $ T.pack thunkID),Style [SItem Filled []],FillColor [WC {wColor = fillcolor, weighting = Nothing}]]}
+mNode :: String -> String -> DotNode String
+mNode thunkID label = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {wColor = color, weighting = Nothing}],Shape MSquare,Label (StrLabel $ T.pack $ thunkID ++ label),Style [SItem Filled []],FillColor [WC {wColor = fillcolor, weighting = Nothing}]]}
 	where fillcolor = X11Color White
 	      color = X11Color DarkGreen
 	
@@ -224,46 +262,46 @@ instance (Draw inc r m a,Draw inc r m b) => Draw inc r m (Merge a b) where
 	draw inc r m (Merge a b) = do
 		draw1 <- draw inc r m a
 		draw2 <- draw inc r m b
-		(ids,dot) <- mergeDrawDot draw1 draw2
-		return (ids,SG (sameRank ids) : dot)
+		(ids,dot,table) <- mergeDrawDot draw1 draw2
+		return (ids,Gen.SG (sameRank ids) : dot,table)
 
 instance (MonadIO m,Incremental inc r m) => Draw inc r m String where
 	draw inc r m str = do
 		parentID <- liftM toString $ inL $ liftIO $ nextUUIDSafe
-		return ([parentID],[DN $ constructorNode parentID str])
+		return ([parentID],[Gen.DN $ constructorNode parentID str],Map.empty)
 
 instance (MonadIO m,Incremental inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m [a] where
 	draw inc r m xs = do
 		parentID <- liftM toString $ inL $ liftIO $ nextUUIDSafe
 		let parentLabel = "[]"
-		(childrenIDs,childrenDot) <- liftM mergeLists $ mapM (drawDict dict inc r m) xs
-		let parentNode = DN $ constructorNode parentID parentLabel
-		let childrenEdges = map (DE . constructorEdge parentID) childrenIDs
+		(childrenIDs,childrenDot,childrenTable) <- liftM mergeLists $ mapM (drawDict dict inc r m) xs
+		let parentNode = Gen.DN $ constructorNode parentID parentLabel
+		let childrenEdges = map (Gen.DE . constructorEdge parentID) childrenIDs
 		let childrenRank = sameRank childrenIDs
-		return ([parentID],parentNode : childrenEdges ++ SG childrenRank : childrenDot)
+		return ([parentID],parentNode : childrenEdges ++ Gen.SG childrenRank : childrenDot,childrenTable)
 
 instance (MonadIO m,Incremental inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m (Set a) where
 	draw inc r m (Set.toList -> xs) = do
 		parentID <- liftM toString $ inL $ liftIO $ nextUUIDSafe
 		let parentLabel = "Set"
-		(childrenIDs,childrenDot) <- liftM mergeLists $ mapM (drawDict dict inc r m) xs
-		let parentNode = DN $ constructorNode parentID parentLabel
-		let childrenEdges = map (DE . constructorEdge parentID) childrenIDs
+		(childrenIDs,childrenDot,childrenTable) <- liftM mergeLists $ mapM (drawDict dict inc r m) xs
+		let parentNode = Gen.DN $ constructorNode parentID parentLabel
+		let childrenEdges = map (Gen.DE . constructorEdge parentID) childrenIDs
 		let childrenRank = sameRank childrenIDs
-		return ([parentID],parentNode : childrenEdges ++ SG childrenRank : childrenDot)
+		return ([parentID],parentNode : childrenEdges ++ Gen.SG childrenRank : childrenDot,childrenTable)
 
 instance (MonadIO m,Incremental inc r m,MData (DrawDict inc r m) (Outside inc r m) b,Show a) => Draw inc r m (Map a b) where
 	draw inc r m (Map.toList -> xs) = do
 		let (keys,values) = unzip xs
 		parentID <- liftM toString $ inL $ liftIO $ nextUUIDSafe
 		let parentLabel = "Map"
-		(childrenIDs,childrenDot) <- liftM mergeLists $ mapM (drawDict dict inc r m) values
-		let parentNode = DN $ constructorNode parentID parentLabel
-		childrenEdges <- mapM (\(k,childID) -> return $ DE $ addEdgeLabel (show k) $ constructorEdge parentID childID) $ zip keys childrenIDs
+		(childrenIDs,childrenDot,childrenTable) <- liftM mergeLists $ mapM (drawDict dict inc r m) values
+		let parentNode = Gen.DN $ constructorNode parentID parentLabel
+		childrenEdges <- mapM (\(k,childID) -> return $ Gen.DE $ addEdgeLabel (show k) $ constructorEdge parentID childID) $ zip keys childrenIDs
 		let childrenRank = sameRank childrenIDs
-		return ([parentID],parentNode : childrenEdges ++ SG childrenRank : childrenDot)
+		return ([parentID],parentNode : childrenEdges ++ Gen.SG childrenRank : childrenDot,childrenTable)
 
-mergeLists l = let (xxs,yys) = unzip l in (concat xxs,concat yys)
+mergeLists l = let (xxs,yys,zzs) = unzip3 l in (concat xxs,concat yys,foldr Map.union Map.empty zzs)
 
 drawProxy :: Proxy inc -> Proxy r -> Proxy m -> Proxy (DrawDict inc r m)
 drawProxy inc r m = Proxy
@@ -273,8 +311,8 @@ instance (Incremental inc r m,WeakRef r,MonadRef r m,MonadIO m,MData (DrawDict i
 	draw inc r m v = do
 		parentID <- liftM toString $ inL $ liftIO $ nextUUIDSafe
 		parentLabel <- liftM showConstr $ toConstr (drawProxy inc r m) v
-		(childrenIDs,childrenDot) <- gmapQr (drawProxy inc r m) mergeDrawDot ([],[]) (drawDict dict inc r m) v
-		let parentNode = DN $ constructorNode parentID parentLabel
-		let childrenEdges = map (DE . constructorEdge parentID) childrenIDs
+		(childrenIDs,childrenDot,childrenTable) <- gmapQr (drawProxy inc r m) mergeDrawDot ([],[],Map.empty) (drawDict dict inc r m) v
+		let parentNode = Gen.DN $ constructorNode parentID parentLabel
+		let childrenEdges = map (Gen.DE . constructorEdge parentID) childrenIDs
 		let childrenRank = sameRank childrenIDs
-		return ([parentID],parentNode : childrenEdges ++ SG childrenRank : childrenDot)
+		return ([parentID],parentNode : childrenEdges ++ Gen.SG childrenRank : childrenDot,childrenTable)

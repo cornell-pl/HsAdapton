@@ -21,6 +21,7 @@ import qualified Data.Sequence as Seq
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.IO as T
 
+import qualified Data.Map as Map
 import Data.GraphViz.Types
 import Data.GraphViz.Types.Generalised
 import Data.GraphViz.Attributes
@@ -57,80 +58,82 @@ drawAdaptonProxy r m = Proxy
 instance (MonadRef r m,MonadIO m,IncK inc a,Layer l inc r m,MData (DrawDict inc r m) (Outside inc r m) a,Input M l inc r m) => Draw inc r m (M l inc r m a) where
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idNM $ metaM t
-		let thunkNode = mNode thunkID
-		(childrenIDs,childrenDot) <- drawDict dict inc r m =<< getOutside t
+		let thunkNode = mNode thunkID ""
+		(childrenIDs,childrenDot,childrenTable) <- drawDict dict inc r m =<< getOutside t
 		let childrenEdges = map (DE . constructorEdge thunkID) childrenIDs
 		let childrenRank = sameRank childrenIDs
-		dependendentEdges <- drawDependents thunkID (dependentsNM $ metaM t)
-		return ([thunkID],DN thunkNode : childrenEdges ++ dependendentEdges ++ SG childrenRank : childrenDot)
+		(dependendentEdges,dependentTable) <- drawDependents thunkID (dependentsNM $ metaM t)
+		return ([thunkID],DN thunkNode : childrenEdges ++ dependendentEdges ++ SG childrenRank : childrenDot,childrenTable `Map.union` dependentTable)
 
 instance (Input L l inc r m,MonadRef r m,MonadIO m,IncK inc a,Layer l inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m (L l inc r m a) where
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idNM $ metaL t
 		isUnevaluated <- isUnevaluatedL t
-		dependentEdges <- drawDependents thunkID (dependentsNM $ metaL t)
+		(dependentEdges,dependentTable) <- drawDependents thunkID (dependentsNM $ metaL t)
 		let thunkNode = lNode isUnevaluated thunkID
 		if isUnevaluated
-			then return ([thunkID],DN thunkNode : dependentEdges)
+			then return ([thunkID],DN thunkNode : dependentEdges,dependentTable)
 			else do
-				(childrenIDs,childrenDot) <- drawDict dict inc r m =<< getOutside t
+				(childrenIDs,childrenDot,childrenTable) <- drawDict dict inc r m =<< getOutside t
 				let childrenEdges = map (DE . constructorEdge thunkID) childrenIDs
 				let childrenRank = sameRank childrenIDs
-				return ([thunkID],DN thunkNode : childrenEdges ++ dependentEdges ++ SG childrenRank : childrenDot)
+				return ([thunkID],DN thunkNode : childrenEdges ++ dependentEdges ++ SG childrenRank : childrenDot,childrenTable `Map.union` dependentTable)
 
 -- we do not draw any dependencies from thunks, since we assume that they have all already been drawn by following the dependents of modifiables
 instance (MonadRef r m,MonadIO m,IncK inc a,Layer l inc r m,Output U l inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m (U l inc r m a) where
 	draw inc r m t = do
 		let thunkID = show $ hashUnique $ idNM $ metaU t
 		isDirtyUnevaluated <- isDirtyUnevaluatedU t
-		dependentEdges <- drawDependents thunkID (dependentsNM $ metaU t)
-		dependencyEdges <- drawDependencies thunkID (metaU t)
+		(dependentEdges,dependentTable) <- drawDependents thunkID (dependentsNM $ metaU t)
+		(dependencyEdges,dependencyTable) <- drawDependencies thunkID (metaU t)
 		let thunkNode = uNode isDirtyUnevaluated thunkID ""
 		case isDirtyUnevaluated of
 			Just False -> do
-				(childrenIDs,childrenDot) <- drawDict dict inc r m =<< inside (oldvalueU t)
+				(childrenIDs,childrenDot,childrenTable) <- drawDict dict inc r m =<< inside (oldvalueU t)
 				let childrenEdges = map (DE . constructorEdge thunkID) childrenIDs
 				let childrenRank = sameRank childrenIDs
-				return ([thunkID],DN thunkNode : childrenEdges ++ dependentEdges ++ dependencyEdges ++ SG childrenRank : childrenDot)
+				return ([thunkID],DN thunkNode : childrenEdges ++ dependentEdges ++ dependencyEdges ++ SG childrenRank : childrenDot,childrenTable `Map.union` dependentTable `Map.union` dependencyTable)
 			Just True -> do
-				(childrenIDs,childrenDot) <- drawDict dict inc r m =<< inside (oldvalueU t)
+				(childrenIDs,childrenDot,childrenTable) <- drawDict dict inc r m =<< inside (oldvalueU t)
 				let childrenEdges = map (DE . constructorEdge thunkID) childrenIDs
 				let childrenRank = sameRank childrenIDs
-				return ([thunkID],DN thunkNode : childrenEdges ++ dependentEdges ++ dependencyEdges ++ SG childrenRank : childrenDot)
-			Nothing -> return ([thunkID],[DN thunkNode])
+				return ([thunkID],DN thunkNode : childrenEdges ++ dependentEdges ++ dependencyEdges ++ SG childrenRank : childrenDot,childrenTable `Map.union` dependentTable `Map.union` dependencyTable)
+			Nothing -> return ([thunkID],[DN thunkNode],Map.empty)
 
-drawDependents :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Dependents inc r m -> Outside inc r m [DotStatement String]
-drawDependents fromID deps = checkDrawnDependents fromID $ liftM (concat . Foldable.toList) $ WeakSet.mapM'' (inL . liftIO) (drawDependent fromID) deps
-drawDependent :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Weak (Dependent inc r m) -> Outside inc r m [DotStatement String]
+drawDependents :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Dependents inc r m -> Outside inc r m ([DotStatement String],Map.Map String String)
+drawDependents fromID deps = checkDrawnDependents fromID $ liftM (concatOut . Foldable.toList) $ WeakSet.mapM'' (inL . liftIO) (drawDependent fromID) deps
+drawDependent :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Weak (Dependent inc r m) -> Outside inc r m ([DotStatement String],Map.Map String String)
 drawDependent fromID weak = do
 	mb <- inL $ liftIO $ deRefWeak weak
 	case mb of
 		Just (Dependency (srcMetaW,dirtyW,checkW,tgtMetaW)) -> do
 			let ithunkID = show $ hashUnique $ idNM tgtMetaW
 			let ithunkNode = iuNode ithunkID ""
-			edges <- drawDependents ithunkID (dependentsNM tgtMetaW)
-			edges' <- drawDependencies ithunkID tgtMetaW -- recursive dependencies
+			(edges,edgesTable) <- drawDependents ithunkID (dependentsNM tgtMetaW)
+			(edges',edgesTable') <- drawDependencies ithunkID tgtMetaW -- recursive dependencies
 			isDirty <- inL $ readRef dirtyW
-			return $ DN ithunkNode : DE (dependentEdge isDirty fromID ithunkID) : edges ++ edges'
+			return (DN ithunkNode : DE (dependentEdge isDirty fromID ithunkID) : edges ++ edges',edgesTable `Map.union` edgesTable')
 		Nothing -> 	do
 			let deadNodeID = "DEAD_WEAK "
-			return [DN (deadNode deadNodeID),DE (dependentEdge False fromID deadNodeID)]
+			return ([DN (deadNode deadNodeID),DE (dependentEdge False fromID deadNodeID)],Map.empty)
 
-drawDependencies :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> NodeMeta inc r m -> Outside inc r m [DotStatement String]
-drawDependencies toID meta = return [] --checkDrawnDependencies toID $ do
+concatOut = (\xs -> let (stmts,tbls) = unzip xs in (concat stmts,foldr Map.union Map.empty tbls))
+
+drawDependencies :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> NodeMeta inc r m -> Outside inc r m ([DotStatement String],Map.Map String String)
+drawDependencies toID meta = return ([],Map.empty) --checkDrawnDependencies toID $ do
 --	mb <- inL $ applyUDataOp (uDataOpUM meta) Nothing (liftM Just . getDependencies) -- recursive dependents
 --	case mb of
 --		Nothing -> return []
 --		Just deps -> drawDependencies' toID deps
-drawDependencies' :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Dependencies inc r m -> Outside inc r m [DotStatement String]
-drawDependencies' toID = liftM concat . mapM (drawDependency toID) 
-drawDependency :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> (Dependency inc r m,IO ()) -> Outside inc r m [DotStatement String]
+drawDependencies' :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> Dependencies inc r m -> Outside inc r m ([DotStatement String],Map.Map String String)
+drawDependencies' toID dependencies = liftM concatOut $ mapM (drawDependency toID) dependencies
+drawDependency :: (Layer Outside inc r m,MonadRef r m,MonadIO m) => String -> (Dependency inc r m,IO ()) -> Outside inc r m ([DotStatement String],Map.Map String String)
 drawDependency toID ((Dependency (srcMeta,dirty,check,tgtMeta)),_) = do
 	let ithunkID = show $ hashUnique $ idNM srcMeta
 	isDirty <- inL $ readRef dirty
-	edges <- drawDependents ithunkID (dependentsNM srcMeta)
-	edges' <- drawDependencies ithunkID srcMeta -- recursive dependencies
-	return $ DE (dependencyEdge isDirty toID ithunkID) : edges ++ edges'
+	(edges,edgesTable) <- drawDependents ithunkID (dependentsNM srcMeta)
+	(edges',edgesTable') <- drawDependencies ithunkID srcMeta -- recursive dependencies
+	return (DE (dependencyEdge isDirty toID ithunkID) : edges ++ edges',edgesTable `Map.union` edgesTable')
 
 getDependencies :: MonadRef r m => r (UData l inc r m a) -> m (Dependencies inc r m)
 getDependencies dta = do
