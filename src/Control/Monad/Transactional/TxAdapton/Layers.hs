@@ -179,13 +179,13 @@ updateRunningTx oldtime newtime = modifyMVarMasked_ runningTxs (\xs -> return $ 
 
 -- restarts a tx with a new starting time
 -- note that the time has already been added to the @runningTxs@
-restartTx :: TxLayer Outside r m => UTCTime -> Outside TxAdapton r m a -> Outside TxAdapton r m a
+restartTx :: TxLayer l r m => UTCTime -> l TxAdapton r m a -> l TxAdapton r m a
 restartTx newtime m = do
  	(timeref :!: stack :!: logs) <- Reader.ask
 	writeRef timeref newtime
 	m
 
-resetTx :: TxLayer Outside r m => Outside TxAdapton r m a -> Outside TxAdapton r m a
+resetTx :: TxLayer l r m => l TxAdapton r m a -> l TxAdapton r m a
 resetTx m = do
 	now <- inL $ liftIO startTx >>= newRef
 	stack <- inL $ liftIO $ newIORef SNil

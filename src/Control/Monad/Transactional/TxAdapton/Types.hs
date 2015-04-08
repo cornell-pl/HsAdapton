@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, TypeFamilies, TupleSections, StandaloneDeriving, BangPatterns, EmptyDataDecls, FlexibleContexts, TypeOperators, ConstraintKinds, MagicHash, ViewPatterns, KindSignatures, GADTs, ScopedTypeVariables, DeriveDataTypeable, TemplateHaskell #-}
+{-# LANGUAGE Rank2Types, CPP, TypeFamilies, TupleSections, StandaloneDeriving, BangPatterns, EmptyDataDecls, FlexibleContexts, TypeOperators, ConstraintKinds, MagicHash, ViewPatterns, KindSignatures, GADTs, ScopedTypeVariables, DeriveDataTypeable, TemplateHaskell #-}
 
 module Control.Monad.Transactional.TxAdapton.Types where
 
@@ -164,9 +164,11 @@ newtype TxNodeMeta (r :: * -> *) (m :: * -> *) = TxNodeMeta (
 
 -- (a new starttime,repairing actions over an invalid environment)
 type Repair = (UTCTime,Set Unique)
+type TxRepair' r m = TxLog r m -> m ()
 type TxRepair r m = (UTCTime,TxRepair' r m)
-type InvalidTxRepair r m = (UTCTime,Outside TxAdapton r m ())
-type TxRepair' r m = TxLog r m -> Outside TxAdapton r m ()
+type InvalidTxRepair r m = (UTCTime,GenTxRepair r m)
+
+newtype GenTxRepair r m = GenTxRepair (forall l . TxLayer l r m => l TxAdapton r m ())
 
 -- a wait queue of tx locks and environments
 -- thread-safe, because a retrying thread that only reads a variable places itself in the queue (and reads are not locked)
@@ -884,7 +886,7 @@ dirtyBufferedTxData _ = return ()
 forgetBufferedTxData :: (MonadIO m,MonadRef r m) => DynTxVar r m -> m ()
 forgetBufferedTxData (DynTxU _ _ u (TxStatus (New _,_))) = flip mapRefM_ (dataTxU u) forget where
 	forget (TxValue _ value force dependencies) = do
-		clearDependenciesTx False
+		clearDependenciesTx False dependencies
 		return $ TxThunk force
 	forget dta = return dta
 forgetBufferedTxData (DynTxU (Just (BuffTxU buff_dta)) _ u _) = mapRefM_ forget buff_dta where
@@ -892,7 +894,7 @@ forgetBufferedTxData (DynTxU (Just (BuffTxU buff_dta)) _ u _) = mapRefM_ forget 
 		ori' <- case ori of
 			Left deps -> liftIO $ liftM Right $ mkWeakRefKey deps deps Nothing
 			Right wdeps -> return $ Right wdeps
-		clearDependenciesTx False
+		clearDependenciesTx False dependencies
 		return (TxThunk force,ori)
 	forget dta = return dta
 forgetBufferedTxData _ = return ()
@@ -907,8 +909,11 @@ isUnevaluatedOriginalTxU t = do
 -- ** unbuffering
 
 -- don't dirty unbuffered entries (since we are unbuffering all written variables, dependents of unbuffered entries are unbuffered as well)
-unbufferTopTxLog :: MonadIO m => TxLogs r m -> Bool -> m ()
-unbufferTopTxLog txlogs@(SCons txlog _) onlyWrites = WeakTable.mapMGeneric_ (unbufferDynTxVar' onlyWrites txlogs) $ txLogBuff txlog
+unbufferTopTxLog :: TxLayer l r m => TxLogs r m -> Bool -> l TxAdapton r m ()
+unbufferTopTxLog txlogs@(SCons txlog _) onlyWrites = do
+	b <- isInside
+	-- we don't need to unbuffer a computation at the inner layer, because it has no writes
+	unless (onlyWrites && b) $ inL $ WeakTable.mapMGeneric_ (unbufferDynTxVar' onlyWrites txlogs) $ txLogBuff txlog
 
 unbufferDynTxVar :: MonadIO m => Bool -> TxLogs r m -> DynTxVar r m -> m ()
 unbufferDynTxVar onlyWrites txlogs entry = unbufferDynTxVar' onlyWrites txlogs (dynTxId entry,entry)
@@ -962,7 +967,7 @@ unbufferDynTxVar'' txlogs onlyWrites tvar@(DynTxU _ _ u stat) = if (if onlyWrite
 		dirtyBufferedDynTxVar txlogs tvar
 		-- unbuffer the thunk, so that the fresher original data is used instead
 		let mbtxdeps = dynTxVarBufferedDependents tvar
-		let newstat = TxStaatus (Read,isJust mbtxdeps)
+		let newstat = TxStatus (Read,isJust mbtxdeps)
 		if stat == newstat
 			then return Nothing
 			else return $ Just $ DynTxU Nothing mbtxdeps u newstat
@@ -1049,12 +1054,12 @@ instance (DeepTypeable l,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepType
 
 type STxAdaptonM = STxM TxAdapton IORef IO
 
-joinTxRepairMb' :: Monad (Outside TxAdapton r m) => Maybe (TxRepair' r m) -> Maybe (TxRepair' r m) -> Maybe (TxRepair' r m)
+joinTxRepairMb' :: TxLayer Outside r m => Maybe (TxRepair' r m) -> Maybe (TxRepair' r m) -> Maybe (TxRepair' r m)
 joinTxRepairMb' Nothing mb2 = mb2
 joinTxRepairMb' mb1 Nothing = mb1
 joinTxRepairMb' (Just f) (Just g) = Just $ \txlog -> f txlog >> g txlog
 
-joinTxRepair' :: Monad (Outside TxAdapton r m) => (TxRepair' r m) -> (TxRepair' r m) -> (TxRepair' r m)
+joinTxRepair' :: TxLayer Outside r m => (TxRepair' r m) -> (TxRepair' r m) -> (TxRepair' r m)
 joinTxRepair' f g = \txlog -> f txlog >> g txlog
 
 {-# INLINE modifyMVarMasked_' #-}

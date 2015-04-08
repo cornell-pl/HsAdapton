@@ -62,18 +62,21 @@ instance Layers Outside Outside where
 class (InLayer l inc r m,Monad (l inc r m),Incremental inc r m) => Layer l inc r m where
 	inside :: Inside inc r m a -> l inc r m a
 	outside :: l inc r m a -> Outside inc r m a
+	isInside :: l inc r m Bool
 
 instance (InLayer Outside inc r m,Incremental inc r m) => Layer Outside inc r m where
 	inside = world
 	{-# INLINE inside #-}
 	outside = id
 	{-# INLINE outside #-}
+	isInside = return False
 
 instance (InLayer Inside inc r m,Incremental inc r m) => Layer Inside inc r m where
 	inside = id
 	{-# INLINE inside #-}
 	outside = world
 	{-# INLINE outside #-}
+	isInside = return True
 
 deriving instance Typeable Outside
 deriving instance Typeable Inside

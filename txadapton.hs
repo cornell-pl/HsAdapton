@@ -318,10 +318,10 @@ customer_thread warehouse leastItem (customer,choices) = do
 		choice:choices -> do
 			if choice
 				then do -- list the cheapest item
-					(time,(tx,item)) <- timeItT $ atomicallyTx True ("customer " ++ customerName customer) $ flip catch noBalance $ do
+					(time,(tx,item)) <- timeItT $ readAtomicallyTx True ("customer " ++ customerName customer) $ do
 						tx <- readTxTime
 --						drawDot ("customer listing" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
-						item <- cheapestItem ("customer " ++ customerName customer) warehouse leastItem
+						item <- force leastItem
 						str <- showInc item
 --						let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str ++ " " ++ show tx
 --						drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)

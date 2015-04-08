@@ -12,8 +12,8 @@ txcshf:
 	ghc --make -O3 -threaded txadapton.hs -fforce-recomp -isrc -DCSHF
 	./txadapton --output txadapton.html
 txprof:
-	ghc --make txadapton.hs -fforce-recomp -rtsopts -isrc -threaded
-	ghc --make txadapton.hs -osuf p_o -prof -auto-all -caf-all -fforce-recomp -rtsopts -isrc -threaded
+	ghc --make txadapton.hs -fforce-recomp -rtsopts -isrc -threaded -DCSHF
+	ghc --make txadapton.hs -osuf p_o -prof -auto -fforce-recomp -rtsopts -isrc -threaded -DCSHF
 	./txadapton +RTS -pa -s
 txfast:
 	ghc --make -O0 -threaded txadapton.hs -fforce-recomp -isrc

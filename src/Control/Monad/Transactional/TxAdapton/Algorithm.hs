@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, TupleSections, GeneralizedNewtypeDeriving, TypeFamilies, DeriveDataTypeable, ScopedTypeVariables, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, MagicHash, ViewPatterns, BangPatterns, ConstraintKinds, FlexibleContexts #-}
+{-# LANGUAGE ImpredicativeTypes, Rank2Types, CPP, TupleSections, GeneralizedNewtypeDeriving, TypeFamilies, DeriveDataTypeable, ScopedTypeVariables, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, MagicHash, ViewPatterns, BangPatterns, ConstraintKinds, FlexibleContexts #-}
 
 module Control.Monad.Transactional.TxAdapton.Algorithm where
 
@@ -781,7 +781,7 @@ commitTxLog :: (TxLayer Outside r m,MonadIO m,MonadRef r m) => UTCTime -> Bool -
 commitTxLog starttime doWrites doEvals txlog = do
 #endif
 #ifdef CSHF
-commitTxLog :: (TxLayer Outside r m,MonadIO m,MonadRef r m) => ThreadId -> UTCTime -> Bool -> Bool -> TxLog r m -> m ((TxUnmemo r m,ThreadRepair r m),Wakes)
+commitTxLog :: (TxLayer Outside r m) => ThreadId -> UTCTime -> Bool -> Bool -> TxLog r m -> m ((TxUnmemo r m,ThreadRepair r m),Wakes)
 commitTxLog tid starttime doWrites doEvals txlog = do
 #endif
 	-- marks buffered data as original
@@ -820,15 +820,17 @@ retryTxLog :: (TxLayer Outside r m,MonadIO m,MonadRef r m) => Lock -> TxLog r m 
 retryTxLog lck txlog = WeakTable.mapMGeneric_ (\(uid,dyntxvar) -> retryDynTxVar txlog lck uid dyntxvar) (txLogBuff txlog)
 
 -- lifts all writes to the innermost nested txlog
-liftTxLogsWrites :: (TxLayer Outside r m) => TxLogs r m -> m ()
-liftTxLogsWrites (SCons txlog txlogs) = liftTxLogsWrites' txlog txlogs
+liftTxLogsWrites :: (TxLayer l r m) => TxLogs r m -> l TxAdapton r m ()
+liftTxLogsWrites (SCons txlog txlogs) = do
+	b <- isInside
+	unless b $ inL $ liftTxLogsWrites' txlog txlogs
   where
-	liftTxLogsWrites' :: (TxLayer Outside r m) => TxLog r m -> TxLogs r m -> m ()
+	liftTxLogsWrites' :: MonadIO m => TxLog r m -> TxLogs r m -> m ()
 	liftTxLogsWrites' txlog SNil = return ()
 	liftTxLogsWrites' txlog (SCons txlog1 txlogs1) = do
 		liftIO $ WeakTable.mapM_ (liftWrite txlog) (txLogBuff txlog1)
 		liftTxLogsWrites' txlog txlogs1
-	liftWrite :: (TxLayer Outside r m) => TxLog r m -> (Unique,DynTxVar r m) -> IO ()
+	liftWrite :: TxLog r m -> (Unique,DynTxVar r m) -> IO ()
 	liftWrite txlog (uid,tvar) = when (isWriteOrNewTrue $ dynTxStatus tvar) $ do
 		mb <- WeakTable.lookup (txLogBuff txlog) uid
 		case mb of
@@ -836,14 +838,21 @@ liftTxLogsWrites (SCons txlog txlogs) = liftTxLogsWrites' txlog txlogs
 			Just _ -> return ()
 
 -- extends a base txlog with all its enclosing txlogs, ignoring writes in all of them
-flattenTxLogs :: (TxLayer Outside r m) => TxLogs r m -> m (TxLog r m)
+flattenTxLogs :: (TxLayer l r m) => TxLogs r m -> l TxAdapton r m (TxLog r m)
 flattenTxLogs txlogs@(SCons toptxlog SNil) = unbufferTopTxLog txlogs True >> return toptxlog
 flattenTxLogs (SCons txlog txlogs) = do
-	commitNestedTx False txlog txlogs
+	inL $ commitNestedTx False txlog txlogs
 	flattenTxLogs txlogs
 
 instance (Typeable r,Typeable m,TxLayer Outside r m,MonadIO m,Incremental TxAdapton r m) => Transactional TxAdapton r m where
-	atomically = runIncremental
+#ifdef TXREPAIR
+	atomically = atomicallyTx True ""
+	readAtomically = atomicallyTx True ""
+#endif
+#ifndef TXREPAIR
+	atomically = atomicallyTx False ""
+	readAtomically = atomicallyTx False ""
+#endif
 	retry = retryTx
 	orElse = orElseTx
 	throw = throwTx
@@ -860,8 +869,10 @@ catchTx (stm :: Outside TxAdapton r m a) (h :: e -> Outside TxAdapton r m a) = s
 		validateCatchTx "catchTx"
 		h e
 
+readAtomicallyTx :: (Typeable r,Typeable m,TxLayer Inside r m) => Bool -> String -> Inside TxAdapton r m a -> m a
+readAtomicallyTx = atomicallyTx
 --
-atomicallyTx :: (Typeable r,Typeable m,TxLayer Outside r m) => Bool -> String -> Outside TxAdapton r m a -> m a
+atomicallyTx :: (Typeable r,Typeable m,TxLayer l r m) => Bool -> String -> l TxAdapton r m a -> m a
 atomicallyTx doRepair msg stm = initializeTx try where
 	try = flip Catch.catches [Catch.Handler catchInvalid,Catch.Handler catchRetry,Catch.Handler catchSome] $ do
 		debugTx $ "started tx " ++ msg
@@ -874,7 +885,7 @@ atomicallyTx doRepair msg stm = initializeTx try where
 				debugTx $ "finished tx " ++ msg
 				return x
 			Just (newtime,repair) -> Catch.throwM $ InvalidTx (newtime,repair)
-	catchInvalid (InvalidTx (newtime,repair)) = do
+	catchInvalid (InvalidTx (newtime,GenTxRepair repair)) = do
 		starttime <- readTxTime
 		let withRepair = if doRepair then Just repair else Nothing
 		let msg = "caught InvalidTx: retrying tx previously known as " ++ show starttime
@@ -898,7 +909,7 @@ atomicallyTx doRepair msg stm = initializeTx try where
 				resetTx $ do
 					debugTx $ "try: BlockedOnRetry retrying invalid tx previously known as " ++ show starttime
 					try
-			Right (newtime,repair) -> do
+			Right (newtime,GenTxRepair repair) -> do
 				starttime <- readTxTime
 				let withRepair = if doRepair then Just repair else Nothing
 				let msg = "caughtRetry InvalidTx: retrying tx previously known as " ++ show starttime
@@ -911,7 +922,7 @@ atomicallyTx doRepair msg stm = initializeTx try where
 			Nothing -> do
 				debugTx $ "finished exceptional tx " ++ msg
 				Catch.throwM e
-			Just (newtime,repair) -> do
+			Just (newtime,GenTxRepair repair) -> do
 				starttime <- readTxTime
 				let withRepair = if doRepair then Just repair else Nothing
 				let msg = "try: SomeException retrying invalid tx previously known as " ++ show starttime
@@ -947,7 +958,7 @@ startNestedTx m = inL (liftIO emptyTxLog) >>= \txlog -> Reader.local (\(starttim
 
 -- validates a nested tx and its enclosing txs up the tx tree
 -- the repairing action unmemoizes possible conflicting buffered memo entries and repairs variables that were conflicting
-validateTxs :: (Typeable m,Typeable r,MonadIO m) => UTCTime -> TxLogs r m -> m (Maybe (TxRepair r m))
+validateTxs :: (Typeable m,Typeable r,TxLayer Outside r m) => UTCTime -> TxLogs r m -> m (Maybe (TxRepair r m))
 #ifndef CSHF
 validateTxs starttime txlogs = do
 	-- gets the transactions that committed after the current transaction's start time
@@ -963,7 +974,7 @@ validateTxs starttime txlogs = do
 validateTxs starttime txlogs = return Nothing
 #endif
 
-validateTxs' :: (Typeable m,Typeable r,MonadIO m) => UTCTime -> TxLogs r m -> [(UTCTime,(TxUnmemo r m,TxWrite))] -> m (Maybe (TxRepair' r m))
+validateTxs' :: (Typeable m,Typeable r,TxLayer Outside r m) => UTCTime -> TxLogs r m -> [(UTCTime,(TxUnmemo r m,TxWrite))] -> m (Maybe (TxRepair' r m))
 validateTxs' starttime txlogs finished = do
 	let (txtimes,txunmemos,txwrites) = compactFinished finished
 	debugTx' $ "[" ++ show starttime ++ "] validating against " ++ show txtimes {- ++ ""  ++ show txwrites-}
@@ -1004,7 +1015,7 @@ commitTopTx doWrites doEvals starttime txlog = do
 	let invalidate thread repair m = do
 		debugTx' $ "throwing InvalidTx to " ++ show thread
 		liftIO $ throwTo thread $
-			InvalidTx (now,readTxLog >>= inL . flattenTxLogs >>= \txlog -> repair txlog >> inL (liftIO $ txunmemo txlog))
+			InvalidTx (now,GenTxRepair $ readTxLog >>= flattenTxLogs >>= \txlog -> inL (repair txlog) >> inL (liftIO $ txunmemo txlog))
 		m
 	Map.foldrWithKey invalidate (return ()) notifies
 	debugTx' $ "thrown all"
@@ -1026,7 +1037,7 @@ commitNestedTx doWrites txlog_child txlogs_parent@(SCons txlog_parent _) = do
 
 -- returns a bool stating whether the transaction was committed or needs to be incrementally repaired
 -- no exceptions should be raised inside this block
-validateAndCommitTopTx :: TxLayer Outside r m => String -> Bool -> Outside TxAdapton r m (Maybe (InvalidTxRepair r m))
+validateAndCommitTopTx :: TxLayer l r m => String -> Bool -> l TxAdapton r m (Maybe (InvalidTxRepair r m))
 validateAndCommitTopTx msg doWrites = atomicTx ("validateAndCommitTopTx "++msg) $ \doEvals -> do
 	txenv@(timeref :!: callstack :!: txlogs@(SCons txlog SNil)) <- Reader.ask
 	starttime <- inL $ readRef timeref
@@ -1036,7 +1047,7 @@ validateAndCommitTopTx msg doWrites = atomicTx ("validateAndCommitTopTx "++msg) 
 			inL $ commitTopTx doWrites doEvals starttime txlog
 			return Nothing
 		Just (newtime,conflicts) -> 
-			return $ Just (newtime,inL (flattenTxLogs txlogs) >>= conflicts)
+			return $ Just (newtime,GenTxRepair $ flattenTxLogs txlogs >>= inL . conflicts)
 
 validateAndCommitNestedTx :: (Typeable r,Typeable m,TxLayer Outside r m) => String -> Maybe SomeException -> Outside TxAdapton r m ()
 validateAndCommitNestedTx msg mbException = do
@@ -1052,7 +1063,7 @@ validateAndCommitNestedTx msg mbException = do
 				Nothing -> doBlock $ inL $ commitNestedTx True txlog1 txlogs1 -- performs @Write@s
 				Just (newtime,conflicts) -> 
 					-- re-start from the top
-					Catch.throwM $ InvalidTx (newtime,inL (flattenTxLogs txlogs) >>= conflicts)
+					Catch.throwM $ InvalidTx (newtime,GenTxRepair $ flattenTxLogs txlogs >>= inL . conflicts)
 
 validateCatchTx :: (Typeable r,Typeable m,TxLayer Outside r m) => String -> Outside TxAdapton r m ()
 validateCatchTx msg = do
@@ -1063,12 +1074,12 @@ validateCatchTx msg = do
 		Nothing -> do
 			-- in case the computation raises an exception, discard all its visible (write) effects
 			-- unbuffer all writes at the innermost log
-			doBlock $ inL $ liftTxLogsWrites txlogs >> unbufferTopTxLog txlogs True
+			doBlock $ liftTxLogsWrites txlogs >> unbufferTopTxLog txlogs True
 		Just (newtime,conflicts) -> 
-			Catch.throwM $ InvalidTx (newtime,inL (flattenTxLogs txlogs) >>= conflicts)
+			Catch.throwM $ InvalidTx (newtime,GenTxRepair $ flattenTxLogs txlogs >>= inL . conflicts)
 
 -- validates a transaction and places it into the waiting queue for retrying
-validateAndRetryTopTx :: (Typeable r,Typeable m,TxLayer Outside r m) => String -> Outside TxAdapton r m (Either Lock (InvalidTxRepair r m))
+validateAndRetryTopTx :: (Typeable r,Typeable m,TxLayer l r m) => String -> l TxAdapton r m (Either Lock (InvalidTxRepair r m))
 validateAndRetryTopTx msg = atomicTx ("validateAndRetryTopTx "++msg) $ \doEvals -> do
 	txenv@(timeref :!: callstack :!: txlogs@(SCons txlog SNil)) <- Reader.ask
 	starttime <- inL $ readRef timeref
@@ -1081,7 +1092,7 @@ validateAndRetryTopTx msg = atomicTx ("validateAndRetryTopTx "++msg) $ \doEvals 
 			inL $ retryTxLog lck txlog -- wait on changes to retry (only registers waits, does not actually wait)
 			return $ Left lck
 		Just (newtime,conflicts) -> 
-			return $ Right (newtime,inL (flattenTxLogs txlogs) >>= conflicts)
+			return $ Right (newtime,GenTxRepair $ flattenTxLogs txlogs >>= inL . conflicts)
 
 -- validates a nested transaction and merges its log with its parent
 -- note that retrying discards the tx's writes
@@ -1094,7 +1105,7 @@ validateAndRetryNestedTx msg = do
 		Nothing -> doBlock $ inL $ commitNestedTx False txlog1 txlogs1 -- does not perform @Write@s on @retry@
 		Just (newtime,conflicts) ->
 			-- discards writes and applies the conflicting changes to locally repair the current tx
-			Catch.throwM $ InvalidTx (newtime,inL (flattenTxLogs txlogs) >>= conflicts)
+			Catch.throwM $ InvalidTx (newtime,GenTxRepair $ flattenTxLogs txlogs >>= inL . conflicts)
 
 -- like STM, our txs are:
 -- same as transaction repair: within transactions, we use no locks; we use locks for commit
@@ -1102,7 +1113,7 @@ validateAndRetryNestedTx msg = do
 -- 2) read-parallel: reads done in parallel
 -- 3) eval-semi-parallel: evals done in parallel, with the updates of the latest eval being discarded; both evals succeed, but their commits are not parallel though (one commits first and the other discards its evaluated data, and commits only dependents)
 -- runs transaction-specific code atomically in respect to a global state
-atomicTx :: (TxLayer Outside r m) => String -> (Bool -> Outside TxAdapton r m a) -> Outside TxAdapton r m a
+atomicTx :: (TxLayer l r m) => String -> (Bool -> l TxAdapton r m a) -> l TxAdapton r m a
 atomicTx msg m = do
 	txlogs <- readTxLog
 	lcks <- inL $ liftIO $ txLocks txlogs
@@ -1196,8 +1207,7 @@ withLocksTx' isFst reads evals writes m = do
 	case mb of
 		Just v -> return v
 		Nothing -> do
---			inL $ liftIO $ yield
-			inL $ liftIO $ threadDelay 1000
+			inL $ liftIO $ yield >> threadDelay 1000
 			withLocksTx' False reads evals writes m
 #endif
 
@@ -1224,11 +1234,12 @@ instance (MonadCatch m,MonadMask m,Typeable m,Typeable r,MonadRef r m,WeakRef r,
 #endif
 	{-# INLINE runIncremental #-}
 
+initializeTx :: TxLayer l r m => l TxAdapton r m a -> m a
 initializeTx m = do
 		starttime <- liftIO startTx >>= newRef
 		stack <- liftIO $ newIORef SNil
 		tbl <- liftIO emptyTxLog
-		Reader.runReaderT (runTxOuter m) (starttime :!: stack :!: SCons tbl SNil)
+		Reader.runReaderT (runTxOuter $ outside m) (starttime :!: stack :!: SCons tbl SNil)
 
 instance (Typeable m,Typeable r,Monad m) => InLayer Outside TxAdapton r m where
 	inL m = TxOuter $ lift m
@@ -1240,14 +1251,14 @@ instance (Typeable r,Typeable m,Monad m) => InLayer Inside TxAdapton r m where
 -- Just = some conflicting changes happened simultaneously to the current tx
 -- if the current tx uses a variable that has been written to before, there is a conflict
 -- note that we also consider write-write conflicts, since we don't log written but not read variables differently from read-then-written ones
-checkTxs :: (Typeable m,Typeable r,MonadIO m) => TxLogs r m -> (TxUnmemo r m,TxWrite) -> m (Maybe (TxRepair' r m))
+checkTxs :: (Typeable m,Typeable r,TxLayer Outside r m) => TxLogs r m -> (TxUnmemo r m,TxWrite) -> m (Maybe (TxRepair' r m))
 checkTxs txlogs (unmemo,writtenIDs) = do
 	ok <- Map.foldrWithKey (\uid st m2 -> checkTxWrite txlogs uid st >>= \mb1 -> m2 >>= \mb2 -> return $ joinTxRepairMb' mb1 mb2) (return Nothing) writtenIDs
 	case ok of
 		Nothing -> return Nothing
-		Just repair -> return $ Just $ \txlog -> repair txlog >> inL (liftIO $ unmemo txlog)
+		Just repair -> return $ Just $ \txlog -> repair txlog >> liftIO (unmemo txlog)
   where
-	checkTxWrite :: (Typeable m,Typeable r,MonadIO m) => TxLogs r m -> Unique -> Bool -> m (Maybe (TxRepair' r m))
+	checkTxWrite :: (Typeable m,Typeable r,TxLayer Outside r m) => TxLogs r m -> Unique -> Bool -> m (Maybe (TxRepair' r m))
 	checkTxWrite txlogs uid True = do -- concurrent write
 		mb <- liftIO $ findTxLogEntry txlogs uid
 		case mb of
@@ -1256,7 +1267,7 @@ checkTxs txlogs (unmemo,writtenIDs) = do
 				-- Write-XXX are always conflicts
 				-- if there was a previous @Eval@ or @Write@ on a buffered variable we discard buffered content but keep buffered dependents
 				debugTx2' $ "write conflict " ++ show uid
-				return $ Just $ \txlog -> inL $ unbufferTxVar False (SCons txlog SNil) uid -- a conflict, unbuffer only later when tx is retried with dirtying
+				return $ Just $ \txlog -> unbufferTxVar False (SCons txlog SNil) uid -- a conflict, unbuffer only later when tx is retried with dirtying
 	checkTxWrite txlogs uid False = do -- concurrent dependent write
 		mb <- liftIO $ findTxLogEntry txlogs uid
 		case mb of
@@ -1266,18 +1277,18 @@ checkTxs txlogs (unmemo,writtenIDs) = do
 					then do
 						-- if a dependent was added concurrently while this tx dirtied a variable
 						debugTx2' $ "write dependents conflict " ++ show uid
-						return $ Just $ \txlog -> inL $ unbufferTxVar False (SCons txlog SNil) uid -- a conflict, unbuffer only later when tx is retried with dirtying
+						return $ Just $ \txlog -> unbufferTxVar False (SCons txlog SNil) uid -- a conflict, unbuffer only later when tx is retried with dirtying
 					else return Nothing
 
 #ifdef CSHF
 -- True = write, False = dependent write
-checkVarTx :: (Typeable r,Typeable m,MonadIO m) => Bool -> Unique -> MVar (Map ThreadId Bool) -> m (ThreadRepair r m)
+checkVarTx :: (Typeable r,Typeable m,TxLayer Outside r m) => Bool -> Unique -> MVar (Map ThreadId Bool) -> m (ThreadRepair r m)
 checkVarTx True uid xs = liftIO $ readMVar xs >>= Map.foldrWithKey checkThread (return Map.empty) where
-	checkThread thread _ m = liftM (Map.insert thread (\txlog -> inL $ unbufferTxVar False (SCons txlog SNil) uid)) m
+	checkThread thread _ m = liftM (Map.insert thread (\txlog -> unbufferTxVar False (SCons txlog SNil) uid)) m
 checkVarTx False uid xs = liftIO $ readMVar xs >>= Map.foldrWithKey checkThread (return Map.empty) where
 	checkThread thread isWriteOrNewTrue m = do
 		if isWriteOrNewTrue
-			then liftM (Map.insert thread (\txlog -> inL $ unbufferTxVar False (SCons txlog SNil) uid)) m
+			then liftM (Map.insert thread (\txlog -> unbufferTxVar False (SCons txlog SNil) uid)) m
 			else m
 #endif		
 
