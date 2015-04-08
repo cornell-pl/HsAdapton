@@ -142,7 +142,7 @@ updown2Inc mb mxs = do
 
 --main = testFilterMemoMU
 
-testFilterIncMU = runOuter $ testFilterIncMU' >> mergePDFsInto "filter.pdf"
+testFilterIncMU = runOuter $ testFilterIncMU' >> mergeGraphsInto "filter.pdf"
 testFilterIncMU' :: Outer IORef IO ()
 testFilterIncMU' = do
 	s :: ListM Inside IORef IO Int <- toListModInside [1,2,3,4]
@@ -157,7 +157,7 @@ testFilterIncMU' = do
 	drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
 	return ()
 	
-testFilterMemoMU = runOuter $ testFilterMemoMU' >> mergePDFsInto "filter.pdf"
+testFilterMemoMU = runOuter $ testFilterMemoMU' >> mergeGraphsInto "filter.pdf"
 testFilterMemoMU' :: Outer IORef IO ()
 testFilterMemoMU' = do
 	s :: ListM Inside IORef IO Int <- toListModInside [1,2,3,4]
@@ -174,7 +174,7 @@ testFilterMemoMU' = do
 	drawPDF "" proxyAdapton proxyIORef proxyIO (Merge s t)
 	return ()
 
-testFilterMemoLU = runOuter $ testFilterMemoLU' >> mergePDFsInto "filter.pdf"
+testFilterMemoLU = runOuter $ testFilterMemoLU' >> mergeGraphsInto "filter.pdf"
 testFilterMemoLU' :: Outer IORef IO ()
 testFilterMemoLU' = do
 	s :: ListL Inside IORef IO Int <- toListModInside [1,2,3,4]
@@ -520,7 +520,7 @@ applyTreeChange (TreeChg f) xs = f xs
 --	let p = even
 --	gen <- genListPairs size runs
 ----	res1 <- runOuter $ testL (filterInc p) gen (runs * 2)
---	res2 <- runOuter $ testM (filterInc p) gen (runs * 2) >> mergePDFsInto "filterInc.pdf"
+--	res2 <- runOuter $ testM (filterInc p) gen (runs * 2) >> mergeGraphsInto "filterInc.pdf"
 ----	res3 <- runLazyNonIncOuter $ testNonIncL (filterInc p) gen (runs * 2)
 ----	res4 <- runLazyNonIncOuter $ testNonIncM (filterInc p) gen (runs * 2)
 ----	print res1
@@ -535,7 +535,7 @@ applyTreeChange (TreeChg f) xs = f xs
 --	gen <- genListPairs size runs
 ----	gen <- return ([5,2,6,1,3],ListChg (deleteListModAt 2):ListChg (insertListModAt 3 (-1)):[])
 ----	res1 <- runOuter $ testL (filterInc p) gen (runs * 2)
---	res2 <- runOuter $ testU (fold1Inc f) gen (runs * 2) -- >> mergePDFsInto "filterInc.pdf"
+--	res2 <- runOuter $ testU (fold1Inc f) gen (runs * 2) -- >> mergeGraphsInto "filterInc.pdf"
 ----	res3 <- runLazyNonIncOuter $ testNonIncL (filterInc2 p) gen (runs * 2)
 --	res4 <- runLazyNonIncOuter $ testNonIncU (fold1Inc f) gen (runs * 2)
 ----	print res1
@@ -550,7 +550,7 @@ main_A = do
 	let inc_func = mapInc return >=> quicksortInc (\x y -> return $ compare x y)
 --	let inc_func = filterInc (return . even)
 --	res1 <- runOuter $ testL inc_func gen (runs * 2)
-	res2 <- runOuter $ testM inc_func gen (runs * 2) -- >> mergePDFsInto "filterInc.pdf"
+	res2 <- runOuter $ testM inc_func gen (runs * 2) -- >> mergeGraphsInto "filterInc.pdf"
 --	res3 <- runLazyNonIncOuter $ testNonIncL inc_func gen (runs * 2)
 --	res4 <- runLazyNonIncOuter $ testNonIncM inc_func gen (runs * 2)
 --	print res1
@@ -598,10 +598,10 @@ main_A = do
 --	putStrLn $ show tree
 ----	gen <- return ([5,2,6,1,3],ListChg (deleteListModAt 2):ListChg (insertListModAt 3 (-1)):[])
 ----	res1 <- runOuter $ testL (filterInc p) gen (runs * 2)
-----	res2 <- runOuter $ testTreeM (foldTreeInc 0 f) gen runs >> mergePDFsInto "filterInc.pdf"
+----	res2 <- runOuter $ testTreeM (foldTreeInc 0 f) gen runs >> mergeGraphsInto "filterInc.pdf"
 ----	res3 <- runLazyNonIncOuter $ testNonIncL (filterInc2 p) gen (runs * 2)
 ----	res4 <- runLazyNonIncOuter $ testNonIncTreeM (foldTreeInc 0 f) gen runs
---	res5 <- runOuter $ testTreeM (listifyTree) gen runs >> mergePDFsInto "filterInc.pdf"
+--	res5 <- runOuter $ testTreeM (listifyTree) gen runs >> mergeGraphsInto "filterInc.pdf"
 ----	print res1
 ----	print res2
 ----	print res3
@@ -769,7 +769,7 @@ customer_thread i warehouse leastItem customer = do
 		customer_thread (pred i) warehouse leastItem customer
 
 main = main_Customers
-main_Customers = {-flip finally (mergePDFsInto' "ex.pdf") $ -} do
+main_Customers = {-flip finally (mergeGraphsInto' "ex.pdf") $ -} do
 	let numItems = 10^4
 	
 	hSetBuffering stdout NoBuffering

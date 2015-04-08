@@ -8,9 +8,12 @@ txi:
 tx:
 	ghc --make -O3 -threaded txadapton.hs -fforce-recomp -isrc
 	./txadapton --output txadapton.html
+txcshf:
+	ghc --make -O3 -threaded txadapton.hs -fforce-recomp -isrc -DCSHF
+	./txadapton --output txadapton.html
 txprof:
-	ghc --make -O3 txadapton.hs -fforce-recomp -rtsopts -isrc -threaded
-	ghc --make -O3 txadapton.hs -osuf p_o -prof -auto-all -caf-all -fforce-recomp -rtsopts -isrc -threaded
+	ghc --make txadapton.hs -fforce-recomp -rtsopts -isrc -threaded
+	ghc --make txadapton.hs -osuf p_o -prof -auto-all -caf-all -fforce-recomp -rtsopts -isrc -threaded
 	./txadapton +RTS -pa -s
 txfast:
 	ghc --make -O0 -threaded txadapton.hs -fforce-recomp -isrc

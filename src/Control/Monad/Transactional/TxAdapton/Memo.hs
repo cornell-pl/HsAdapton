@@ -36,6 +36,7 @@ import Data.IORef
 import Data.Strict.Tuple
 import Data.Global.Dynamic
 import System.Mem.Weak as Weak
+import Control.Monad.Catch as Catch
 
 import qualified Data.HashTable.IO as HashIO
 import qualified Data.HashTable.ST.Basic as HashST
@@ -88,7 +89,7 @@ lookupMemoTx starttime tbls k = readTxLog >>= inL . liftIO . lookupMemoTx' tbls 
 			Nothing -> lookupMemoTx' tbls k txlogs
 
 insertMemoTx :: (Eq k,Hashable k,TxLayer Inside r m) => TxMemoTable r m k b -> MkWeak -> k -> TxU Inside TxAdapton r m b -> Inside TxAdapton r m ()
-insertMemoTx tbls@(ori_tbl :!: buff_tbls) mkWeak k thunk = do
+insertMemoTx tbls@(ori_tbl :!: buff_tbls) mkWeak k thunk = doBlock $ do
 	txlogs <- readTxLog
 	let txlog = Strict.head txlogs
 	

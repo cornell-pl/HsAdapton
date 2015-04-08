@@ -16,6 +16,10 @@ instance Foldable SList where
 	            go SNil     = z
 	            go (SCons y ys) = y `k` go ys
 
+last :: SList a -> a
+last (SCons x SNil) = x
+last (SCons x xs) = Data.Strict.List.last xs
+
 head :: SList a -> a
 head (SCons x _) = x
 

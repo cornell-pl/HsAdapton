@@ -308,49 +308,53 @@ buyCheapestItem msg warehouse leastItem customer = do
 data NoBalance = NoBalance String deriving (Show,Typeable)
 instance Exception NoBalance
 
-customer_thread :: Warehouse -> ListTxAdaptonU Item -> Customer -> IO ()
-customer_thread warehouse leastItem customer = do
+customer_thread :: Warehouse -> ListTxAdaptonU Item -> (Customer,[Bool]) -> IO ()
+customer_thread warehouse leastItem (customer,choices) = do
 	let noBalance (NoBalance msg) = do
 --		drawDot ("customer exception " ++ customerName customer ++ " " ++ msg) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
-		throw (NoBalance msg)
-	let action i = unless (i == 0) $ do
-		choice <- generate $ choose (False,True)
-		if choice
-			then do -- list the cheapest item
-				(time,(tx,item)) <- timeItT $ atomicallyTx False ("customer " ++ customerName customer) $ flip catch noBalance $ do
-					tx <- readTxTime
---					drawDot ("customer listing" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
-					item <- cheapestItem ("customer " ++ customerName customer) warehouse leastItem
-					str <- showInc item
---					let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str ++ " " ++ show tx
---					drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
-					return (tx,str)
-				writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
-			else do -- buy the cheapest item
-				(time,(tx,item)) <- timeItT $ atomicallyTx False ("customer "++ customerName customer) $ flip catch noBalance $ do
-					tx <- readTxTime
---					drawDot ("customer buying" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
-					item <- buyCheapestItem ("customer " ++ customerName customer) warehouse leastItem customer
-					str <- showInc item
---					let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str ++ " " ++ show tx
---					drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
-					return (tx,str)
-				writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
-		threadDelay 300
-		action (pred i)
+		throw (NoBalance msg)		
+	let action cs = case cs of
+		[] -> return ()
+		choice:choices -> do
+			if choice
+				then do -- list the cheapest item
+					(time,(tx,item)) <- timeItT $ atomicallyTx True ("customer " ++ customerName customer) $ flip catch noBalance $ do
+						tx <- readTxTime
+--						drawDot ("customer listing" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+						item <- cheapestItem ("customer " ++ customerName customer) warehouse leastItem
+						str <- showInc item
+--						let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str ++ " " ++ show tx
+--						drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+						return (tx,str)
+					writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
+				else do -- buy the cheapest item
+					(time,(tx,item)) <- timeItT $ atomicallyTx True ("customer "++ customerName customer) $ flip catch noBalance $ do
+						tx <- readTxTime
+--						drawDot ("customer buying" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+						item <- buyCheapestItem ("customer " ++ customerName customer) warehouse leastItem customer
+						str <- showInc item
+--						let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str ++ " " ++ show tx
+--						drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+						return (tx,str)
+					writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time ++ " " ++ show tx
+			action choices
 	let noBalance2 (NoBalance msg) = debugTx' msg
-	action 40 `Catch.catch` noBalance2
+	let anyException (e::SomeException) = debugTx' $ show e
+	action choices `Catch.catches` [Catch.Handler noBalance2,Catch.Handler anyException]
 
 main = main_Customers
 main_Customers = {-flip Exception.finally (mergeGraphsInto' "tx.pdf") $-} do
-	let numItems = 10^3
-	let numCustomers = 10
+	let numItems = 10^4
+	let numCustomers = 1
+	let numSteps = 40
 	
 	hSetBuffering stdout NoBuffering
 	
-	(warehouse,leastItem,customers) <- atomicallyTx False "" $ genDB numItems numCustomers
+	(warehouse,leastItem,customers) <- atomicallyTx True "" $ genDB numItems numCustomers
 	
-	concurrently debugger $ mapConcurrently (customer_thread warehouse leastItem) customers
+	choices <- replicateM numCustomers $ replicateM numSteps $ generate $ choose (True,False)
+	
+	concurrently debugger $ mapConcurrently (customer_thread warehouse leastItem) $ zip customers choices
 	return ()
 	
 genDB :: Int -> Int -> STxAdaptonM (Warehouse,ListTxAdaptonU Item,[Customer])

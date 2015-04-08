@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies, TupleSections, StandaloneDeriving, BangPatterns, EmptyDataDecls, FlexibleContexts, TypeOperators, ConstraintKinds, MagicHash, ViewPatterns, KindSignatures, GADTs, ScopedTypeVariables, DeriveDataTypeable, TemplateHaskell #-}
+{-# LANGUAGE CPP, TypeFamilies, TupleSections, StandaloneDeriving, BangPatterns, EmptyDataDecls, FlexibleContexts, TypeOperators, ConstraintKinds, MagicHash, ViewPatterns, KindSignatures, GADTs, ScopedTypeVariables, DeriveDataTypeable, TemplateHaskell #-}
 
 module Control.Monad.Transactional.TxAdapton.Types where
 
@@ -47,6 +47,7 @@ import qualified Control.Monad.Reader as Reader
 import Control.Monad.Catch as Catch
 import Control.Concurrent.Lock as Lock
 import Control.Concurrent.MVar
+import qualified System.Mem.Concurrent.WeakMap as CWeakMap
 import Control.Monad
 import System.Mem.WeakKey
 import System.Mem.MemoTable
@@ -76,8 +77,12 @@ type Wakes = Map Unique Lock
 type TxCreator r m = WTxNodeMeta r m
 type WTxNodeMeta r m = Weak (TxNodeMeta r m)
 
-
+#ifndef CSHF
 type TLock = STM.TMVar ()
+#endif
+#ifdef CSHF
+type TLock = MVar ()
+#endif
 
 newtype TxStatus = TxStatus (TxStatusVar,Bool) deriving (Eq,Show,Typeable)
 txStatusVar (TxStatus (x,y)) = x
@@ -152,6 +157,9 @@ newtype TxNodeMeta (r :: * -> *) (m :: * -> *) = TxNodeMeta (
 	,   Maybe (TxCreator r m) -- the parent thunk under which the reference was created (modifiables only)
 	,   WaitQueue -- a sequence of wake-up actions for txs that are waiting on further updates to this node (modifiables only)
 	,   TLock -- a lock for writes to this variable
+#ifdef CSHF 
+	,	MVar (Map ThreadId Bool) -- a set of threads that depend on this variable (True=isWriteOrNewTrue, False = otherwise)
+#endif
 	)
 
 -- (a new starttime,repairing actions over an invalid environment)
@@ -218,6 +226,9 @@ type TxStackElement (r :: * -> *) (m :: * -> *) = (TxNodeMeta r m :!: SMaybe (Tx
 -- this list is local to the tx (so no concurrent handling is needed) and used to know which tables to merge with the persistent memo tables at commit time
 newtype TxLog r m = TxLog (Unique :!: WeakTable Unique (DynTxVar r m) :!: IORef [DynTxMemoTable r m]) deriving Typeable
 type TxLogs r m = SList (TxLog r m)
+
+instance WeakKey (TxLog r m) where
+	mkWeakKey (TxLog (_ :!: tbl :!: memos)) = mkWeakKey memos
 
 -- a tx environment contains (a tx start time,a callstack,a list of nested logs -- to support nested transactions)
 type TxEnv r m = (r UTCTime :!: TxCallStack r m :!: TxLogs r m)
@@ -295,7 +306,16 @@ emptyTxLog = do
 	buff <- WeakTable.new
 	return $ TxLog (uid :!: buff :!: memos)
 
+#ifndef CSHF
 newTLockIO = STM.newTMVarIO ()
+tryWaitTLock :: TLock -> STM.STM Bool
+tryWaitTLock mv = do
+	mb <- STM.tryTakeTMVar mv
+	case mb of
+		Nothing -> return False
+		Just v -> STM.putTMVar mv v >> return True
+tryWaitTLocks :: Foldable t => t TLock -> STM.STM Bool
+tryWaitTLocks = Foldable.foldlM (\b lck -> liftM (b&&) $ tryWaitTLock lck) True
 waitOrRetryTLock :: TLock -> STM.STM ()
 waitOrRetryTLock mv = STM.tryTakeTMVar mv >>= maybe STM.retry (STM.putTMVar mv)
 acquireOrRetryTLock :: TLock -> STM.STM ()
@@ -305,6 +325,46 @@ tryAcquireTLock = liftM isJust . STM.tryTakeTMVar
 releaseTLock mv = do
 	b <- STM.tryPutTMVar mv ()
 	when (not b) $ error "Control.Concurrent.Lock.release: Can't release unlocked Lock!"
+tryAcquireTLocks :: Foldable t => t TLock -> STM.STM Bool
+tryAcquireTLocks lcks = do
+	(b,acquired) <- Foldable.foldlM (\(b,lcks) lck -> liftM (\x -> if x then (b,lck:lcks) else (False,lcks)) $ tryAcquireTLock lck) (True,[]) lcks
+	unless b $ Foldable.mapM_ releaseTLock acquired
+	return b
+#endif
+#ifdef CSHF
+newTLockIO = newMVar ()
+tryWaitTLock :: MonadIO m => TLock -> m Bool
+tryWaitTLock mv = liftIO $ do
+	mb <- tryTakeMVar mv
+	case mb of
+		Nothing -> return False
+		Just v -> putMVar mv v >> return True
+tryWaitTLocks :: (MonadIO m,Foldable t) => t TLock -> m Bool
+tryWaitTLocks = Foldable.foldlM (\b lck -> liftM (b&&) $ tryWaitTLock lck) True
+tryAcquireTLock :: MonadIO m => TLock -> m Bool
+tryAcquireTLock = liftIO . liftM isJust . tryTakeMVar
+releaseTLock :: MonadIO m => TLock -> m ()
+releaseTLock mv = liftIO $ do
+	b <- tryPutMVar mv ()
+	when (not b) $ error "Control.Concurrent.Lock.release: Can't release unlocked Lock!"
+tryAcquireTLocks :: MonadIO m => [(Unique,TLock)] -> m Bool
+tryAcquireTLocks xs = do
+	(b,acquired) <- tryAcquireTLocks' xs
+	unless b $ releaseTLocks acquired
+	return b
+tryAcquireTLocks' :: MonadIO m => [(Unique,TLock)] -> m (Bool,[(Unique,TLock)])
+tryAcquireTLocks' [] = return (True,[])
+tryAcquireTLocks' ((uid,lck):xs) = do
+	b <- tryAcquireTLock lck
+	if b
+		then do
+--			debugTx' $ "acquired " ++ show uid
+			(b,lcks) <- tryAcquireTLocks' xs
+			return (b,(uid,lck):lcks)
+		else return (False,[])
+releaseTLocks :: MonadIO m => [(Unique,TLock)] -> m ()
+releaseTLocks = Prelude.mapM_ (\(uid,lck) -> releaseTLock lck {->> debugTx' ("released " ++ show uid)-})
+#endif
 
 -- eval locks: to force concurrent writes to wait until the eval is written to the variable
 writeLock :: TxStatus -> Int
@@ -386,6 +446,7 @@ metaTxU (TxU (dta,meta)) = meta
 instance Eq (TxU l inc r m a) where
 	t1 == t2 = idTxNM (metaTxU t1) == idTxNM (metaTxU t2)
 
+#ifndef CSHF
 idTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = uid
 dependentsTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = deps
 dirtyTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = dirty
@@ -394,6 +455,19 @@ bufferTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = buffer
 creatorTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = creator
 waitTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = wait
 lockTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck)) = lck
+#endif
+
+#ifdef CSHF
+idTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck,n)) = uid
+dependentsTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck,n)) = deps
+dirtyTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck,n)) = dirty
+forgetTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck,n)) = forget
+bufferTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck,n)) = buffer
+creatorTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck,n)) = creator
+waitTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck,n)) = wait
+lockTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck,n)) = lck
+notifiesTxNM (TxNodeMeta (uid,deps,dirty,forget,buffer,creator,wait,lck,n)) = n
+#endif
 
 -- | registers a new wait on modifications of a node when a lock is provided
 enqueueWait :: MonadIO m => Lock -> TxNodeMeta r m -> m ()
@@ -467,180 +541,222 @@ bufferTxDependents :: MonadIO m => Maybe (TxDependents r m) -> Bool -> m (Maybe 
 bufferTxDependents Nothing True = liftM Just $ liftIO $ WeakMap.new'
 bufferTxDependents deps _ = return deps
 
+#ifdef CSHF
+addTxNotify :: MonadIO m => Maybe TxStatus -> TxStatus -> TxLogs r m -> TxNodeMeta r m -> m ()
+addTxNotify old new txlogs meta = liftIO $ do
+	case diffTxStatus old new of
+		Nothing -> return ()
+		Just isWriteOrNewTrue -> do
+			tid <- myThreadId
+			modifyMVarMasked_ (notifiesTxNM meta) (return . Map.insert tid isWriteOrNewTrue)
+  where
+	diffTxStatus Nothing st2 = Just (isWriteOrNewTrue st2)
+	diffTxStatus (Just st1) st2 = if (isWriteOrNewTrue st1 && isWriteOrNewTrue st2) then Nothing else Just (isWriteOrNewTrue st2)
+#endif
+
 -- stores a modifiable in a transactional buffer with a minimal status and returns a buffered copy
 -- Read = an entry is enough
 -- Eval = a transaction-consistent entry is enough
 -- Write = creates a new or inconsistent entry
 bufferTxM :: (IncK TxAdapton a,TxLayer l r m,MonadRef r m,MonadIO m) => TxM l TxAdapton r m a -> TxStatus -> TxLogs r m -> m (DynTxVar r m)
-bufferTxM m st@(TxStatus (Read,i)) txlogs = do
+bufferTxM m st@(TxStatus (Read,i)) txlogs = doBlock $ do
 	let !idm = idTxNM $ metaTxM m
 	mb <- liftIO $ findTxLogEntry txlogs idm
-	
-	let new_entry mbtxdeps i st = do
-		buff_deps <- bufferTxDependents mbtxdeps i
-		let !tvar = DynTxM Nothing buff_deps m st
-		liftIO $ addTxLogEntry txlogs idm tvar
-		return tvar
-	
+
 	case mb of
 		Just (DynTxM Nothing Nothing u status@(TxStatus (New _,j))) -> do
 			let !tvar = DynTxM Nothing Nothing m $ status `mappend` st
-			unless (i == j) $
-				liftIO $ addTxLogEntry txlogs idm tvar
+			unless (i == j) $ liftIO $ addTxLogEntry txlogs idm tvar
+#ifdef CSHF
+			addTxNotify (Just status) st txlogs (metaTxM m)
+#endif
 			return tvar
-		Just (DynTxM buff_dta buff_deps m status@(isReadOrEvalOrWrite -> Just _)) -> do
+		Just (DynTxM buff_dta buff_deps m status@(isReadOrEvalOrWrite -> Just j)) -> do
 			buff_deps' <- bufferTxDependents buff_deps i
 			let !tvar = DynTxM buff_dta buff_deps' m $ status `mappend` st
-			unless (isDependentsWrite status == i) $
-				liftIO $ addTxLogEntry txlogs idm tvar
+			unless (isDependentsWrite status == i) $ liftIO $ addTxLogEntry txlogs idm tvar
+#ifdef CSHF
+			addTxNotify (Just status) st txlogs (metaTxM m)
+#endif
 			return tvar
 		Nothing -> do
 			buff_deps <- bufferTxDependents Nothing i
 			let !tvar = DynTxM Nothing buff_deps m st
 			liftIO $ addTxLogEntry txlogs idm tvar
+#ifdef CSHF
+			addTxNotify Nothing st txlogs (metaTxM m)
+#endif
 			return tvar
-bufferTxM m st@(TxStatus (Eval,i)) txlogs = do
+bufferTxM m st@(TxStatus (Eval,i)) txlogs = doBlock $ do
 	let !idm = idTxNM $ metaTxM m
 	mb <- liftIO $ findTxLogEntry txlogs idm
 	
-	let new_entry mbtxdeps i status = do
+	let new_entry mbtxdeps i status (mb::Maybe TxStatus) = do
 		!buff_value <- (readRef $ dataTxM m)
 		mbtxdeps' <- bufferTxDependents mbtxdeps i
 		let !tvar = DynTxM (Just $ BuffTxM buff_value) mbtxdeps m status
 		liftIO $ addTxLogEntry txlogs idm tvar
+#ifdef CSHF
+		addTxNotify mb st txlogs (metaTxM m)
+#endif
 		return tvar
 
 	case mb of
 		Just (DynTxM Nothing Nothing m status@(TxStatus (New _,j))) -> do
 			let !tvar = DynTxM Nothing Nothing m $ status `mappend` st
-			unless (i == j) $
-				liftIO $ addTxLogEntry txlogs idm tvar
+			unless (i == j) $ liftIO $ addTxLogEntry txlogs idm tvar
+#ifdef CSHF
+			addTxNotify (Just status) st txlogs (metaTxM m)
+#endif
 			return tvar
-		Just (DynTxM Nothing mbtxdeps _ status@(TxStatus (Read,_))) -> new_entry mbtxdeps i (st `mappend` status)
-		Just (DynTxM buff_dta mbtxdeps m status@(isEvalOrWrite -> Just _)) -> do
+		Just (DynTxM Nothing mbtxdeps _ status@(TxStatus (Read,_))) -> new_entry mbtxdeps i (st `mappend` status) (Just status)
+		Just (DynTxM buff_dta mbtxdeps m status@(isEvalOrWrite -> Just j)) -> do
 			mbtxdeps' <- bufferTxDependents mbtxdeps i
 			let tvar = DynTxM buff_dta mbtxdeps' m $ st `mappend` status
 			unless (isDependentsWrite status == i) $
 				liftIO $ addTxLogEntry txlogs idm tvar
+#ifdef CSHF
+			addTxNotify (Just status) st txlogs (metaTxM m)
+#endif
 			return tvar
-		Nothing -> new_entry Nothing i st
+		Nothing -> new_entry Nothing i st Nothing
 bufferTxM m status txlogs = changeTxM m Nothing status txlogs
 
 -- changes a modifiable, or just buffers it
 changeTxM :: (IncK TxAdapton a,TxLayer l r m,MonadRef r m,MonadIO m) => TxM l TxAdapton r m a -> Maybe a -> TxStatus ->  TxLogs r m -> m (DynTxVar r m)
-changeTxM m mbv' st@(isEvalOrWrite -> Just i) txlogs = do
+changeTxM m mbv' st@(isEvalOrWrite -> Just i) txlogs = doBlock $ do
 	let !idm = idTxNM $ metaTxM m
 	mb <- liftIO $ findTxLogEntry txlogs idm
 	
-	let new_entry mbtxdeps i status = do
+	let new_entry mbtxdeps i status (mb::Maybe TxStatus) = do
 		mbtxdeps' <- bufferTxDependents mbtxdeps i
 		!old_value <- (readRef $ dataTxM m)
 		let !v' = maybe old_value id mbv'
 		let !tvar = DynTxM (Just (BuffTxM v')) mbtxdeps' m status
 		liftIO $ addTxLogEntry txlogs idm tvar
+#ifdef CSHF
+		addTxNotify mb st txlogs (metaTxM m)
+#endif
 		return tvar
 		
 	case mb of
-		Just (DynTxM Nothing mbtxdeps _ status@(TxStatus (Read,i))) -> new_entry mbtxdeps i $ status `mappend` st
-		Just (DynTxM (Just (BuffTxM buff_value)) buff_deps _ status@(isEvalOrWrite -> Just _)) -> do
+		Just (DynTxM Nothing mbtxdeps _ status@(TxStatus (Read,i))) -> new_entry mbtxdeps i (status `mappend` st) (Just status)
+		Just (DynTxM (Just (BuffTxM buff_value)) buff_deps _ status@(isEvalOrWrite -> Just j)) -> do
 			let !v' = maybe (coerce buff_value) id mbv'
 			mbtxdeps' <- bufferTxDependents buff_deps i
 			let !tvar = DynTxM (Just $ BuffTxM v') mbtxdeps' m $ status `mappend` st
-			unless (status == st) $
-				liftIO $ addTxLogEntry txlogs idm tvar
+			unless (status == st) $ liftIO $ addTxLogEntry txlogs idm tvar
+#ifdef CSHF
+			addTxNotify (Just status) st txlogs (metaTxM m)
+#endif
 			return tvar
-		Just tvar@(DynTxM Nothing Nothing m status@(TxStatus (New _,_))) -> case mbv' of
+		Just tvar@(DynTxM Nothing Nothing m status@(TxStatus (New _,j))) -> case mbv' of
 			Nothing -> return tvar
 			Just v' -> do
 				writeRef (dataTxM m) (coerce v')
 				let newstatus = status `mappend` st
 				let !tvar = DynTxM Nothing Nothing m newstatus
-				when (status == newstatus) $
-					liftIO $ addTxLogEntry txlogs idm tvar
+				when (status == newstatus) $ liftIO $ addTxLogEntry txlogs idm tvar
+#ifdef CSHF
+				addTxNotify (Just status) st txlogs (metaTxM m)
+#endif
 				return tvar
-		Nothing -> new_entry Nothing False $ TxStatus (Write,False)
+		Nothing -> new_entry Nothing False (TxStatus (Write,False)) Nothing
 changeTxM m _ status _ = error $ "changeTxM " ++ show status
 
 bufferTxU :: (IncK TxAdapton a,TxLayer l r m,MonadRef r m,MonadIO m) => TxU l TxAdapton r m a -> TxStatus -> TxLogs r m -> m (DynTxVar r m)
-bufferTxU u st@(TxStatus (Read,i)) txlogs = do 
+bufferTxU u st@(TxStatus (Read,i)) txlogs = doBlock $ do 
 	let !idu = idTxNM $ metaTxU u
 	mb <- liftIO $ findTxLogEntry txlogs idu
-	
-	let new_entry mbtxdeps i status = do
-		buff_deps <- bufferTxDependents mbtxdeps i
-		let !tvar = DynTxU Nothing buff_deps u status
-		liftIO $ addTxLogEntry txlogs idu tvar
-		return tvar
 	
 	case mb of
 		Just (DynTxU Nothing Nothing u status@(TxStatus (New _,j))) -> do
 			let !tvar = DynTxU Nothing Nothing u $ status `mappend` st
-			unless (i == j) $
-				liftIO $ addTxLogEntry txlogs idu tvar
+			unless (i == j) $ liftIO $ addTxLogEntry txlogs idu tvar
+#ifdef CSHF
+			addTxNotify (Just status) st txlogs (metaTxU u)
+#endif
 			return tvar
 		Just (DynTxU buff_dta buff_deps u status@(isReadOrEvalOrWrite -> Just _)) -> do
 			buff_deps' <- bufferTxDependents buff_deps i
 			let !tvar = DynTxU buff_dta buff_deps' u $ status `mappend` st
-			unless (isDependentsWrite status == i) $
-				liftIO $ addTxLogEntry txlogs idu tvar
+			unless (isDependentsWrite status == i) $ liftIO $ addTxLogEntry txlogs idu tvar
+#ifdef CSHF
+			addTxNotify (Just status) st txlogs (metaTxU u)
+#endif
 			return tvar
 		Nothing -> do
 			buff_deps <- bufferTxDependents Nothing i
 			let !tvar = DynTxU Nothing buff_deps u $ TxStatus (Read,i)
 			liftIO $ addTxLogEntry txlogs idu tvar
+#ifdef CSHF
+			addTxNotify Nothing st txlogs (metaTxU u)
+#endif
 			return tvar
-bufferTxU u st@(TxStatus (Eval,i)) txlogs = do
+bufferTxU u st@(TxStatus (Eval,i)) txlogs = doBlock $ do
 	let !idu = idTxNM $ metaTxU u
 	mb <- liftIO $ findTxLogEntry txlogs idu
 	
-	let new_entry mbtxdeps i status = do
+	let new_entry mbtxdeps i status (mb::Maybe TxStatus) = do
 		-- the copies point to the original dependencies reference
 		buff_deps <- bufferTxDependents mbtxdeps i
 		!buff_dta <- (readRef $ dataTxU u) >>= copyTxUData
 		let !tvar = DynTxU (Just $ BuffTxU buff_dta) buff_deps u status
 		liftIO $ addTxLogEntry txlogs idu tvar
+#ifdef CSHF
+		addTxNotify mb st txlogs (metaTxU u)
+#endif
 		return tvar
 	
 	case mb of
 		Just (DynTxU Nothing Nothing u status@(TxStatus (New _,j))) -> do
 			let !tvar = DynTxU Nothing Nothing u $ status `mappend` st
-			unless (i == j) $ 
-				liftIO $ addTxLogEntry txlogs idu tvar
+			unless (i == j) $ liftIO $ addTxLogEntry txlogs idu tvar
+#ifdef CSHF
+			addTxNotify (Just status) st txlogs (metaTxU u)
+#endif
 			return tvar
-		Just (DynTxU Nothing mbtxdeps _ status@(TxStatus (Read,_))) -> new_entry mbtxdeps i $ status `mappend` st
+		Just (DynTxU Nothing mbtxdeps _ status@(TxStatus (Read,_))) -> new_entry mbtxdeps i (status `mappend` st) (Just status)
 		Just (DynTxU buff_dta buff_deps u status@(isEvalOrWrite -> Just _)) -> do
 			buff_deps' <- bufferTxDependents buff_deps i
 			let !tvar = DynTxU buff_dta buff_deps' u $ status `mappend` st
-			unless (i == isDependentsWrite status) $
-				liftIO $ addTxLogEntry txlogs idu tvar
+			unless (i == isDependentsWrite status) $ liftIO $ addTxLogEntry txlogs idu tvar
+#ifdef CSHF
+			addTxNotify (Just status) st txlogs (metaTxU u)
+#endif
 			return tvar
-		Nothing -> new_entry Nothing i st
+		Nothing -> new_entry Nothing i st Nothing
 bufferTxU u st txlogs = {-debugM "bufferTxU4" $ -}changeTxU u Nothing st txlogs
 
 -- changes a thunk, or just buffers it
 changeTxU :: (IncK TxAdapton a,TxLayer l r m,MonadRef r m,MonadIO m) => TxU l TxAdapton r m a -> Maybe (BuffTxUData l TxAdapton r m a -> m (BuffTxUData l TxAdapton r m a)) -> TxStatus -> TxLogs r m -> m (DynTxVar r m)
-changeTxU u mbChgDta status@(isEvalOrWrite -> Just i) txlogs = do
+changeTxU u mbChgDta status@(isEvalOrWrite -> Just i) txlogs = doBlock $ do
 	let !idu = idTxNM $ metaTxU u
 	mb <- liftIO $ findTxLogEntry txlogs idu
 	
-	let new_entry mbtxdeps i status = do
+	let new_entry mbtxdeps i newstatus (mb::Maybe TxStatus) = do
 		mbtxdeps' <- bufferTxDependents mbtxdeps i
 		!buff_dta <- (readRef $ dataTxU u) >>= copyTxUData
 		mapRefM_ (maybe return id mbChgDta) buff_dta
-		let !tvar = DynTxU (Just $ BuffTxU buff_dta) mbtxdeps' u status
+		let !tvar = DynTxU (Just $ BuffTxU buff_dta) mbtxdeps' u newstatus
 		liftIO $ addTxLogEntry txlogs idu tvar
+#ifdef CSHF
+		addTxNotify mb status txlogs (metaTxU u)
+#endif
 		return tvar
 		
 	case mb of
-		Just (DynTxU Nothing mbtxdeps _ buff_status@(TxStatus (Read,_))) -> new_entry mbtxdeps i $ buff_status `mappend` status
+		Just (DynTxU Nothing mbtxdeps _ buff_status@(TxStatus (Read,_))) -> new_entry mbtxdeps i (buff_status `mappend` status) (Just buff_status)
 		Just (DynTxU (Just (BuffTxU buff_dta)) buff_deps _ buff_status@(isEvalOrWrite -> Just _)) -> do
 			let chg = maybe return id mbChgDta
 			mapRefM_ (chg) (coerce buff_dta)
 			buff_deps' <- bufferTxDependents buff_deps i
 			let !tvar = DynTxU (Just $ BuffTxU $ coerce buff_dta) buff_deps' u $ mappend buff_status status
 			-- all changes are logged on the nested transaction's log
-			unless (buff_status == status) $
-				liftIO $ addTxLogEntry txlogs idu tvar
+			unless (buff_status == status) $ liftIO $ addTxLogEntry txlogs idu tvar
+#ifdef CSHF
+			addTxNotify (Just buff_status) status txlogs (metaTxU u)
+#endif
 			return tvar
 		Just (DynTxU Nothing Nothing u buff_status@(TxStatus (New _,j))) -> do
 			case mbChgDta of
@@ -649,10 +765,12 @@ changeTxU u mbChgDta status@(isEvalOrWrite -> Just i) txlogs = do
 			let newstatus = mappend buff_status status
 			let !tvar = DynTxU Nothing Nothing u newstatus
 			-- all changes are logged on the nested transaction's log
-			unless (buff_status == newstatus) $
-				liftIO $ addTxLogEntry txlogs idu tvar
+			unless (buff_status == newstatus) $ liftIO $ addTxLogEntry txlogs idu tvar
+#ifdef CSHF
+			addTxNotify (Just buff_status) status txlogs (metaTxU u)
+#endif
 			return tvar
-		Nothing -> new_entry Nothing i status
+		Nothing -> new_entry Nothing i status Nothing
 changeTxU u _ status _ = error $ "changeTxU " ++ show status
 
 changeStatus st = TxStatus (if isWriteOrNewTrue st then Write else Eval,False)
@@ -765,13 +883,16 @@ dirtyBufferedTxData _ = return ()
 
 forgetBufferedTxData :: (MonadIO m,MonadRef r m) => DynTxVar r m -> m ()
 forgetBufferedTxData (DynTxU _ _ u (TxStatus (New _,_))) = flip mapRefM_ (dataTxU u) forget where
-	forget (TxValue _ value force dependencies) = return $ TxThunk force
+	forget (TxValue _ value force dependencies) = do
+		clearDependenciesTx False
+		return $ TxThunk force
 	forget dta = return dta
 forgetBufferedTxData (DynTxU (Just (BuffTxU buff_dta)) _ u _) = mapRefM_ forget buff_dta where
 	forget (TxValue _ value force dependencies,ori) = do
 		ori' <- case ori of
 			Left deps -> liftIO $ liftM Right $ mkWeakRefKey deps deps Nothing
 			Right wdeps -> return $ Right wdeps
+		clearDependenciesTx False
 		return (TxThunk force,ori)
 	forget dta = return dta
 forgetBufferedTxData _ = return ()
@@ -797,10 +918,10 @@ unbufferTxVar onlyWrites txlogs uid = do
 	mb <- liftIO $ findTxLogEntry txlogs uid
 	case mb of
 		Just tvar -> do
-			--debugTx' $ "unbufferingTx " ++ show onlyWrites ++ "  " ++ show uid ++ " " ++ show (dynTxStatus tvar)
+--			debugTx' $ "unbufferingTx " ++ show onlyWrites ++ "  " ++ show uid ++ " " ++ show (dynTxStatus tvar)
 			unbufferDynTxVar' onlyWrites txlogs (uid,tvar)
 		Nothing -> do
-			--debugTx' $ "nonbufferingTx " ++ show onlyWrites ++ "  " ++ show uid
+--			debugTx' $ "nonbufferingTx " ++ show onlyWrites ++ "  " ++ show uid
 			return ()
 
 unbufferDynTxVar' :: MonadIO m => Bool -> TxLogs r m -> (Unique,DynTxVar r m) -> m ()
@@ -837,17 +958,23 @@ unbufferDynTxVar'' txlogs onlyWrites tvar@(DynTxM Nothing Nothing m (TxStatus (N
 		else return Nothing
 unbufferDynTxVar'' txlogs onlyWrites tvar@(DynTxU _ _ u stat) = if (if onlyWrites then isWriteOrNewTrue else Prelude.const True) stat
 	then do
+		forgetBufferedTxData tvar
 		dirtyBufferedDynTxVar txlogs tvar
 		-- unbuffer the thunk, so that the fresher original data is used instead
 		let mbtxdeps = dynTxVarBufferedDependents tvar
-		dynTxVarDependencies tvar >>= maybe (return ()) (clearDependenciesTx False)
-		return $ Just $ DynTxU Nothing mbtxdeps u $ TxStatus (Read,isJust mbtxdeps)
+		let newstat = TxStaatus (Read,isJust mbtxdeps)
+		if stat == newstat
+			then return Nothing
+			else return $ Just $ DynTxU Nothing mbtxdeps u newstat
 	else return Nothing
 unbufferDynTxVar'' txlogs onlyWrites tvar@(DynTxM _ _ m stat) = if (if onlyWrites then isWriteOrNewTrue else Prelude.const True) stat
 	then do
 		let mbtxdeps = dynTxVarBufferedDependents tvar
 		dirtyBufferedDynTxVar txlogs tvar
-		return $ Just $ DynTxM Nothing mbtxdeps m $ TxStatus (Read,isJust mbtxdeps)
+		let newstat = TxStatus (Read,isJust mbtxdeps)
+		if stat == newstat
+			then return Nothing
+			else return $ Just $ DynTxM Nothing mbtxdeps m newstat
 	else return Nothing
 
 {-# INLINE clearDependenciesTx #-}
@@ -922,17 +1049,30 @@ instance (DeepTypeable l,DeepTypeable inc,DeepTypeable r,DeepTypeable m,DeepType
 
 type STxAdaptonM = STxM TxAdapton IORef IO
 
-joinTxRepair' :: Monad (Outside TxAdapton r m) => Maybe (TxRepair' r m) -> Maybe (TxRepair' r m) -> Maybe (TxRepair' r m)
-joinTxRepair' Nothing mb2 = mb2
-joinTxRepair' mb1 Nothing = mb1
-joinTxRepair' (Just f) (Just g) = Just $ \txlog -> f txlog >> g txlog
+joinTxRepairMb' :: Monad (Outside TxAdapton r m) => Maybe (TxRepair' r m) -> Maybe (TxRepair' r m) -> Maybe (TxRepair' r m)
+joinTxRepairMb' Nothing mb2 = mb2
+joinTxRepairMb' mb1 Nothing = mb1
+joinTxRepairMb' (Just f) (Just g) = Just $ \txlog -> f txlog >> g txlog
 
+joinTxRepair' :: Monad (Outside TxAdapton r m) => (TxRepair' r m) -> (TxRepair' r m) -> (TxRepair' r m)
+joinTxRepair' f g = \txlog -> f txlog >> g txlog
 
-
-{-# INLINE modifyMVar_' #-}
-modifyMVar_' :: (MonadIO m,MonadMask m) => MVar a -> (a -> m a) -> m ()
-modifyMVar_' m io =
-  Catch.mask $ \restore -> do
+{-# INLINE modifyMVarMasked_' #-}
+modifyMVarMasked_' :: (MonadIO m,MonadMask m) => MVar a -> (a -> m a) -> m ()
+modifyMVarMasked_' m io =
+  Catch.mask_ $ do
     a  <- liftIO $ takeMVar m
-    a' <- restore (io a) `Catch.onException` liftIO (putMVar m a)
+    a' <- io a `Catch.onException` liftIO (putMVar m a)
     liftIO $ putMVar m a'
+
+
+#ifndef CSHF
+doBlock :: Monad m => m a -> m a
+doBlock = id
+#endif
+#ifdef CSHF
+doBlock :: MonadMask m => m a -> m a
+doBlock = Catch.uninterruptibleMask_
+#endif
+
+

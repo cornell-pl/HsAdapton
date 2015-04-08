@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, TemplateHaskell, BangPatterns, TypeOperators, ConstraintKinds, ScopedTypeVariables, FlexibleContexts, GeneralizedNewtypeDeriving, TypeFamilies, MultiParamTypeClasses, FlexibleInstances #-}
+{-# LANGUAGE CPP, DeriveDataTypeable, TemplateHaskell, BangPatterns, TypeOperators, ConstraintKinds, ScopedTypeVariables, FlexibleContexts, GeneralizedNewtypeDeriving, TypeFamilies, MultiParamTypeClasses, FlexibleInstances #-}
 
 module Control.Monad.Transactional.TxAdapton.Layers where
 
@@ -141,30 +141,41 @@ writeTxUValue t dta' status = do
 -- a list of the starting times of running transactions sorted from newest to oldest
 -- we may have multiple transactions with the same start time
 -- needs to be a @MVar@ because multiple txs may start concurrently on different threads
+#ifndef CSHF
 TH.declareMVar "runningTxs"  [t| [UTCTime] |] [e| [] |]
 
 data DoneTxsID = DoneTxsID deriving (Eq,Typeable)
 instance Hashable DoneTxsID where
 	hashWithSalt i _ = i
+#endif
 
 -- a map with commit times of committed transactions and their performed changes
 -- each commited TX should have a different commit time. since we get the current time after acquiring the @MVar@, no two parallel commiting txs can have the same time
+#ifndef CSHF
 doneTxs :: (Typeable m,Typeable r) => MVar (Map UTCTime (TxUnmemo r m,TxWrite))
 doneTxs = Dyn.declareMVar DoneTxsID Map.empty
 
 mergeDoneTxs :: (TxUnmemo r m,TxWrite) -> (TxUnmemo r m,TxWrite) -> (TxUnmemo r m,TxWrite)
 mergeDoneTxs (unmemo1,writes1) (unmemo2,writes2) = (\txlog -> unmemo1 txlog >> unmemo2 txlog,Map.unionWith max writes1 writes2)
+#endif
 
 -- we need to acquire a lock, but this should be minimal
 startTx :: IO UTCTime
-startTx = getCurrentTime >>= \t -> addRunningTx t >> return t
+startTx = do
+	t <- getCurrentTime
+#ifndef CSHF
+	addRunningTx t
+#endif
+	return t
 
+#ifndef CSHF
 deleteRunningTx time = modifyMVarMasked_ runningTxs (return . List.delete time)
 
 -- insert a new time in a list sorted from newest to oldest
 addRunningTx time = modifyMVarMasked_ runningTxs (\xs -> return $ List.insertBy (\x y -> compare y x) time xs)
 
 updateRunningTx oldtime newtime = modifyMVarMasked_ runningTxs (\xs -> return $ List.insertBy (\x y -> compare y x) newtime $ List.delete oldtime xs)
+#endif
 
 -- restarts a tx with a new starting time
 -- note that the time has already been added to the @runningTxs@

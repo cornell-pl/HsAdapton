@@ -5,10 +5,10 @@ module System.Mem.Concurrent.WeakMap (
 	, new,new'
 	, lookup
 	, insertWithMkWeak, insertWeak, mergeWeak
-	, deleteFinalized
+	, deleteFinalized, finalizeEntry
 	, unionWithKey, extendWithKey, unionWithKey', mergeWithKey
 	, toMap,toMap'
-	, mapM_,mapM_',mapM'',purge
+	, mapM_,mapM_',mapM'',purge, foldrM
 	) where
 
 -- | Implementation of memo tables using hash tables and weak pointers as presented in http://community.haskell.org/~simonmar/papers/weak.pdf.
@@ -127,11 +127,11 @@ insertWithMkWeak :: (Ord k,Hashable k) => WeakMap k v -> MkWeak -> k -> v -> IO 
 insertWithMkWeak w_tbl@(WeakMap (tbl :!: _)) (MkWeak mkWeak) k v = do
 	weak <- mkWeak v $ Just $ deleteFinalized w_tbl k
 	finalizeEntry w_tbl k
-	modifyMVar_ tbl (return . Map.insert k weak)
+	modifyMVarMasked_ tbl (return . Map.insert k weak)
 	
 {-# INLINE insertWeak #-}
 insertWeak :: (Ord k,Hashable k,MonadIO m) => WeakMap k v -> k -> Weak v -> m ()
-insertWeak (WeakMap (tbl :!: _)) k weak = liftIO $ modifyMVar_ tbl (return . Map.insert k weak)
+insertWeak (WeakMap (tbl :!: _)) k weak = liftIO $ modifyMVarMasked_ tbl (return . Map.insert k weak)
 
 -- non-overlapping union
 extendWeak :: (Ord k,Hashable k) => WeakMap k v -> k -> Weak v -> IO ()
@@ -139,7 +139,7 @@ extendWeak = mergeWeak (\_ _ -> return False)
 
 -- non-overlapping union
 mergeWeak :: (Ord k,Hashable k) => (v -> v -> IO Bool) -> WeakMap k v -> k -> Weak v -> IO ()
-mergeWeak doOverwrite (WeakMap (tbl :!: _)) k weak = modifyMVar_ tbl $ \m -> do
+mergeWeak doOverwrite (WeakMap (tbl :!: _)) k weak = modifyMVarMasked_ tbl $ \m -> do
 	case Map.lookup k m of
 		Nothing -> do
 			return $ Map.insert k weak m
@@ -164,7 +164,7 @@ deleteFinalized (WeakMap (_ :!: weak_tbl)) = finalizeEntry' weak_tbl where
 		mb <- Weak.deRefWeak weak_tbl
 		case mb of
 			Nothing -> return ()
-			Just r -> modifyMVar_ r $ \m -> do
+			Just r -> modifyMVarMasked_ r $ \m -> do
 				case Map.lookup k m of
 					Nothing -> return m
 					Just w -> do
@@ -238,7 +238,7 @@ purge (WeakMap (_ :!: w_map)) = purgeWeak w_map where
 		mb <- Weak.deRefWeak w_map
 		case mb of
 			Nothing -> return ()
-			Just wm -> modifyMVar_ wm (\m -> Foldable.foldlM purgeMap Map.empty (Map.toList m))
+			Just wm -> modifyMVarMasked_ wm (\m -> Foldable.foldlM purgeMap Map.empty (Map.toList m))
 	
 	purgeMap :: (Ord k,Hashable k) => Map k (Weak v) -> (k,Weak v) -> IO (Map k (Weak v))
 	purgeMap m (k,w) = do
@@ -261,5 +261,15 @@ mapM_' liftIO f (WeakMap (tbl :!: _)) = liftIO (readMVar tbl) >>= Control.Monad.
 
 mapM_ :: MonadIO m => ((k,v) -> m a) -> WeakMap k v -> m ()			
 mapM_ = mapM_' liftIO
+
+foldrM :: MonadIO m => ((k,v) -> b -> m b) -> b -> WeakMap k v -> m b
+foldrM f z (WeakMap (tbl :!: _)) = do
+	xs <- liftIO $ readMVar tbl
+	let dof k w m = do
+		mb <- liftIO $ Weak.deRefWeak w
+		case mb of
+			Nothing -> m
+			Just v -> m >>= f (k,v)
+	Map.foldrWithKey dof (return z) xs
 
 
