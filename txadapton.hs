@@ -20,7 +20,7 @@ import Data.IORef
 import Data.Typeable
 import Data.DeepTypeable
 import Language.Haskell.TH.Syntax
-import System.Mem.WeakTable (stableName)
+ (stableName)
 
 import Data.WithClass.MData
 import Data.DeriveTH
@@ -38,15 +38,11 @@ import Control.Exception (Exception(..),SomeException(..))
 import qualified Control.Exception as Exception
 import qualified Control.Monad.Catch as Catch
 import System.Mem.Weak as Weak
-import System.Mem.WeakKey as WeakKey
+ as WeakKey
 import System.IO.Unsafe
-import System.Mem.StableName
+import System.Mem.StableName.Exts
 
-toListRef :: (IncK inc (ListMod' mod l inc r m a),Input mod l inc r m) => [a] -> l inc r m (ListMod mod l inc r m a)
-toListRef [] = ref NilMod
-toListRef (x:xs) = do
-	mxs <- toListRef xs
-	ref (ConsMod x mxs)
+
 
 setListModAt :: (IncK inc (ListMod' mod l inc r m a),Input mod l inc r m,Layer Outside inc r m)
 	=> ListMod mod l inc r m a -> Int -> (ListMod' mod l inc r m a -> Outside inc r m (ListMod' mod l inc r m a)) -> Outside inc r m ()
@@ -61,25 +57,25 @@ genList i = do
 	xs <- generate $ vectorOf i $ choose (minBound,0)
 	return xs
 
-topkInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Ord a) =>
+topkInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)), m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,Ord a) =>
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 topkInc cmp i =
 	let sortInverse = quicksortInc (flip cmp)
 	in memo $ \_ mxs -> (mapInc return >=> sortInverse >=> takeInc' i) mxs >>= force
 
-leastkIncM :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,OrdM (l inc r m) a) =>
+leastkIncM :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)), m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m,OrdM (l inc r m) a) =>
 	Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 leastkIncM i =
 	let sort = quicksortIncM
 	in memo $ \_ mxs -> (mapInc return >=> sort >=> takeInc' i) mxs >>= force
 
-leastkInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m) =>
+leastkInc :: (IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)), m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m) =>
 	(a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 leastkInc cmp i =
 	let sort = quicksortInc cmp
 	in memo $ \_ mxs -> (mapInc return >=> sort >=> takeInc' i) mxs >>= force
 	
-leastkIncAs :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)),MonadIO m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m) =>
+leastkIncAs :: (Memo name,IncK inc (ListMod' thunk l inc r m a),IncK inc (ListMod' mod l inc r m a),Hashable (ListMod thunk l inc r m (ListMod thunk l inc r m a)), m,Memo a,Memo (ListMod thunk l inc r m (ListMod thunk l inc r m a)),Memo (ListMod mod l inc r m a),Thunk mod l inc r m,Memo (ListMod thunk l inc r m a),Output thunk l inc r m) =>
 	name -> (a -> a -> l inc r m Ordering) -> Int -> ListMod mod l inc r m a -> l inc r m (ListMod thunk l inc r m a)
 leastkIncAs name cmp i = memo $ \_ mxs -> (mapInc return >=> quicksortIncAs name cmp >=> takeInc' i) mxs >>= force
 
@@ -174,7 +170,7 @@ instance Monad m => OrdM m Int where
 
 main_Adapton = flip Exception.finally (mergeGraphsInto' "tx.pdf") $ runIncremental $ do
 	let (size::Int) = 10^4
-	xs <- inL $ liftIO $ genList size
+	xs <- liftIO $ genList size
 	db <- inside $ toListRef xs
 	
 	(time,topk) <- timeOuterT $ do
@@ -183,7 +179,7 @@ main_Adapton = flip Exception.finally (mergeGraphsInto' "tx.pdf") $ runIncrement
 		topk <- topk_func db -- we need to use the same function to enable memoization
 		inside $ displayAs "top3: " topk
 		return topk
-	inL $ liftIO $ putStrLn ("CPU "++show time)
+	liftIO $ putStrLn ("CPU "++show time)
 	
 --	drawPDF "" proxyAdapton proxyIORef proxyIO (Merge db topk)
 	
@@ -193,19 +189,19 @@ loop_Adapton :: Int -> Int -> ListMod M Inside Adapton IORef IO Int -> ListMod U
 loop_Adapton 0 size db topk = return ()
 loop_Adapton i size db topk = do
 	(time,()) <- timeOuterT $ do
-		p <- inL $ liftIO $ generate $ choose (0,size-1)
-		i <- inL $ liftIO $ generate $ choose (0,maxBound)
+		p <- liftIO $ generate $ choose (0,size-1)
+		i <- liftIO $ generate $ choose (0,maxBound)
 		setListModAt db p $ \(ConsMod x mxs) -> return $ ConsMod i mxs
 		
 --		drawPDF (show i) proxyAdapton proxyIORef proxyIO (Merge db topk)
 		
-		inL $ liftIO $ putStrLn $ "added to db " ++ show i
+		liftIO $ putStrLn $ "added to db " ++ show i
 		inside $ displayAs "top3: " topk
---		inside $ rnfInc topk
+--		inside $ nfDataInc topk
 		
 --		drawPDF (show i) proxyAdapton proxyIORef proxyIO (Merge db topk)
 		
-	inL $ liftIO $ putStrLn ("CPU "++show time)
+	liftIO $ putStrLn ("CPU "++show time)
 	
 	loop_Adapton (pred i) size db topk
 
@@ -239,12 +235,8 @@ data LeastItem = LeastItem deriving (Typeable,Eq)
 instance Hashable LeastItem where
 	hash _ = 0
 	hashWithSalt salt _ = salt
-instance Memo LeastItem where
-	type Key LeastItem = LeastItem
-	{-# INLINE memoKey #-}
-	memoKey = id
-	{-# INLINE memoWeak #-}
-	memoWeak = \x -> MkWeak $ mkWeak x
+	
+$(deriveMemoId ''LeastItem)
 
 leastItem = inside . leastkIncAs LeastItem compareM 1
 -- finds the cheapest item
@@ -362,9 +354,9 @@ genDB numItems numCustomers = do
 	let itemIds = [1..numItems]	
 	let genItem itemId = do
 		let itemName = show itemId
-		price <- inL $ liftIO $ generate $ choose (1,500)
+		price <- liftIO $ generate $ choose (1,500)
 		itemPrice <- inside $ ref price
-		quantity <- inL $ liftIO $ generate $ choose (1,2)
+		quantity <- liftIO $ generate $ choose (1,2)
 		itemQuantity <- inside $ ref quantity
 		let itemInflation = price `div` quantity
 		return $ Item itemName itemPrice itemInflation itemQuantity
@@ -378,55 +370,6 @@ genDB numItems numCustomers = do
 	customers <- mapM genCustomer customerIds
 	thunk <- leastItem warehouse
 	return (warehouse,thunk,customers)
-	
-instance (Display l1 inc r m (TxAdaptonM Int)) => Display l1 inc r m Item where
-	displaysPrec proxyL proxyInc proxyR proxyM (Item itemName itemPrice itemInflation itemQuantity) r = do
-		sq <- displaysPrec proxyL proxyInc proxyR proxyM itemQuantity (')':r)
-		si <- displaysPrec proxyL proxyInc proxyR proxyM itemInflation (' ':sq)
-		sp <- displaysPrec proxyL proxyInc proxyR proxyM itemPrice (' ':si)
-		sn <- displaysPrec proxyL proxyInc proxyR proxyM itemName (' ':sp)
-		return $ "(Item " ++ sn
-
-instance (Display l1 inc r m (TxAdaptonM Int),Display l1 inc r m (ListTxAdaptonM (String, Int))) => Display l1 inc r m Customer where
-	displaysPrec proxyL proxyInc proxyR proxyM (Customer customerName customerBalance customerPurchases) r = do
-		sp <- displaysPrec proxyL proxyInc proxyR proxyM customerPurchases (')':r)
-		sb <- displaysPrec proxyL proxyInc proxyR proxyM customerBalance (' ':sp)
-		sn <- displaysPrec proxyL proxyInc proxyR proxyM customerName (' ':sb)
-		return $ "(Customer " ++ sn
-
-instance (NFDataInc l1 inc r m (TxAdaptonM Int)) => NFDataInc l1 inc r m Item where
-	rnfInc proxyL proxyInc proxyR proxyM (Item itemName itemPrice itemInflation itemQuantity) = do
-		n <- rnfInc proxyL proxyInc proxyR proxyM itemName
-		p <- rnfInc proxyL proxyInc proxyR proxyM itemPrice
-		i <- rnfInc proxyL proxyInc proxyR proxyM itemInflation
-		q <- rnfInc proxyL proxyInc proxyR proxyM itemQuantity
-		return $ n `seq` p `seq` i `seq` q
-
-instance (NFDataInc l1 inc r m (TxAdaptonM Int),NFDataInc l1 inc r m (ListTxAdaptonM (String, Int))) => NFDataInc l1 inc r m Customer where
-	rnfInc proxyL proxyInc proxyR proxyM (Customer customerName customerBalance customerPurchases) = do
-		n <- rnfInc proxyL proxyInc proxyR proxyM customerName
-		b <- rnfInc proxyL proxyInc proxyR proxyM customerBalance
-		p <- rnfInc proxyL proxyInc proxyR proxyM customerPurchases
-		return $ n `seq` b `seq` p
-
-instance Memo Item where
-	type Key Item = StableName Item
-	{-# INLINE memoKey #-}
-	memoKey = stableName
-	{-# INLINE memoWeak #-}
-	memoWeak = \x -> MkWeak $ Weak.mkWeak x
-instance Memo Customer where
-	type Key Customer = StableName Customer
-	{-# INLINE memoKey #-}
-	memoKey = stableName
-	{-# INLINE memoWeak #-}
-	memoWeak = \x -> MkWeak $ Weak.mkWeak x
-		
-
-$( derive makeMData ''Item )
-$( derive makeMData ''Customer )
-$( derive makeDeepTypeable ''Item )
-$( derive makeDeepTypeable ''Customer )
 
 -- **
 --main = main_Tx
@@ -448,7 +391,7 @@ testM f (xs,chgs) runs = do
 		s :: ListTxM Inside IORef IO Int <- toListRefInside xs
 		t :: ListTxU Inside IORef IO Int <- inside $ f s
 		drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge s t)
-		!() <- rnfInc Proxy Proxy Proxy Proxy t
+		!() <- nfDataInc Proxy Proxy Proxy Proxy t
 		drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge s t)
 		return (s,t)
 	testM' s t chgs
@@ -460,7 +403,7 @@ testM' s t (chg:chgs) = do
 	runIncremental $ do
 		applyListChange chg s
 		drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge s t)
-		rnfInc Proxy Proxy Proxy Proxy t
+		nfDataInc Proxy Proxy Proxy Proxy t
 		drawPDF "" proxyTxAdapton proxyIORef proxyIO (Merge s t)
 	testM' s t chgs
 	return ()

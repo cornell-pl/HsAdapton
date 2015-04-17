@@ -42,7 +42,7 @@ sequence (SCons m ms) = do
 	return $ SCons x xs
 
 reverse :: SList a -> SList a
-reverse = Foldable.foldl (flip SCons) SNil
+reverse = Foldable.foldl' (flip SCons) SNil
 
 null :: SList a -> Bool
 null SNil = True

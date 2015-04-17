@@ -3,13 +3,13 @@
 module Control.Monad.Incremental.Draw where
 
 import Control.Monad.Incremental
-import Control.Monad.Incremental.Adapton.Algorithm
-import Control.Monad.Incremental.Adapton.Layers
-import Control.Monad.Incremental.Adapton.Types hiding (MData)
+import Control.Monad.Incremental.Internal.Adapton.Algorithm
+import Control.Monad.Incremental.Internal.Adapton.Layers
+import Control.Monad.Incremental.Internal.Adapton.Types hiding (MData)
 import Control.Monad.Ref
-import System.Mem.WeakSet as WeakSet
+ as WeakSet
 import Control.Monad.Trans
-import System.Mem.WeakKey
+
 import Control.DeepSeq as Seq
 
 import Control.Monad
@@ -79,25 +79,34 @@ declareMVar "tempGraphs"  [t| [(FilePath,Bool)] |] [e| [] |]
 declareMVar "drawnDependents"  [t| Map ThreadId [String] |] [e| Map.empty |]
 declareMVar "drawnDependencies"  [t| Map ThreadId [String] |] [e| Map.empty |]
 
---checkDrawnDependencies :: (Layer l inc r m,MonadIO m) => String -> l inc r m [a] -> l inc r m [a]
+--checkDrawnDependencies :: (Layer l inc, m) => String -> l inc [a] -> l inc [a]
 --checkDrawnDependencies node m = do
---	threadid <- inL $ liftIO myThreadId
---	nodesmap <- inL $ liftIO $ takeMVar drawnDependencies
+--	threadid <- liftIO myThreadId
+--	nodesmap <- liftIO $ takeMVar drawnDependencies
 ----	let nodes = maybe [] id $ Map.lookup threadid nodesmap
 --	if node `elem` nodesmap
 --		then inL (liftIO $ putMVar drawnDependencies nodesmap) >> return []
 --		else inL (liftIO $ putMVar drawnDependencies $ node:nodesmap) >> m
 
-checkDrawnDependents :: (Layer l inc r m,MonadIO m) => String -> l inc r m ([a],Map k v) -> l inc r m ([a],Map k v)
+checkDrawnDependents :: String -> IO ([a],Map k v) -> IO ([a],Map k v)
 checkDrawnDependents node m = do
-	threadid <- inL $ liftIO myThreadId
-	nodesmap <- inL $ liftIO $ takeMVar drawnDependents
+	threadid <- myThreadId
+	nodesmap <- takeMVar drawnDependents
 	let nodes = maybe [] id $ Map.lookup threadid nodesmap
 	if node `elem` nodes
-		then inL (liftIO $ putMVar drawnDependents nodesmap) >> (return ([],Map.empty))
-		else inL (liftIO $ putMVar drawnDependents $ Map.insertWith (++) threadid [node] nodesmap) >> m
+		then (putMVar drawnDependents nodesmap) >> (return ([],Map.empty))
+		else (putMVar drawnDependents $ Map.insertWith (++) threadid [node] nodesmap) >> m
 
-resetDrawnNodes :: MonadIO m => m ()
+checkDrawnDependentsLayer :: Layer l inc => String -> l inc ([a],Map k v) -> l inc ([a],Map k v)
+checkDrawnDependentsLayer node m = do
+	threadid <- unsafeIOToInc $ myThreadId
+	nodesmap <- unsafeIOToInc $ takeMVar drawnDependents
+	let nodes = maybe [] id $ Map.lookup threadid nodesmap
+	if node `elem` nodes
+		then (unsafeIOToInc $ putMVar drawnDependents nodesmap) >> (return ([],Map.empty))
+		else (unsafeIOToInc $ putMVar drawnDependents $ Map.insertWith (++) threadid [node] nodesmap) >> m
+
+resetDrawnNodes :: IO ()
 resetDrawnNodes = do
 	threadid <- liftIO myThreadId
 	let delete = return . Map.delete threadid
@@ -109,38 +118,38 @@ resetDrawnNodes = do
 -- a list of top-level ids and (elements of) a graph, and a table mapping node identifiers to read values
 type DrawDot = ([String],[Gen.DotStatement String],Map String String)
 
-class (MonadRef r m,MonadIO m,Layer Outside inc r m) => Draw inc r m a where
-	draw :: Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m DrawDot
+class (Layer Outside inc) => Draw inc a where
+	draw :: Proxy inc -> a -> Outside inc DrawDot
 
-data DrawDict inc r m a = DrawDict { drawDict :: Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m DrawDot }
+data DrawDict inc a = DrawDict { drawDict :: Proxy inc -> a -> Outside inc DrawDot }
 
-instance (Draw inc r m a) => Sat (DrawDict inc r m a) where
+instance (Draw inc a) => Sat (DrawDict inc a) where
 	dict = DrawDict { drawDict = draw }
 		
 -- * Graphviz bindings
 
-drawPDF :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m ()
-drawPDF label inc r m v = do
---	inL $ liftIO $ performGC >> threadDelay 2000000
-	dir <- inL $ liftIO getTemporaryDirectory -- $ return "/Users/hpacheco/Desktop/tmp/"
-	filename <- inL $ liftIO $ liftM toString $ nextUUIDSafe
+drawPDF :: Draw inc a => String -> Proxy inc -> a -> Outside inc ()
+drawPDF label inc v = do
+--	liftIO $ performGC >> threadDelay 2000000
+	dir <- unsafeIOToInc getTemporaryDirectory -- $ return "/Users/hpacheco/Desktop/tmp/"
+	filename <- unsafeIOToInc $ liftM toString $ nextUUIDSafe
 	let pdfFile = dir </> addExtension filename "pdf"
-	drawToPDF label inc r m v pdfFile
-	inL $ liftIO $ modifyMVar_ tempGraphs (return . ((pdfFile,True):))
---	inL $ liftIO $ putStrLn $ "drew " ++ filename ++ ".pdf"
+	drawToPDF label inc v pdfFile
+	unsafeIOToInc $ modifyMVar_ tempGraphs (return . ((pdfFile,True):))
+--	liftIO $ putStrLn $ "drew " ++ filename ++ ".pdf"
 	
-drawDot :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m ()
-drawDot label inc r m v = do
---	inL $ liftIO $ performGC >> threadDelay 2000000
-	dir <- inL $ liftIO getTemporaryDirectory -- $ return "/Users/hpacheco/Desktop/tmp/"
-	filename <- inL $ liftIO $ liftM toString $ nextUUIDSafe
+drawDot :: Draw inc a => String -> Proxy inc -> a -> Outside inc ()
+drawDot label inc v = do
+--	liftIO $ performGC >> threadDelay 2000000
+	dir <- unsafeIOToInc getTemporaryDirectory -- $ return "/Users/hpacheco/Desktop/tmp/"
+	filename <- unsafeIOToInc $ liftM toString $ nextUUIDSafe
 	let dotFile = dir </> addExtension filename "dot"
-	drawToDot label inc r m v dotFile
-	inL $ liftIO $ modifyMVar_ tempGraphs (return . ((dotFile,False):))
---	inL $ liftIO $ putStrLn $ "drew " ++ filename ++ ".dot"
+	drawToDot label inc v dotFile
+	unsafeIOToInc $ modifyMVar_ tempGraphs (return . ((dotFile,False):))
+--	liftIO $ putStrLn $ "drew " ++ filename ++ ".dot"
 
-mergeGraphsInto :: (MonadRef r m,MonadIO m,Layer Outside inc r m) => FilePath -> Outside inc r m ()
-mergeGraphsInto = inL . liftIO . mergeGraphsInto'
+mergeGraphsInto :: (Layer Outside inc) => FilePath -> Outside inc ()
+mergeGraphsInto = unsafeIOToInc . mergeGraphsInto'
 	
 dotToPDF :: FilePath -> IO FilePath
 dotToPDF dot = do
@@ -160,26 +169,26 @@ mergeGraphsInto' pdfFile = do
 
 ------
 
-drawToDot :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> FilePath -> Outside inc r m ()
-drawToDot label inc r m v dotFile = do
-	graph <- drawGraph label inc r m v
+drawToDot :: Draw inc a => String -> Proxy inc -> a -> FilePath -> Outside inc ()
+drawToDot label inc v dotFile = do
+	graph <- drawGraph label inc v
 	let txt = Seq.force $ printDotGraph graph
-	inL $ liftIO $ T.writeFile dotFile txt
+	unsafeIOToInc $ T.writeFile dotFile txt
 	return ()
 	
-drawToPDF :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> FilePath -> Outside inc r m ()
-drawToPDF label inc r m v pdfFile = do
-	graph <- drawGraph label inc r m v
-	inL $ liftIO $ runGraphviz graph Pdf pdfFile
+drawToPDF :: Draw inc a => String -> Proxy inc -> a -> FilePath -> Outside inc ()
+drawToPDF label inc v pdfFile = do
+	graph <- drawGraph label inc v
+	unsafeIOToInc $ runGraphviz graph Pdf pdfFile
 	return ()
 
-drawGraph :: Draw inc r m a => String -> Proxy inc -> Proxy r -> Proxy m -> a -> Outside inc r m (DotGraph String)
-drawGraph label inc r m x = do
-	inL resetDrawnNodes
---	inL $ liftIO printAllRefs
+drawGraph :: Draw inc a => String -> Proxy inc -> a -> Outside inc (DotGraph String)
+drawGraph label inc x = do
+	unsafeIOToInc resetDrawnNodes
+--	liftIO printAllRefs
 	let labelNode = Gen.DN $ DotNode {nodeID = label, nodeAttributes = [Shape PlainText,Label (StrLabel $ T.pack label)]}
-	dot <- liftM (\(x,y,z) -> drawGraphStatements $ labelNode : y ++ drawTable z) (draw inc r m x)
-	inL resetDrawnNodes
+	dot <- liftM (\(x,y,z) -> drawGraphStatements $ labelNode : y ++ drawTable z) (draw inc x)
+	unsafeIOToInc resetDrawnNodes
 	return dot
 
 drawTable :: Map String String -> [DotStatement String]
@@ -258,44 +267,44 @@ nextUUIDSafe = do
 		Just uuid -> return uuid
 
 -- special instance that simplifies the visualization of multiple values in the same graph 
-instance (Draw inc r m a,Draw inc r m b) => Draw inc r m (Merge a b) where
-	draw inc r m (Merge a b) = do
-		draw1 <- draw inc r m a
-		draw2 <- draw inc r m b
+instance (Draw inc a,Draw inc b) => Draw inc (Merge a b) where
+	draw inc (Merge a b) = do
+		draw1 <- draw inc a
+		draw2 <- draw inc b
 		(ids,dot,table) <- mergeDrawDot draw1 draw2
 		return (ids,Gen.SG (sameRank ids) : dot,table)
 
-instance (MonadIO m,Incremental inc r m) => Draw inc r m String where
-	draw inc r m str = do
-		parentID <- liftM toString $ inL $ liftIO $ nextUUIDSafe
+instance (Incremental inc) => Draw inc String where
+	draw inc str = do
+		parentID <- liftM toString $ unsafeIOToInc $ nextUUIDSafe
 		return ([parentID],[Gen.DN $ constructorNode parentID str],Map.empty)
 
-instance (MonadIO m,Incremental inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m [a] where
-	draw inc r m xs = do
-		parentID <- liftM toString $ inL $ liftIO $ nextUUIDSafe
+instance (Incremental inc,MData (DrawDict inc) (Outside inc) a) => Draw inc [a] where
+	draw inc xs = do
+		parentID <- liftM toString $ unsafeIOToInc $ nextUUIDSafe
 		let parentLabel = "[]"
-		(childrenIDs,childrenDot,childrenTable) <- liftM mergeLists $ mapM (drawDict dict inc r m) xs
+		(childrenIDs,childrenDot,childrenTable) <- liftM mergeLists $ mapM (drawDict dict inc) xs
 		let parentNode = Gen.DN $ constructorNode parentID parentLabel
 		let childrenEdges = map (Gen.DE . constructorEdge parentID) childrenIDs
 		let childrenRank = sameRank childrenIDs
 		return ([parentID],parentNode : childrenEdges ++ Gen.SG childrenRank : childrenDot,childrenTable)
 
-instance (MonadIO m,Incremental inc r m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m (Set a) where
-	draw inc r m (Set.toList -> xs) = do
-		parentID <- liftM toString $ inL $ liftIO $ nextUUIDSafe
+instance (Incremental inc,MData (DrawDict inc) (Outside inc) a) => Draw inc (Set a) where
+	draw inc (Set.toList -> xs) = do
+		parentID <- liftM toString $ unsafeIOToInc $ nextUUIDSafe
 		let parentLabel = "Set"
-		(childrenIDs,childrenDot,childrenTable) <- liftM mergeLists $ mapM (drawDict dict inc r m) xs
+		(childrenIDs,childrenDot,childrenTable) <- liftM mergeLists $ mapM (drawDict dict inc) xs
 		let parentNode = Gen.DN $ constructorNode parentID parentLabel
 		let childrenEdges = map (Gen.DE . constructorEdge parentID) childrenIDs
 		let childrenRank = sameRank childrenIDs
 		return ([parentID],parentNode : childrenEdges ++ Gen.SG childrenRank : childrenDot,childrenTable)
 
-instance (MonadIO m,Incremental inc r m,MData (DrawDict inc r m) (Outside inc r m) b,Show a) => Draw inc r m (Map a b) where
-	draw inc r m (Map.toList -> xs) = do
+instance (Incremental inc,MData (DrawDict inc) (Outside inc) b,Show a) => Draw inc (Map a b) where
+	draw inc (Map.toList -> xs) = do
 		let (keys,values) = unzip xs
-		parentID <- liftM toString $ inL $ liftIO $ nextUUIDSafe
+		parentID <- liftM toString $ unsafeIOToInc $ nextUUIDSafe
 		let parentLabel = "Map"
-		(childrenIDs,childrenDot,childrenTable) <- liftM mergeLists $ mapM (drawDict dict inc r m) values
+		(childrenIDs,childrenDot,childrenTable) <- liftM mergeLists $ mapM (drawDict dict inc) values
 		let parentNode = Gen.DN $ constructorNode parentID parentLabel
 		childrenEdges <- mapM (\(k,childID) -> return $ Gen.DE $ addEdgeLabel (show k) $ constructorEdge parentID childID) $ zip keys childrenIDs
 		let childrenRank = sameRank childrenIDs
@@ -303,15 +312,15 @@ instance (MonadIO m,Incremental inc r m,MData (DrawDict inc r m) (Outside inc r 
 
 mergeLists l = let (xxs,yys,zzs) = unzip3 l in (concat xxs,concat yys,foldr Map.union Map.empty zzs)
 
-drawProxy :: Proxy inc -> Proxy r -> Proxy m -> Proxy (DrawDict inc r m)
-drawProxy inc r m = Proxy
+drawProxy :: Proxy inc -> Proxy (DrawDict inc)
+drawProxy inc = Proxy
 
 -- default instance for arbitrary types
-instance (Incremental inc r m,WeakRef r,MonadRef r m,MonadIO m,MData (DrawDict inc r m) (Outside inc r m) a) => Draw inc r m a where
-	draw inc r m v = do
-		parentID <- liftM toString $ inL $ liftIO $ nextUUIDSafe
-		parentLabel <- liftM showConstr $ toConstr (drawProxy inc r m) v
-		(childrenIDs,childrenDot,childrenTable) <- gmapQr (drawProxy inc r m) mergeDrawDot ([],[],Map.empty) (drawDict dict inc r m) v
+instance (Incremental inc,MData (DrawDict inc) (Outside inc) a) => Draw inc a where
+	draw inc v = do
+		parentID <- liftM toString $ unsafeIOToInc $ nextUUIDSafe
+		parentLabel <- liftM showConstr $ toConstr (drawProxy inc) v
+		(childrenIDs,childrenDot,childrenTable) <- gmapQr (drawProxy inc) mergeDrawDot ([],[],Map.empty) (drawDict dict inc) v
 		let parentNode = Gen.DN $ constructorNode parentID parentLabel
 		let childrenEdges = map (Gen.DE . constructorEdge parentID) childrenIDs
 		let childrenRank = sameRank childrenIDs

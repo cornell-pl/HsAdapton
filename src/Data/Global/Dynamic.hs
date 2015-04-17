@@ -13,7 +13,7 @@
 -----------------------------------------------------------------------------------------------
 module Data.Global.Dynamic (
   -- * Public Interface
-    declareIORef, declareMVar, declareEmptyMVar, declareTVar, declareIOHashTable, declareWeakTable, declareCMap
+    declareIORef, declareMVar, declareEmptyMVar, declareTVar, declareBasicHashTable, declareCMap, declareWeakBasicHashTable, declareWeakMap
 
   -- * Private Testing Interface
   , lookupOrInsert
@@ -21,36 +21,36 @@ module Data.Global.Dynamic (
   , globalRegistry
 ) where
 
+import qualified System.Mem.WeakMap as WeakMap
 import Control.Concurrent.MVar ( MVar, newMVar, newEmptyMVar, modifyMVar )
-#if __GLASGOW_HASKELL__ < 702
-import Control.Concurrent.MVar ( takeMVar, putMVar )
-#endif
 import Control.Concurrent.STM  ( TVar, newTVarIO )
-#if __GLASGOW_HASKELL__ < 702
-import Control.Exception       ( evaluate )
-#endif
 import Data.IORef
 import Data.Dynamic
 import Data.HashMap.Strict as M
 import GHC.Conc                ( pseq )
 import Data.Hashable
 import GHC.IO                  ( unsafePerformIO, unsafeDupablePerformIO )
-import qualified Data.HashTable.IO as HashIO
-import qualified Data.HashTable.ST.Basic as HashST
-import System.Mem.WeakTable as WeakTable
-import System.Mem.StableName
+
+import Data.HashTable.Weak.IO as Weak
+import Data.HashTable.IO as HashIO
+import Data.HashTable.ST.Basic as BasicHashST
+import System.Mem.StableName.Exts
 import qualified Control.Concurrent.Map as CMap
+import Unsafe.Coerce
 
-
-
-#if __GLASGOW_HASKELL__ >= 702
-type Registry = HashMap (TypeRep,TypeRep,DynamicHashableEq) Dynamic
-#else
-type Registry = HashMap (Int,Int,String) Dynamic
-#endif
+type Registry = HashMap (TypeRep,DynamicHashableEq) Dyn
 
 data DynamicHashableEq where
 	DynHashableEq :: (Typeable a,Eq a,Hashable a) => a -> DynamicHashableEq
+
+data Dyn where
+	Dyn :: Typeable a => a -> Dyn
+
+unsafeFromDyn :: Typeable a => Dyn -> a
+--unsafeFromDyn (Dyn a) = unsafeCoerce a
+unsafeFromDyn (Dyn x) = case cast x of
+	Nothing -> error "type cast"
+	Just y -> y
 
 instance Hashable DynamicHashableEq where
 	hashWithSalt i (DynHashableEq a) = hashWithSalt i a
@@ -92,23 +92,18 @@ lookupOrInsert
     -> IO (ref a)
 lookupOrInsert registry new name _
     | registry `pseq` new `pseq` name `pseq` False = undefined
-lookupOrInsert registry new name val = modifyMVar registry lkup
+lookupOrInsert registry (new :: a -> IO (ref a)) name val = modifyMVar registry lkup
   where
-    err ex got = error $ "Data.Global.Registry: Invariant violation\n"
-                       ++ "expected: " ++ show ex ++ "\n"
-                       ++ "got: " ++ show got ++ "\n"
-
-    typVal = typeOf (undefined :: a)
-    typRef = typeOf (undefined :: ref ()) -- TypeRep representing the reference, e.g. IORef,
-                                          -- MVar
-
-    lkup :: Registry -> IO (Registry, ref a)
-    lkup reg = case M.lookup (typRef, typVal, toDynHashableEq name) reg of
-        Just ref -> return (reg, fromDyn ref (err typVal (dynTypeRep ref)))
-        Nothing ->
-         do { ref <- new val
-            ; return (M.insert (typRef, typVal, toDynHashableEq name) (toDyn ref) reg, ref)
-            }
+	err = error "Data.Global.Registry: Invariant violation"
+	
+	typ = typeOf (undefined :: ref a)
+	
+	lkup :: Registry -> IO (Registry, ref a)
+	lkup reg = case M.lookup (typ,toDynHashableEq name) reg of
+		Just ref -> return (reg, unsafeFromDyn ref)
+		Nothing -> do
+			ref <- new val
+			return (M.insert (typ,toDynHashableEq name) (Dyn ref) reg, ref)
 {-# NOINLINE lookupOrInsert #-}
 
 lookupOrInsert2
@@ -120,22 +115,18 @@ lookupOrInsert2
 	-> IO (c a1 a2)
 lookupOrInsert2 registry new name _ _
     | registry `pseq` new `pseq` name `pseq` False = undefined
-lookupOrInsert2 registry new name val1 val2 = modifyMVar registry lkup
+lookupOrInsert2 registry (new :: a1 -> a2 -> IO (c a1 a2)) name val1 val2 = modifyMVar registry lkup
   where
-    err ex got = error $ "Data.Global.Registry: Invariant violation\n"
-                       ++ "expected: " ++ show ex ++ "\n"
-                       ++ "got: " ++ show got ++ "\n"
+    err = error $ "Data.Global.Registry: Invariant violation"
 
-    typVal = typeOf (undefined :: (a1,a2))
-    typRef = typeOf (undefined :: c () ()) -- TypeRep representing the reference, e.g. IORef,
-                                          -- MVar
+    typ = typeOf (undefined :: c a1 a2)
 
     lkup :: Registry -> IO (Registry, c a1 a2)
-    lkup reg = case M.lookup (typRef, typVal, toDynHashableEq name) reg of
-        Just ref -> return (reg, fromDyn ref (err typVal (dynTypeRep ref)))
+    lkup reg = case M.lookup (typ,toDynHashableEq name) reg of
+        Just ref -> return (reg, unsafeFromDyn ref)
         Nothing ->
          do { ref <- new val1 val2
-            ; return (M.insert (typRef, typVal, toDynHashableEq name) (toDyn ref) reg, ref)
+            ; return (M.insert (typ,toDynHashableEq name) (Dyn ref) reg, ref)
             }
 
 
@@ -169,7 +160,6 @@ lookupOrInsertEmptyMVar name = lookupOrInsert globalRegistry newEmptyMVar' name 
     newEmptyMVar' _ = newEmptyMVar
 {-# NOINLINE lookupOrInsertEmptyMVar #-}
 
-deriving instance Typeable HashST.HashTable
 deriving instance Typeable CMap.Map
 
 lookupOrInsertCMap
@@ -179,19 +169,26 @@ lookupOrInsertCMap
 lookupOrInsertCMap n name = lookupOrInsert2 globalRegistry (\k v -> CMap.empty) name (error "lookupOrInsertCMap") (error "lookupOrInsertCMap")
 {-# NOINLINE lookupOrInsertCMap #-}
 
-lookupOrInsertIOHashTable
-    :: (Typeable k,Typeable v,Typeable b,Hashable b,Eq b)
-    => b
-    -> IO (HashIO.IOHashTable HashST.HashTable k v)
-lookupOrInsertIOHashTable n = lookupOrInsert2 globalRegistry (\k v -> HashIO.new) n (error "lookupOrInsertIOHashTable") (error "lookupOrInsertIOHashTable")
-{-# NOINLINE lookupOrInsertIOHashTable #-}
+lookupOrInsertBasicHashTable
+    :: (Eq k,Hashable k,Typeable k,Typeable v,Typeable b,Hashable b,Eq b)
+    => Int -> b
+    -> IO (HashIO.BasicHashTable k v)
+lookupOrInsertBasicHashTable size n = lookupOrInsert2 globalRegistry (\k v -> HashIO.newSized size) n (error "lookupOrInsertBasicHashTable") (error "lookupOrInsertBasicHashTable")
+{-# NOINLINE lookupOrInsertBasicHashTable #-}
 
-lookupOrInsertWeakTable
-    :: (Eq name,Hashable name,Eq k,Hashable k,Typeable k,Typeable v,Typeable b,Typeable name)
-    => b -> name
-    -> IO (WeakTable k v)
-lookupOrInsertWeakTable n name = lookupOrInsert2 globalRegistry (\k v -> WeakTable.newFor n) name (error "lookupOrInsertWeakTable") (error "lookupOrInsertWeakTable")
-{-# NOINLINE lookupOrInsertWeakTable #-}
+lookupOrInsertWeakBasicHashTable
+    :: (Eq k,Hashable k,Typeable k,Typeable v,Typeable b,Hashable b,Eq b)
+    => Int -> b
+    -> IO (Weak.BasicHashTable k v)
+lookupOrInsertWeakBasicHashTable size n = lookupOrInsert2 globalRegistry (\k v -> Weak.newSized size) n (error "lookupOrInsertBasicHashTable") (error "lookupOrInsertBasicHashTable")
+{-# NOINLINE lookupOrInsertWeakBasicHashTable #-}
+
+lookupOrInsertWeakMap
+    :: (Eq k,Hashable k,Typeable k,Typeable v,Typeable b,Hashable b,Eq b)
+    => b
+    -> IO (WeakMap.WeakMap k v)
+lookupOrInsertWeakMap n = lookupOrInsert2 globalRegistry (\k v -> WeakMap.new) n (error "lookupOrInsertBasicHashTable") (error "lookupOrInsertBasicHashTable")
+{-# NOINLINE lookupOrInsertWeakMap #-}
 
 lookupOrInsertTVar
     :: (Typeable a,Typeable b,Eq b,Hashable b)
@@ -204,10 +201,6 @@ lookupOrInsertTVar = lookupOrInsert globalRegistry newTVarIO
 declareCMap :: (Typeable a,Eq name,Hashable name,Typeable name,Typeable k,Typeable v,Eq k,Hashable k) => a -> name -> (CMap.Map k v)
 declareCMap a name = unsafeDupablePerformIO $ lookupOrInsertCMap a name
 {-# NOINLINE declareCMap #-}
-
-declareWeakTable :: (Typeable a,Eq name,Hashable name,Typeable name,Typeable k,Typeable v,Eq k,Hashable k) => a -> name -> (WeakTable k v)
-declareWeakTable a name = unsafeDupablePerformIO $ lookupOrInsertWeakTable a name
-{-# NOINLINE declareWeakTable #-}
 
 -- | @declareIORef name val@ maps a variable name to an 'IORef'. Calling it multiple times with the same
 -- @name@ and type of 'val' will always return the same 'IORef'.
@@ -266,14 +259,26 @@ declareEmptyMVar
 declareEmptyMVar name = unsafeDupablePerformIO $ lookupOrInsertEmptyMVar name
 {-# NOINLINE declareEmptyMVar #-}
 
-declareIOHashTable
-    :: (Typeable k,Typeable v,Typeable b,Eq b,Hashable b)
+declareBasicHashTable
+    :: (Eq k,Hashable k,Typeable k,Typeable v,Typeable b,Eq b,Hashable b)
+    => Int -> b  -- ^ The identifying name
+    -> HashIO.BasicHashTable k v 
+declareBasicHashTable size name = unsafeDupablePerformIO $ lookupOrInsertBasicHashTable size name
+{-# NOINLINE declareBasicHashTable #-}
+
+declareWeakBasicHashTable
+    :: (Eq k,Hashable k,Typeable k,Typeable v,Typeable b,Eq b,Hashable b)
+    => Int -> b  -- ^ The identifying name
+    -> Weak.BasicHashTable k v 
+declareWeakBasicHashTable size name = unsafeDupablePerformIO $ lookupOrInsertWeakBasicHashTable size name
+{-# NOINLINE declareWeakBasicHashTable #-}
+
+declareWeakMap
+    :: (Eq k,Hashable k,Typeable k,Typeable v,Typeable b,Eq b,Hashable b)
     => b  -- ^ The identifying name
-    -> HashIO.IOHashTable HashST.HashTable k v 
-declareIOHashTable name = unsafeDupablePerformIO $ lookupOrInsertIOHashTable name
-{-# NOINLINE declareIOHashTable #-}
-
-
+    -> WeakMap.WeakMap k v 
+declareWeakMap name = unsafeDupablePerformIO $ lookupOrInsertWeakMap name
+{-# NOINLINE declareWeakMap #-}
 
 -- | @declareTVar name val@ maps a variable name to an 'TVar'. Calling it multiple times with the same
 -- @name@ and type of 'val' will always return the same 'TVar'.
@@ -293,3 +298,5 @@ declareTVar
                -- the given initial value or not is unspecified.
 declareTVar name val = unsafeDupablePerformIO $ lookupOrInsertTVar name val
 {-# NOINLINE declareTVar #-}
+
+deriving instance Typeable BasicHashST.HashTable

@@ -19,46 +19,50 @@ Cabal-Version:  >= 1.4
 Library
   GHC-Options: -O3 -fforce-recomp
   Hs-Source-Dirs: src
-  Build-Depends:        stm, abstract-deque, concurrent-extra, time, exceptions, ctrie, random, base >= 4.3 && < 5, mtl >= 2.1.2, template-haskell >= 2.7.0.0, containers >= 0.4.2.1, ghc-prim >= 0.2.0.0, QuickCheck >= 2.7, transformers >= 0.3.0.0, split >= 0.2.2, safe >= 0.3.3, hashtables, primitive, hashable, ref-fd >= 0.4, syb-with-class-and-effects, directory, filepath, process, derive, text, graphviz >= 2999.17.0.1, uuid >= 1.3.4, deepseq == 1.3.0.2, strict, unordered-containers, atomic-primops
+  Build-Depends:        syb, async, timeit, stm, abstract-deque, concurrent-extra, time, exceptions, ctrie, random, base >= 4.3 && < 5, mtl >= 2.1.2, template-haskell >= 2.7.0.0, containers >= 0.4.2.1, ghc-prim >= 0.2.0.0, QuickCheck >= 2.7, transformers >= 0.3.0.0, haskell-src-exts, split >= 0.2.2, safe >= 0.3.3, hashtables, primitive, hashable, ref-fd >= 0.4, syb-with-class-and-effects, directory, filepath, process, derive, text, graphviz >= 2999.17.0.1, uuid >= 1.3.4, deepseq == 1.3.0.2, strict, unordered-containers, atomic-primops, weak-hashtables
   exposed-modules:
-    Data.Global.Dynamic
-    Data.Global.TH
-    Data.Strict.List
-    Data.Strict.Maybe
-    Control.Monad.Incremental.List
-    Control.Monad.Incremental.Tree
+    Control.Concurrent.MVar.Exts
     Control.Monad.Incremental.Adapton
-    Control.Monad.Incremental.Adapton.Algorithm
-    Control.Monad.Incremental.Adapton.Display
-    Control.Monad.Incremental.Adapton.Draw
-    Control.Monad.Incremental.Adapton.Layers
-    Control.Monad.Incremental.Adapton.Memo
-    Control.Monad.Incremental.Adapton.Types
-    Control.Monad.Incremental.LazyNonInc
-    Control.Monad.Incremental.LazyNonInc.Algorithm
-    Control.Monad.Incremental.LazyNonInc.Display
-    Control.Monad.Incremental.LazyNonInc.Layers
-    Control.Monad.Incremental.LazyNonInc.Memo
-    Control.Monad.Incremental.LazyNonInc.Types
+    Control.Monad.Incremental.Benchmark
     Control.Monad.Incremental.Display
     Control.Monad.Incremental.Draw
     Control.Monad.Incremental.Generics
+    Control.Monad.Incremental.Internal.Adapton.Algorithm
+    Control.Monad.Incremental.Internal.Adapton.Display
+    Control.Monad.Incremental.Internal.Adapton.Draw
+    Control.Monad.Incremental.Internal.Adapton.Layers
+    Control.Monad.Incremental.Internal.Adapton.Memo
+    Control.Monad.Incremental.Internal.Adapton.Types
+    Control.Monad.Incremental.Internal.LazyNonInc.Algorithm
+    Control.Monad.Incremental.Internal.LazyNonInc.Display
+    Control.Monad.Incremental.Internal.LazyNonInc.Layers
+    Control.Monad.Incremental.Internal.LazyNonInc.Memo
+    Control.Monad.Incremental.Internal.LazyNonInc.Types
+    Control.Monad.Incremental.LazyNonInc
+    Control.Monad.Incremental.List
+    Control.Monad.Incremental.Tree
     Control.Monad.Incremental
-    Control.Monad.Transactional
+    Control.Monad.Ref.Exts
+    Control.Monad.Transactional.Benchmark
+    Control.Monad.Transactional.Internal.TxAdapton.Algorithm
+    Control.Monad.Transactional.Internal.TxAdapton.Layers
+    Control.Monad.Transactional.Internal.TxAdapton.Memo
+    Control.Monad.Transactional.Internal.TxAdapton.Types
+    Control.Monad.Transactional.Internal.TxAdapton.Display
+    Control.Monad.Transactional.Internal.TxAdapton.Draw
     Control.Monad.Transactional.STM
     Control.Monad.Transactional.TxAdapton
-    Control.Monad.Transactional.TxAdapton.Algorithm
-    Control.Monad.Transactional.TxAdapton.Layers
-    Control.Monad.Transactional.TxAdapton.Memo
-    Control.Monad.Transactional.TxAdapton.Types
-    Control.Monad.Transactional.TxAdapton.Display
-    Control.Monad.Transactional.TxAdapton.Draw
-    Control.Monad.Lazy
+    Control.Monad.Transactional
+    Data.Derive.Memo
+    Data.Global.Dynamic
+    Data.Global.TH
+    Data.Memo
+    Data.Strict.List
+    Data.Strict.Maybe
     System.Mem.MemoTable
-    System.Mem.Concurrent.WeakMap
-    System.Mem.WeakTable
-    System.Mem.WeakSet
-    System.Mem.WeakKey
-  Other-modules: Debug
+    System.Mem.StableName.Exts
+    System.Mem.WeakMap
+
+  Other-modules:
 
   extensions: 
