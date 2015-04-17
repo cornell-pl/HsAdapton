@@ -20,5 +20,5 @@ import Control.Monad.Incremental.Internal.Adapton.Algorithm ()
 import Control.Monad.Incremental.Internal.Adapton.Display
 import Control.Monad.Incremental.Internal.Adapton.Draw
 import Control.Monad.Incremental.Internal.Adapton.Layers (Inner,Outer,proxyAdapton,IncParams(..))
-import Control.Monad.Incremental.Internal.Adapton.Types (U,M,L,T,Adapton)
+import Control.Monad.Incremental.Internal.Adapton.Types (U,M,L,S,Adapton)
 import Control.Monad.Incremental.Internal.Adapton.Memo

@@ -340,6 +340,9 @@ customerJob' params (warehouse,leastItem) choice customer = do
 			writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time
 	action
 
+customersSTM :: TxBenchmark STM (CustomersData STMVar T Outside STM) Bool (Customer STMVar Outside STM)
+customersSTM = TxBenchmark "CustomerSTM" genCustomersData genCustomersThreads customerJob'
+
 customersLazyNonIncBench :: TxBenchmark LazyNonInc (CustomersData LazyNonIncM LazyNonIncU Outside LazyNonInc) Bool (Customer LazyNonIncM Outside LazyNonInc)
 customersLazyNonIncBench = TxBenchmark "CustomerLazyNonInc" genCustomersData genCustomersThreads customerJob'
 
@@ -352,10 +355,10 @@ customersTxAdaptonEBench = TxBenchmark "CustomerTxAdaptonE" genCustomersData gen
 customersTxAdaptonEBench' :: TxBenchmark TxAdaptonE (CustomersData TxME TxUE Inside TxAdaptonE) Bool (Customer TxME Inside TxAdaptonE)
 customersTxAdaptonEBench' = TxBenchmark "CustomerTxAdaptonE" genCustomersData genCustomersThreads customerJob'
 
-customersNonIncEBench :: TxBenchmark TxAdaptonE (CustomersData TxME TxOE Outside TxAdaptonE) Bool (Customer TxME Outside TxAdaptonE)
+customersNonIncEBench :: TxBenchmark TxAdaptonE (CustomersData TxME T Outside TxAdaptonE) Bool (Customer TxME Outside TxAdaptonE)
 customersNonIncEBench = TxBenchmark "CustomerNonIncE" genCustomersData genCustomersThreads customerJob
 
-customersNonIncCBench :: TxBenchmark TxAdaptonC (CustomersData TxMC TxOC Outside TxAdaptonC) Bool (Customer TxMC Outside TxAdaptonC)
+customersNonIncCBench :: TxBenchmark TxAdaptonC (CustomersData TxMC T Outside TxAdaptonC) Bool (Customer TxMC Outside TxAdaptonC)
 customersNonIncCBench = TxBenchmark "CustomerNonIncC" genCustomersData genCustomersThreads customerJob
 
 main :: IO ()

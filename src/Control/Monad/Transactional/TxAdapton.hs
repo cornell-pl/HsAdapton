@@ -18,8 +18,8 @@ import Control.Monad.Incremental.Draw
 import Control.Monad.Transactional
 
 import Control.Monad.Transactional.Internal.TxAdapton.Algorithm ()
-import Control.Monad.Transactional.Internal.TxAdapton.Layers (IncParams(..),TxAdaptonE, TxAdaptonC, TxME, TxMC, TxUE, TxUC, TxOE, TxOC, proxyTxAdaptonE, proxyTxAdaptonC)
-import Control.Monad.Transactional.Internal.TxAdapton.Types (TxM,TxO,TxU,TxConflict(..),TxAdapton,STxAdaptonM)
+import Control.Monad.Transactional.Internal.TxAdapton.Layers (IncParams(..),TxAdaptonE, TxAdaptonC, TxME, TxMC, TxUE, TxUC, proxyTxAdaptonE, proxyTxAdaptonC)
+import Control.Monad.Transactional.Internal.TxAdapton.Types (TxM,TxU,TxConflict(..),TxAdapton,STxAdaptonM)
 import Control.Monad.Transactional.Internal.TxAdapton.Display
 import Control.Monad.Transactional.Internal.TxAdapton.Memo ()
 import Control.Monad.Transactional.Internal.TxAdapton.Draw

@@ -25,6 +25,7 @@ import Debug
 import GHC.Exts
 import Data.Derive.Memo
 import Control.Applicative
+import System.Mem.StableName.Exts
 
 -- | General class for incremental computation libraries
 class (
@@ -323,3 +324,36 @@ instance (Typeable inc,Typeable a) => Memo (Outside inc a) where
 
 data MemoPolicy = MemoLinear -- stores at most as much space as a single run of the program; users have to explicitely retain output thunks for them to remain memoized
 			  | MemoSuperlinear -- stores all previous executions for live inputs; users do not have to explicitely retain output thunks for them to remain memoized
+
+
+-- non-incremental thunk
+
+newtype T (l :: * -> * -> *) inc a = T { unT :: l inc a } deriving Typeable
+
+instance Eq (T l inc a) where
+	t1 == t2 = stableName t1 == stableName t2
+
+instance (Layer l inc) => Thunk T l inc where
+	new = return . T
+	{-# INLINE new #-}
+	newc = return . T . return
+	{-# INLINE newc #-}
+	read = unT
+	{-# INLINE read #-}
+
+instance (Layer l inc) => Output T l inc where
+	thunk = return . T
+	{-# INLINE thunk #-}
+	const = return . T . return
+	{-# INLINE const #-}
+	force = unT
+	{-# INLINE force #-}
+
+instance DeepTypeable T where
+	typeTree _ = MkTypeTree (mkName "Control.Monad.Incremental.T") [] []
+
+instance (DeepTypeable l,DeepTypeable inc,DeepTypeable a) => DeepTypeable (T l inc a) where
+	typeTree (_ :: Proxy (T l inc a)) = MkTypeTree (mkName "Control.Monad.Incremental.T") args [MkConTree (mkName "Control.Monad.Incremental.mod") [typeTree (Proxy::Proxy a)]]
+		where args = [typeTree (Proxy::Proxy l),typeTree (Proxy::Proxy inc),typeTree (Proxy::Proxy a)]
+
+$(deriveMemo ''T)

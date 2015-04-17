@@ -1,4 +1,4 @@
-{-# LANGUAGE OverlappingInstances, UndecidableInstances, FlexibleContexts, FlexibleInstances, KindSignatures, MultiParamTypeClasses #-}
+{-# LANGUAGE ConstraintKinds, OverlappingInstances, UndecidableInstances, FlexibleContexts, FlexibleInstances, KindSignatures, MultiParamTypeClasses #-}
 
 module Control.Monad.Incremental.Display (
 	  Display(..), DisplayS(..), DisplayDict(..)
@@ -12,7 +12,7 @@ import Control.Monad.IO.Class
 
 import Data.Monoid
 import Data.Typeable
-import Control.DeepSeq
+import Control.DeepSeq hiding (force)
 import Control.Monad.Trans
 import Control.Monad
 import Data.Typeable
@@ -134,3 +134,22 @@ instance (Layer l inc,MData (NFDataIncDict l inc) (l inc) a) => NFDataInc l inc 
 
 
 
+instance (IncK inc a,Display Outside inc a,Output T l inc) => Display Outside inc (T l inc a) where
+	displaysPrec proxyL proxyInc m rest = forceOutside m >>= \x -> liftM (\x -> "<" ++ x) $ displaysPrec proxyL proxyInc x ('>':rest)
+	{-# INLINE displaysPrec #-}
+
+instance (IncK inc a,Display Inside inc a,Output T Inside inc) => Display Inside inc (T Inside inc a) where
+	displaysPrec proxyL proxyInc m rest = force m >>= \x -> liftM (\x -> "<" ++ x) $ displaysPrec proxyL proxyInc x ('>':rest)
+	{-# INLINE displaysPrec #-}
+	
+instance (IncK inc a,NFDataInc Outside inc a,Output T l inc) => NFDataInc Outside inc (T l inc a) where
+	nfDataInc proxyL proxyInc m = forceOutside m >>= nfDataInc proxyL proxyInc
+	{-# INLINE nfDataInc #-}
+
+instance (IncK inc a,NFDataInc Inside inc a,Output T Inside inc) => NFDataInc Inside inc (T Inside inc a) where
+	nfDataInc proxyL proxyInc m = force m >>= nfDataInc proxyL proxyInc
+	{-# INLINE nfDataInc #-}
+
+
+instance Show (T l inc a) where
+	show t = "T"

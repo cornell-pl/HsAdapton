@@ -127,11 +127,11 @@ import Control.Monad.ST
 
 ------------------------------------------------------------------------------
 -- | An open addressing hash table using linear probing.
-newtype HashTable s k v = HT (STRef s (HashTable_ s k v),Weak (HashTable_ s k v)) deriving Typeable
+newtype HashTable s k v = HT (STRef s (HashTable_ s k v),Weak (STRef s (HashTable_ s k v))) deriving Typeable
 
 type SizeRefs s = A.MutableByteArray s
 
-weakPtr :: HashTable s k v -> Weak (HashTable_ s k v)
+weakPtr :: HashTable s k v -> Weak (STRef s (HashTable_ s k v))
 weakPtr (HT (_,w)) = w
 
 instance WeakKey (HashTable s k v) where
@@ -215,7 +215,7 @@ newSized n = do
     let m = nextBestPrime $ ceiling (fromIntegral n / maxLoad)
     ht <- newSizedReal m
     stref <- newSTRef ht
-    w <- unsafeIOToST $ Weak.mkWeakKeySTRef stref ht $ table_finalizer ht
+    w <- unsafeIOToST $ Weak.mkWeakKeySTRef stref stref $ table_finalizer stref
     return $ HT (stref,w)
 {-# INLINE newSized #-}
 
@@ -225,7 +225,7 @@ newSizedWithMkWeak n (MkWeak mkWeak) = do
     let m = nextBestPrime $ ceiling (fromIntegral n / maxLoad)
     ht <- newSizedReal m
     stref <- newSTRef ht
-    w <- unsafeIOToST $ mkWeak ht $ Just $ table_finalizer ht
+    w <- unsafeIOToST $ mkWeak stref $ Just $ table_finalizer stref
     return $ HT (stref,w)
 {-# INLINE newSizedWithMkWeak #-}
 
@@ -401,15 +401,15 @@ insertWithMkWeak htRef !k !v !(MkWeak mkWeak) = do
         values = _values ht
 {-# INLINE insertWithMkWeak #-}
 
-deleteWeak :: (Eq k,Hashable k) => Weak (HashTable_ s k v) -> k -> IO ()
+deleteWeak :: (Eq k,Hashable k) => Weak (STRef s (HashTable_ s k v)) -> k -> IO ()
 deleteWeak !w !k = do
 	mb <- Weak.deRefWeak w
 	case mb of
 		Nothing -> return ()
-		Just ht -> let !h = hash k in unsafeSTToIO $ delete' ht True k h >> return ()
+		Just stref -> let !h = hash k in unsafeSTToIO $ readSTRef stref >>= \ht -> delete' ht True k h >> return ()
 
-table_finalizer :: (Eq k,Hashable k) => HashTable_ s k v -> IO ()
-table_finalizer ht = unsafeSTToIO $ mapM_' (\(!k,!w) -> unsafeIOToST $ Weak.finalize w) ht
+table_finalizer :: (Eq k,Hashable k) => STRef s (HashTable_ s k v) -> IO ()
+table_finalizer htRef = unsafeSTToIO $ readSTRef htRef >>= mapM_' (\(!k,!w) -> unsafeIOToST $ Weak.finalize w)
 {-# INLINE table_finalizer #-}
 
 finalize :: (Eq k,Hashable k) => HashTable s k v -> ST s ()
