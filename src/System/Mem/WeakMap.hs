@@ -177,7 +177,7 @@ unionWithKey :: (Ord k,Hashable k) => (v -> MkWeak) -> WeakMap k v -> WeakMap k 
 unionWithKey getKey wmap m@(WeakMap (tbl :!: _)) = do
 	xs <- liftM HashMap.toList $ readIORef tbl
 	
-	let addFinalizers (k,w) = do
+	let go (k,w) = do
 		mb <- Weak.deRefWeak w
 		case mb of
 			Nothing -> return ()
@@ -186,7 +186,7 @@ unionWithKey getKey wmap m@(WeakMap (tbl :!: _)) = do
 				mkWeak () (Just $ deleteFinalized wmap k)
 				insertWeak wmap k w
 	
-	Foldable.mapM_ addFinalizers xs
+	Foldable.mapM_ go xs
 
 -- right-biased
 -- the second @WeakMap@ is not accessed concurrently
@@ -195,13 +195,13 @@ unionWithKey' :: (Ord k,Hashable k) => WeakMap k v -> WeakMap k v -> IO ()
 unionWithKey' wmap m@(WeakMap (tbl :!: _)) = do
 	xs <- liftM HashMap.toList $ readIORef tbl
 	
-	let addFinalizers (k,w) = do
+	let go (k,w) = do
 		mb <- Weak.deRefWeak w
 		case mb of
 			Nothing -> return ()
 			Just x -> insertWeak wmap k w
 	
-	Foldable.mapM_ addFinalizers xs
+	Foldable.mapM_ go xs
 
 --extendWithKey :: (Ord k,Hashable k) => (v -> MkWeak) -> WeakMap k v -> WeakMap k v -> IO ()
 --extendWithKey = mergeWithKey (\_ _ -> return False)

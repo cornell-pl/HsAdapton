@@ -47,6 +47,8 @@ import System.Mem.Weak.Exts as Weak
 import System.IO.Unsafe
 import System.Mem.StableName.Exts
 
+import Control.Monad.Transactional.SHFSTM as SHFSTM
+
 
 type Warehouse mod (l :: * -> * -> *) inc = ListMod mod l inc (Item mod l inc)
 data Item mod (l :: * -> * -> *) inc = Item { itemName :: String, itemPrice :: mod l inc Int, itemInflation :: Int, itemQuantity :: mod l inc Int }
@@ -309,8 +311,8 @@ customerJob params (warehouse,leastItem) choice customer = do
 --				drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
 				return str
 			writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time
-	let noBalance2 e@(NoBalance msg) = debugM msg $ Catch.throwM e
-	let anyException (e::SomeException) = debugM (show e) $ Catch.throwM e
+	let noBalance2 e@(NoBalance msg) = error $ "exception: "++msg
+	let anyException (e::SomeException) = error $ "exception: "++show e
 	action `Catch.catches` [Catch.Handler noBalance2,Catch.Handler anyException]
 
 customerJob' :: (Layers l Outside,Display Outside inc (ListMod thunk l inc (Item mod l inc)),IncK inc Int,IncK inc (ListMod' thunk l inc (Item mod l inc)),IncK inc (ListMod' mod l inc (String, Int)),IncK inc (ListMod' mod l inc (Item mod l inc)),Output thunk l inc,Input mod l inc,Display Outside inc (ListMod mod l inc (String,Int)),Display Outside inc (mod l inc Int))
@@ -340,8 +342,11 @@ customerJob' params (warehouse,leastItem) choice customer = do
 			writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time
 	action
 
-customersSTM :: TxBenchmark STM (CustomersData STMVar T Outside STM) Bool (Customer STMVar Outside STM)
-customersSTM = TxBenchmark "CustomerSTM" genCustomersData genCustomersThreads customerJob'
+customersSTMBench :: TxBenchmark STM (CustomersData STMVar T Outside STM) Bool (Customer STMVar Outside STM)
+customersSTMBench = TxBenchmark "CustomerSTM" genCustomersData genCustomersThreads customerJob'
+
+customersSHFSTMBench :: TxBenchmark SHFSTM (CustomersData SHFSTMVar T Outside SHFSTM) Bool (Customer SHFSTMVar Outside SHFSTM)
+customersSHFSTMBench = TxBenchmark "CustomerSTM" genCustomersData genCustomersThreads customerJob'
 
 customersLazyNonIncBench :: TxBenchmark LazyNonInc (CustomersData LazyNonIncM LazyNonIncU Outside LazyNonInc) Bool (Customer LazyNonIncM Outside LazyNonInc)
 customersLazyNonIncBench = TxBenchmark "CustomerLazyNonInc" genCustomersData genCustomersThreads customerJob'
@@ -366,18 +371,24 @@ main = do
 	-- synchronous debugging I/O
 	hSetBuffering stdout NoBuffering
 	
-	race_ debugger $ do
+	concurrently debugger $ do
+		
+		-- compare to other STMs
+--		runTxBenchmark customersSTMBench defaultIncParams (10^4) 10 5
+--		runTxBenchmark customersSHFSTMBench defaultIncParams (10^4) 30 5
+		runTxBenchmark customersNonIncEBench ((defaultIncParamsProxy proxyTxAdaptonE) { txAdaptonMemoSize = 10^4 }) (10^4) 10 5
+		
 		-- non-incremental, non-threaded
 --		runTxBenchmark customersLazyNonIncBench (defaultIncParamsProxy proxyLazyNonInc) (10^5) 50 1
 		-- incremental, non-threaded
 --		runTxBenchmark customersAdaptonBench ((defaultIncParamsProxy proxyAdapton) { adaptonMemoSize = 10^5 }) (10^5) 250 1
 
 		-- non-incremental, threaded
-		runTxBenchmark customersNonIncEBench defaultIncParams (10^4) 20 1
+--		runTxBenchmark customersNonIncEBench defaultIncParams (10^4) 20 1
 --		runTxBenchmark customersNonIncCBench defaultIncParams (10^5) 40 1
     	
 		-- incremental, 1 thread
---		runTxBenchmark customersTxAdaptonEBench' ((defaultIncParamsProxy proxyTxAdaptonE) { txAdaptonMemoSize = 10^5 }) (10^5) 40 1
+--		runTxBenchmark customersTxAdaptonEBench ((defaultIncParamsProxy proxyTxAdaptonE) { txAdaptonMemoSize = 10^3 }) (10^3) 40 1
 	
 	return ()
 

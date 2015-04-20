@@ -58,6 +58,9 @@ testprofspace2fast:
 benx:
 	ghc --make -O3 -threaded bench.hs -fforce-recomp -isrc
 	./bench --output bench.html
+benxfast:
+	ghc --make -threaded bench.hs -fforce-recomp -isrc
+	./bench --output bench.html
 txfast:
 	ghc --make -O0 -threaded txadapton.hs -fforce-recomp -isrc
 	./txadapton --output txadapton.html

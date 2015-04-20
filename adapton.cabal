@@ -22,6 +22,7 @@ Library
   Build-Depends:        syb, async, timeit, stm, abstract-deque, concurrent-extra, time, exceptions, ctrie, random, base >= 4.3 && < 5, mtl >= 2.1.2, template-haskell >= 2.7.0.0, containers >= 0.4.2.1, ghc-prim >= 0.2.0.0, QuickCheck >= 2.7, transformers >= 0.3.0.0, haskell-src-exts, split >= 0.2.2, safe >= 0.3.3, hashtables, primitive, hashable, ref-fd >= 0.4, syb-with-class-and-effects, directory, filepath, process, derive, text, graphviz >= 2999.17.0.1, uuid >= 1.3.4, deepseq == 1.3.0.2, strict, unordered-containers, atomic-primops, weak-hashtables
   exposed-modules:
     Control.Concurrent.MVar.Exts
+    Control.Concurrent.Lock.Exts
     Control.Monad.Incremental.Adapton
     Control.Monad.Incremental.Benchmark
     Control.Monad.Incremental.Display

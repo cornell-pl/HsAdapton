@@ -89,7 +89,7 @@ module Data.HashTable.Weak.ST.Basic
   , lookup
   , insert, insertWeak, insertWithMkWeak
   , mapM_, mapWeakM_
-  , foldM, foldWeakM
+  , foldM, foldWeakM, foldStopM
   , computeOverhead
   , finalize
   ) where
@@ -434,6 +434,23 @@ foldM f seed0 htRef = readRef htRef >>= work
                 mb <- unsafeIOToST $ Weak.deRefWeak w
                 !seed' <- case mb of { Nothing -> return seed; Just v -> f seed (k,v) }
                 go (i+1) seed'
+
+foldStopM :: (a -> (k,v) -> ST s (Either a a)) -> a -> HashTable s k v -> ST s a
+foldStopM f seed0 htRef = readRef htRef >>= work
+  where
+    work (HashTable sz _ hashes keys values) = go 0 seed0
+      where
+        go !i !seed | i >= sz = return seed
+                    | otherwise = do
+            h <- U.readArray hashes i
+            if recordIsEmpty h || recordIsDeleted h
+              then go (i+1) seed
+              else do
+                k <- readArray keys i
+                w <- readArray values i
+                mb <- unsafeIOToST $ Weak.deRefWeak w
+                !e <- case mb of { Nothing -> return (Right seed); Just v -> f seed (k,v) }
+                case e of { Left !seed' -> return seed'; Right !seed' -> go (i+1) seed' }
 
 foldWeakM :: (a -> (k,Weak v) -> ST s a) -> a -> HashTable s k v -> ST s a
 foldWeakM f seed0 htRef = readRef htRef >>= work

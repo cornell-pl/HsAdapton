@@ -51,7 +51,7 @@ module Data.HashTable.Weak.IO
   , fromListWithSizeHint
   , toList
   , mapM_, mapWeakM_
-  , foldM, foldWeakM
+  , foldM, foldWeakM, foldStopIO
   , computeOverhead, finalize
   ) where
 
@@ -89,6 +89,8 @@ type BasicHashTable k v = IOHashTable (B.HashTable) k v
 -- 'IO'.
 type IOHashTable tabletype k v = tabletype (PrimState IO) k v
 
+foldStopIO :: (a -> (k,v) -> IO (Either a a)) -> a -> BasicHashTable k v -> IO a
+foldStopIO f z ht = stToIO $ B.foldStopM (\x y -> unsafeIOToST $ f x y) z ht
 
 ------------------------------------------------------------------------------
 -- | See the documentation for this function in "Data.HashTable.Class#v:new".

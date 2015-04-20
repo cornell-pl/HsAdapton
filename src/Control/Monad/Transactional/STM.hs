@@ -46,7 +46,7 @@ instance Incremental STM where
 	-- | this function is actually safe in this context, since we support no incrementality
 	unsafeWorld = InsideSTM . unOutsideSTM
 	
-	runIncremental (OutsideSTM stm) = STM.atomically stm
+	runIncrementalWithParams params (OutsideSTM stm) = STM.atomically stm
 	
 	data IncParams STM = STMParams
 	defaultIncParams = STMParams
