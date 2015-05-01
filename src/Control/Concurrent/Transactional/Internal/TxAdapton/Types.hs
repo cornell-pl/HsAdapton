@@ -116,35 +116,35 @@ type instance IncK (TxAdapton c) a = (Typeable a,Eq a,Show a
 
 readRootTx :: TxLayer l c => l (TxAdapton c) (Bool,ThreadId)
 readRootTx = do
-	(s :!: parent :!: fs :!: x :!: y :!: z) <- Reader.ask
+	(s :!: parent :!: fs :!: x :!: y :!: z) <- (txLayer Proxy Reader.ask)
 	case parent of
 		Just tid -> return (True,tid)
 		Nothing -> unsafeIOToInc $ liftM (False,) $ myThreadId
 
 readFuturesTx :: TxLayer l c => l (TxAdapton c) (IORef (Map ThreadId (DynTxFuture c)))
 readFuturesTx = do
-	(s :!: parent :!: fs :!: x :!: y :!: z) <- Reader.ask
+	(s :!: parent :!: fs :!: x :!: y :!: z) <- (txLayer Proxy Reader.ask)
 	return fs
 
 {-# INLINE readTxStack #-}
 readTxStack :: TxLayer l c => l (TxAdapton c) (TxCallStack c)
-readTxStack = liftM (\(!(s :!: parent :!: fs :!: x :!: y :!: z)) -> y) $ Reader.ask
+readTxStack = liftM (\(!(s :!: parent :!: fs :!: x :!: y :!: z)) -> y) $ (txLayer Proxy Reader.ask)
 
 {-# INLINE readTxParams #-}
 readTxParams :: TxLayer l c => l (TxAdapton c) (IncParams (TxAdapton c))
-readTxParams = liftM (\(!(s :!: parent :!: fs :!: x :!: y :!: z)) -> s) $ Reader.ask
+readTxParams = liftM (\(!(s :!: parent :!: fs :!: x :!: y :!: z)) -> s) $ (txLayer Proxy Reader.ask)
 
 {-# INLINE readTxLogs #-}
 readTxLogs :: TxLayer l c => l (TxAdapton c) (TxLogs c)
-readTxLogs = liftM (\(!(s :!: parent :!: fs :!: x :!: y :!: z)) -> z) $ Reader.ask
+readTxLogs = liftM (\(!(s :!: parent :!: fs :!: x :!: y :!: z)) -> z) $ (txLayer Proxy Reader.ask)
 
 {-# INLINE readTxId #-}
 readTxId :: TxLayer l c => l (TxAdapton c) (TxId c)
-readTxId = liftM (\(!(s :!: parent :!: fs :!: x :!: y :!: z)) -> x) Reader.ask >>= unsafeIOToInc . readIORef
+readTxId = liftM (\(!(s :!: parent :!: fs :!: x :!: y :!: z)) -> x) (txLayer Proxy Reader.ask) >>= unsafeIOToInc . readIORef
 
 {-# INLINE readTxIdRef #-}
 readTxIdRef :: TxLayer l c => l (TxAdapton c) (IORef (TxId c))
-readTxIdRef = liftM (\(!(s :!: parent :!: fs :!: x :!: y :!: z)) -> x) Reader.ask
+readTxIdRef = liftM (\(!(s :!: parent :!: fs :!: x :!: y :!: z)) -> x) $ txLayer Proxy $ Reader.ask
 
 type Wakes = Map Unique Lock
 
@@ -398,7 +398,7 @@ class TxLayerImpl l where
 	unTxLayer :: Proxy l -> l (TxAdapton c) a -> ReaderT (TxEnv c) IO a
 	txLayer :: Proxy l -> ReaderT (TxEnv c) IO a -> l (TxAdapton c) a
 
-type TxLayer l c = (Monoid (RepairDynTxVar c),TxLayerImpl l,Show (InvalidTx c),Show (TxId c),MonadBlock c (ReaderT (TxEnv c) IO),MonadBlock c IO,Typeable c,TxConflictClass c,Typeable l,Layer l (TxAdapton c),MonadReader (TxEnv c) (l (TxAdapton c)))
+type TxLayer l c = (Monoid (RepairDynTxVar c),TxLayerImpl l,Show (InvalidTx c),Show (TxId c),MonadBlock c (ReaderT (TxEnv c) IO),MonadBlock c IO,Typeable c,TxConflictClass c,Typeable l,Layer l (TxAdapton c))
 
 debugTx,debugTx2 :: TxLayer l c => String -> l (TxAdapton c) ()
 --debugTx str = return ()

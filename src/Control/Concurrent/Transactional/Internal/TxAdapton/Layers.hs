@@ -281,27 +281,6 @@ instance TxLayerImpl Outside where
 {-# SPECIALIZE unTxLayer :: Proxy Inside -> Inside TxAdaptonC a -> ReaderT TxEnvC IO a #-}
 {-# SPECIALIZE unTxLayer :: Proxy Outside -> Outside TxAdaptonC a -> ReaderT TxEnvC IO a #-}
 
-instance MonadReader TxEnvE (Outside (TxAdapton EarlyConflict)) where
-	ask = TxOuter $ ask
-	local f (TxOuter m) = TxOuter $ local f m
-	{-# INLINE ask #-}
-	{-# INLINE local #-}
-instance MonadReader TxEnvC (Outside (TxAdapton CommitConflict)) where
-	ask = TxOuter $ ask
-	local f (TxOuter m) = TxOuter $ local f m
-	{-# INLINE ask #-}
-	{-# INLINE local #-}
-instance MonadReader TxEnvE (Inside (TxAdapton EarlyConflict)) where
-	ask = TxInner $ ask
-	local f (TxInner m) = TxInner $ local f m
-	{-# INLINE ask #-}
-	{-# INLINE local #-}
-instance MonadReader TxEnvC (Inside (TxAdapton CommitConflict)) where
-	ask = TxInner $ ask
-	local f (TxInner m) = TxInner $ local f m
-	{-# INLINE ask #-}
-	{-# INLINE local #-}
-
 type TxAdaptonE = TxAdapton EarlyConflict
 type TxAdaptonC = TxAdapton CommitConflict
 

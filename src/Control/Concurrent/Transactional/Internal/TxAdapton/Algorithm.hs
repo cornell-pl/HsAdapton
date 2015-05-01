@@ -968,7 +968,7 @@ orElseTx (stm1 :: Outside (TxAdapton c) a) stm2 = do1 where
 -- appends a freshly created txlog for the inner tx
 startNestedTx :: TxLayer Outside c => Outside (TxAdapton c) a -> Outside (TxAdapton c) a
 startNestedTx m = do
-	(params :!: root :!: fs :!: starttime :!: stack :!: txlogs) <- Reader.ask
+	(params :!: root :!: fs :!: starttime :!: stack :!: txlogs) <- (txLayer Proxy Reader.ask)
 	unsafeIOToInc $ do
 		txlog <- emptyTxLog starttime $ txAdaptonMemoSize params
 		Reader.runReaderT (runTxOuter m) (params :!: root :!: fs :!: starttime :!: stack :!: SCons txlog txlogs)
@@ -985,7 +985,7 @@ futureTx stm = do
 	try result = do
 		x <- stm
 		mb <- validateFutureTx "futureTx" Nothing
-		txenv <- Reader.ask
+		txenv <- (txLayer Proxy Reader.ask)
 		thread <- unsafeIOToInc myThreadId
 		case mb of
 			Nothing -> unsafeIOToInc $ putMVar "futureTx" result (Right x :!: thread :!: txenv)
@@ -1009,7 +1009,7 @@ joinTx f@(TxFuture result) = do
 forkNestedTx :: (TxLayer Inside c,TxLayer Outside c) => ThreadId -> TxFuture c a -> Outside (TxAdapton c) () -> Outside (TxAdapton c) ()
 forkNestedTx rootThread (f :: TxFuture c a) m = do
 	parent_thread <- unsafeIOToInc myThreadId
-	(params :!: root :!: fs :!: starttime :!: stack :!: txlogs) <- Reader.ask
+	(params :!: root :!: fs :!: starttime :!: stack :!: txlogs) <- (txLayer Proxy Reader.ask)
 	
 	let child = (runTxOuter m) `Catch.catches` [unmaskedHandler catchRetry,unmaskedHandler catchInvalid,unmaskedHandler catchSome]
 	
@@ -1104,7 +1104,7 @@ commitFutureTx msg doWrites child_thread child_env@(txEnvLogs -> SCons child_txl
 -- no exceptions should be raised inside this block
 validateAndCommitTopTx :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => String -> Bool -> l (TxAdapton c) (Maybe (InvalidTxRepair c))
 validateAndCommitTopTx msg doWrites = waitForChildrenTx >> atomicTx ("validateAndCommitTopTx "++msg) (\doEvals -> do
-	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog SNil)) <- Reader.ask
+	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog SNil)) <- (txLayer Proxy Reader.ask)
 	starttime <- unsafeIOToInc $ readIORef' timeref
 	(isFuture,_) <- readRootTx
 	mbsuccess <- unsafeIOToInc $ validateTxs isFuture starttime txlogs
@@ -1117,7 +1117,7 @@ validateAndCommitTopTx msg doWrites = waitForChildrenTx >> atomicTx ("validateAn
 
 validateAndCommitNestedTx :: (TxLayer Inside c,TxLayer Outside c) => String -> Maybe SomeException -> Outside (TxAdapton c) ()
 validateAndCommitNestedTx msg mbException = do
-	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog1 txlogs1)) <- Reader.ask
+	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog1 txlogs1)) <- (txLayer Proxy Reader.ask)
 	starttime <- unsafeIOToInc $ readIORef' timeref
 	(isFuture,rootThread) <- readRootTx
 	case mbException of
@@ -1134,7 +1134,7 @@ validateAndCommitNestedTx msg mbException = do
 
 validateFutureTx :: (TxLayer Inside c,TxLayer Outside c) => String -> Maybe SomeException -> Outside (TxAdapton c) (Maybe (InvalidTxRepair c))
 validateFutureTx msg mbException = do
-	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog1 txlogs1)) <- Reader.ask
+	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog1 txlogs1)) <- (txLayer Proxy Reader.ask)
 	starttime <- unsafeIOToInc $ readIORef' timeref
 	(isFuture,rootThread) <- readRootTx
 	case mbException of
@@ -1162,7 +1162,7 @@ validateCatchTx msg = do
 -- validates a transaction and places it into the waiting queue for retrying
 validateAndRetryTopTx :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => String -> l (TxAdapton c) (Either Lock (InvalidTxRepair c))
 validateAndRetryTopTx msg = atomicTx ("validateAndRetryTopTx "++msg) $ \doEvals -> do
-	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog SNil)) <- Reader.ask
+	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog SNil)) <- (txLayer Proxy Reader.ask)
 	starttime <- unsafeIOToInc $ readIORef' timeref
 	(isFuture,_) <- readRootTx
 	-- validates the current and enclosing txs up the tx tree
@@ -1180,7 +1180,7 @@ validateAndRetryTopTx msg = atomicTx ("validateAndRetryTopTx "++msg) $ \doEvals 
 -- note that retrying discards the tx's writes
 validateAndRetryNestedTx :: (TxLayer Inside c,TxLayer Outside c) => String -> Outside (TxAdapton c) ()
 validateAndRetryNestedTx msg = do
-	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog1 txlogs1)) <- Reader.ask
+	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog1 txlogs1)) <- (txLayer Proxy Reader.ask)
 	starttime <- unsafeIOToInc $ readIORef' timeref
 	(isFuture,_) <- readRootTx
 	mbsuccess <- unsafeIOToInc $ validateTxs isFuture starttime txlogs
@@ -1275,13 +1275,14 @@ checkTxNotifiesE False meta xs = readMVar "checkTxNotifiesE" xs >>= Map.foldrWit
 {-# INLINE restartTx #-}
 restartTx :: TxLayer l c => TxId c -> l (TxAdapton c) a -> l (TxAdapton c) a
 restartTx newtime m = do
- 	!(_ :!: rootThread :!: fs :!: timeref :!: stack :!: logs) <- Reader.ask
+ 	!(_ :!: rootThread :!: fs :!: timeref :!: stack :!: logs) <- (txLayer Proxy Reader.ask)
 	unsafeIOToInc $! writeIORef' timeref newtime
 	m
 
 {-# INLINE resetTx #-}
 resetTx :: TxLayer l c => l (TxAdapton c) a -> l (TxAdapton c) a
 resetTx (m :: l (TxAdapton c) a) = do
+	let l = Proxy :: Proxy l
 	!thread <- unsafeIOToInc myThreadId
 	-- unmemoize all old buffered memotables
 	readTxLogs >>= unsafeIOToInc . unbufferTxLogMemos thread
@@ -1290,7 +1291,7 @@ resetTx (m :: l (TxAdapton c) a) = do
 	!params <- readTxParams
 	!fs <- unsafeIOToInc $ newIORef' Map.empty
 	!tbl <- unsafeIOToInc $ emptyTxLog now $ txAdaptonMemoSize params
-	Reader.local (\_ -> (params :!: Nothing :!: fs :!: now :!: stack :!: SCons tbl SNil)) m
+	txLayer l $ Reader.local (\_ -> (params :!: Nothing :!: fs :!: now :!: stack :!: SCons tbl SNil)) $ unTxLayer l m
 
 instance TxConflictClass EarlyConflict where
 	
