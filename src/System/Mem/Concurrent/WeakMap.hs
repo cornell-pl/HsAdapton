@@ -2,7 +2,7 @@
 
 module System.Mem.Concurrent.WeakMap (
 	  WeakMap(..)
-	, new,new'
+	, new,new',copy'
 	, lookup
 	, insertWithMkWeak, insertWeak, mergeWeak
 	, deleteFinalized, finalizeEntry
@@ -69,6 +69,13 @@ new = do
 new' :: (Eq k,Hashable k) => IO (WeakMap k v)
 new' = do
 	tbl <- newMVar Map.empty
+	weak_tbl <- Weak.mkWeakKey tbl tbl Nothing
+	return $ WeakMap (tbl :!: weak_tbl)
+
+{-# NOINLINE copy' #-}
+copy' :: (Eq k,Hashable k) => WeakMap k v -> IO (WeakMap k v)
+copy' (WeakMap (src_tbl :!: _)) = do
+	tbl <- readMVar src_tbl >>= newMVar
 	weak_tbl <- Weak.mkWeakKey tbl tbl Nothing
 	return $ WeakMap (tbl :!: weak_tbl)
 

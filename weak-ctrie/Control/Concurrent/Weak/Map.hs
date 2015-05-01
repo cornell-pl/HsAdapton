@@ -16,7 +16,7 @@
 --
 -----------------------------------------------------------------------
 
-module Control.Concurrent.WeakMap
+module Control.Concurrent.Weak.Map
     ( WeakMap
 
       -- * Construction
@@ -53,7 +53,7 @@ import GHC.STRef
 import GHC.Weak
 import GHC.Base
 
-import qualified Control.Concurrent.Map as CMap
+import qualified Control.Concurrent.Map.Exts as CMap
 
 -----------------------------------------------------------------------
 
@@ -74,13 +74,13 @@ lookupOrInsertMkWeak w_tbl@(WeakMap (tbl_ref :!: weak_tbl)) k mv mk = do
 
 {-# INLINE insert #-}
 insert :: (Eq k, Hashable k) => WeakMap k v -> k -> v -> IO ()
-insert tbl k v = Control.Concurrent.WeakMap.insertWith tbl k k v
+insert tbl k v = Control.Concurrent.Weak.Map.insertWith tbl k k v
 
 -- | the key @k@ stores the entry for the value @a@ in the table
 insertWith :: (Eq k, Hashable k) => WeakMap k v -> a -> k -> v -> IO ()
 insertWith w_tbl@(WeakMap (tbl_ref :!: weak_tbl)) a k v = do
 	tbl <- readIORef tbl_ref
-	weak <- Weak.mkWeak a v $ Just $ Control.Concurrent.WeakMap.deleteFinalized' weak_tbl k
+	weak <- Weak.mkWeak a v $ Just $ Control.Concurrent.Weak.Map.deleteFinalized' weak_tbl k
 	CMap.insert k weak tbl
 
 insertWithMkWeak :: (Eq k,Hashable k) => WeakMap k v -> MkWeak -> k -> v -> IO ()

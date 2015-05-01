@@ -7,13 +7,12 @@ import Control.Monad.Incremental
 import Control.Concurrent.Future
 import Control.Concurrent hiding (readMVar)
 import Control.Concurrent.Transactional
-import qualified Control.Concurrent.Map as CMap
+import qualified Control.Concurrent.Map.Exts as CMap
 import Control.Monad.Incremental.Internal.Adapton.Types
 import Data.Concurrent.Deque.Class as Queue
 import Data.Concurrent.Deque.Reference.DequeInstance
 import Data.Time
 import Control.Concurrent.Chan
-import qualified Control.Concurrent.Map as CMap
 import qualified Data.HashTable.Weak.ST.Basic as WeakSTBasic
 import Data.HashTable.Weak.IO as WeakHash
 import Data.HashTable.Weak.Class as WeakHash

@@ -13,7 +13,7 @@ module Control.Concurrent.Transactional.Internal.TxAdapton.Layers (
 	, mergeFutureTxLog
 	) where
 
-import qualified Control.Concurrent.Map as CMap
+import qualified Control.Concurrent.Map.Exts as CMap
 import Control.Concurrent hiding (readMVar)
 import Control.Concurrent.MVar.Exts
 import System.Mem.MemoTable (MemoTable(..))

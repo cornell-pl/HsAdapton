@@ -69,5 +69,6 @@ Library
     System.Mem.Concurrent.WeakMap
 
   Other-modules:
+    Debug
 
   extensions: 

@@ -16,7 +16,7 @@
 --
 -----------------------------------------------------------------------
 
-module Control.Concurrent.Map
+module Control.Concurrent.Map.Exts
     ( Map
 
       -- * Construction

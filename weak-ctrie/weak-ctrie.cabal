@@ -19,8 +19,8 @@ extra-source-files:  changelog.md
 
 library
   exposed-modules:
-    Control.Concurrent.Map
-    Control.Concurrent.WeakMap
+    Control.Concurrent.Map.Exts
+    Control.Concurrent.Weak.Map
   other-modules:     Control.Concurrent.Map.Array
   build-depends:
       base >=4.7 && <4.8

@@ -8,6 +8,8 @@ module Control.Monad.Incremental.Internal.Adapton.Layers (
 	, showCallStack, isThunkStackElement, callstack, topStack, pushStack, popStack, popStack', topThunkStack
 	, adaptonParams, proxyAdapton
 	, IncParams(..)
+	, Outside(..)
+	, Inside(..)
 	) where
 
 import Control.Monad.Incremental

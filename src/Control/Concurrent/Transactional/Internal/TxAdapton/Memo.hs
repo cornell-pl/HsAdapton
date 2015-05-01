@@ -28,7 +28,7 @@ import Control.Monad
 import Data.Strict.List as Strict
 import Data.Maybe
 import Data.Dynamic
-import Control.Concurrent.Map as CMap
+import Control.Concurrent.Map.Exts as CMap
 import Data.WithClass.MGenerics.Aliases
 import Data.IORef.Exts
 import Data.Strict.Tuple

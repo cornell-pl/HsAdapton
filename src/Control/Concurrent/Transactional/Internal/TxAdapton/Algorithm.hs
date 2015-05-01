@@ -21,7 +21,7 @@ import Data.Maybe
 import Control.Concurrent.Transactional.Internal.TxAdapton.Memo
 import Control.Applicative
 import Control.Concurrent.Chan
-import qualified Control.Concurrent.Map as CMap
+import qualified Control.Concurrent.Map.Exts as CMap
 import System.IO.Unsafe
 import Control.DeepSeq as Seq
 import System.Mem

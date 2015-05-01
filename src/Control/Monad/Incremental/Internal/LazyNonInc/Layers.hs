@@ -5,6 +5,8 @@ module Control.Monad.Incremental.Internal.LazyNonInc.Layers (
 	, LazyNonInc
 	, IncParams(..)
 	, proxyLazyNonInc
+	, Outside(..)
+	, Inside(..)
 	) where
 
 import Control.Monad.Incremental

@@ -35,7 +35,7 @@ import Data.HashTable.Weak.IO as Weak
 import Data.HashTable.IO as HashIO
 import Data.HashTable.ST.Basic as BasicHashST
 import System.Mem.StableName.Exts
-import qualified Control.Concurrent.Map as CMap
+import qualified Control.Concurrent.Map.Exts as CMap
 import Unsafe.Coerce
 
 type Registry = HashMap (TypeRep,DynamicHashableEq) Dyn
