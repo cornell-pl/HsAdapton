@@ -4,9 +4,9 @@ module Main where
 
 import Control.Monad.Incremental
 import Control.Monad.Incremental.List
-import Control.Monad.Transactional
-import Control.Monad.Transactional.STM
-import Control.Monad.Transactional.TxAdapton
+import Control.Concurrent.Transactional
+import Control.Concurrent.Transactional.STM
+import Control.Concurrent.Transactional.TxAdapton
 import Control.Monad.Incremental.Display
 import Control.Monad
 import Control.Monad.IO.Class

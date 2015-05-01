@@ -9,10 +9,10 @@ import Data.Proxy
 import Control.Monad.Incremental.Display
 import Control.Monad.Incremental.LazyNonInc
 import Control.Monad.Incremental.Adapton hiding (MData)
-import Control.Monad.Transactional.TxAdapton
+import Control.Concurrent.Transactional.TxAdapton
 import Data.IORef
 
-import Prelude hiding (mod,const,read)
+import Prelude hiding (mod,const,read,mapM_)
 import qualified Prelude
 import Data.WithClass.MGenerics.Instances
 
@@ -21,7 +21,7 @@ import Data.DeepTypeable
 import Data.WithClass.Derive.DeepTypeable
 import Language.Haskell.TH.Syntax hiding (lift,Infix,Fixity)
 
-import Control.Monad
+import Control.Monad hiding (mapM_)
 import Control.Monad.IO.Class
 import System.Mem.StableName.Exts
 import System.IO.Unsafe
@@ -72,8 +72,8 @@ type ListLazyNonIncM' l a = ListMod' LazyNonIncM l LazyNonInc a
 type ListTxU c l a = ListMod (TxU c) l (TxAdapton c) a
 type ListTxU' c l a = ListMod' (TxU c) l (TxAdapton c) a
 
-type ListTxM c l a = ListMod (TxM c) l (TxAdapton c) a
-type ListTxM' c l a = ListMod' (TxM c) l (TxAdapton c) a
+type ListTxM i c l a = ListMod (TxM i c) l (TxAdapton c) a
+type ListTxM' i c l a = ListMod' (TxM i c) l (TxAdapton c) a
 
 
 instance (Display l1 inc a,Display l1 inc (ListMod mod l inc a)) => Display l1 inc (ListMod' mod l inc a) where
@@ -614,17 +614,35 @@ instance Memo Seeds where
 
 -- * List change operations
 
+mapM_ :: (Thunk mod l inc,IncK inc (ListMod' mod l inc a))
+	=> (a -> l inc b) -> ListMod mod l inc a -> l inc ()
+mapM_ f mxs = do
+	xs <- read mxs
+	case xs of
+		NilMod -> return ()
+		ConsMod x mxs -> f x >> mapM_ f mxs
+
+mapListMod :: (IncK inc (ListMod' mod l inc a),IncK inc (ListMod' mod l inc b),Input mod l inc) => (a -> l inc b) -> [a] -> l inc (ListMod mod l inc b)
+mapListMod f [] = ref NilMod
+mapListMod f (x:xs) = mod $ do
+	y <- f x
+	mys <- mapListMod f xs
+	return $ ConsMod y mys
+
 toListRef :: (IncK inc (ListMod' mod l inc a),Input mod l inc) => [a] -> l inc (ListMod mod l inc a)
 toListRef [] = ref NilMod
 toListRef (x:xs) = do
 	mxs <- toListRef xs
 	ref (ConsMod x mxs)
 
+toListRef' :: (IncK inc (ListMod' mod l inc a),Input mod l inc) => [a] -> l inc (ListMod' mod l inc a)
+toListRef' [] = return NilMod
+toListRef' (x:xs) = do
+	mxs <- toListRef xs
+	return (ConsMod x mxs)
+
 toListMod :: (IncK inc (ListMod' mod l inc a),Input mod l inc) => [a] -> l inc (ListMod mod l inc a)
-toListMod [] = ref NilMod
-toListMod (x:xs) = mod $ do
-	mxs <- toListMod xs
-	return $ ConsMod x mxs
+toListMod = mapListMod return
 
 toListModIO :: (IncK inc (ListMod' mod l inc a),Input mod l inc) => [a] -> IO (ListMod mod l inc a)
 toListModIO = runIncremental . outside . toListMod

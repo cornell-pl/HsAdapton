@@ -81,6 +81,7 @@ class HashTable h where
     -- monad. /O(n)/.
     foldM    :: (a -> (k,v) -> ST s a) -> a -> h s k v -> ST s a
     foldWeakM    :: (a -> (k,Weak v) -> ST s a) -> a -> h s k v -> ST s a
+    foldStopM    :: (a -> (k,v) -> ST s (Either a a)) -> a -> h s k v -> ST s a
 
     -- | A side-effecting map over the key-value records of a hash
     -- table. /O(n)/.

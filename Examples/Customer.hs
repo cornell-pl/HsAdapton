@@ -1,12 +1,12 @@
-{-# LANGUAGE StandaloneDeriving, ConstraintKinds, RankNTypes, GADTs, BangPatterns, TemplateHaskell, TupleSections, TypeFamilies, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, DeriveDataTypeable, ScopedTypeVariables, FlexibleContexts #-}
+{-# LANGUAGE DataKinds, StandaloneDeriving, ConstraintKinds, RankNTypes, GADTs, BangPatterns, TemplateHaskell, TupleSections, TypeFamilies, UndecidableInstances, MultiParamTypeClasses, FlexibleInstances, DeriveDataTypeable, ScopedTypeVariables, FlexibleContexts #-}
 
 module Examples.Customer where
 
 import Control.Monad.Incremental
 import Control.Monad.Incremental.List
-import Control.Monad.Transactional
-import Control.Monad.Transactional.STM
-import Control.Monad.Transactional.TxAdapton
+import Control.Concurrent.Transactional
+import Control.Concurrent.Transactional.STM
+import Control.Concurrent.Transactional.TxAdapton
 import Control.Monad.Incremental.Display
 import Control.Monad
 import Control.Monad.IO.Class
@@ -15,7 +15,7 @@ import Control.Concurrent.Async
 import Control.Monad.Incremental.Adapton
 import Control.Monad.Incremental.LazyNonInc
 import Control.Monad.Incremental.Draw
-import Control.Monad.Transactional.Benchmark
+import Control.Concurrent.Transactional.Benchmark
 
 import Debug
 
@@ -47,7 +47,7 @@ import System.Mem.Weak.Exts as Weak
 import System.IO.Unsafe
 import System.Mem.StableName.Exts
 
-import Control.Monad.Transactional.SHFSTM as SHFSTM
+import Control.Concurrent.Transactional.SHFSTM as SHFSTM
 
 
 type Warehouse mod (l :: * -> * -> *) inc = ListMod mod l inc (Item mod l inc)
@@ -286,57 +286,62 @@ genCustomersThreads params numCustomers warehouse = runIncrementalWithParams par
 	() <- rnfInc customers
 	return customers
 
-customerJob :: (Layers l Outside,Display Outside inc (ListMod thunk l inc (Item mod l inc)),Transactional inc,IncK inc Int,IncK inc (ListMod' thunk l inc (Item mod l inc)),IncK inc (ListMod' mod l inc (String, Int)),IncK inc (ListMod' mod l inc (Item mod l inc)),Output thunk l inc,Input mod l inc,Display Outside inc (ListMod mod l inc (String,Int)),Display Outside inc (mod l inc Int))
+customerJob :: (Draw inc (mod l inc (ListMod' mod l inc (Item mod l inc))),Draw inc (thunk l inc (ListMod' thunk l inc (Item mod l inc))),
+	Layers l Outside,Display Outside inc (ListMod thunk l inc (Item mod l inc)),Transactional inc,IncK inc Int,IncK inc (ListMod' thunk l inc (Item mod l inc)),IncK inc (ListMod' mod l inc (String, Int)),IncK inc (ListMod' mod l inc (Item mod l inc)),Output thunk l inc,Input mod l inc,Display Outside inc (ListMod mod l inc (String,Int)),Display Outside inc (mod l inc Int))
 	=> IncParams inc -> CustomersData mod thunk l inc -> Bool -> Customer mod l inc -> IO ()
 customerJob params (warehouse,leastItem) choice customer = do
 	let noBalance (NoBalance msg) = do
---		drawDot ("customer exception " ++ customerName customer ++ " " ++ msg) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--		drawDot ("customer exception " ++ customerName customer ++ " " ++ msg) Proxy (Merge warehouse leastItem)
 		throw (NoBalance msg)		
 	let action = if choice
 		then do -- list the cheapest item
 			(time,item) <- timeItT $ atomicallyWithParams params $ outside $ do
---				drawDot ("customer listing" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
-				item <- forceOutside leastItem
+--				drawDot ("customer listing" ++ customerName customer) Proxy (Merge warehouse leastItem)
+				item <- cheapestItem ("customer " ++ customerName customer) warehouse leastItem
 				str <- display item
---				let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str ++ " " ++ show tx
---				drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--				let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str
+--				drawDot msg Proxy (Merge warehouse leastItem)
 				return str
 			writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time
 		else do -- buy the cheapest item
 			(time,item) <- timeItT $ atomicallyWithParams params $ flip catch noBalance $ outside $ do
---				drawDot ("customer buying" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--				drawDot ("customer buying" ++ customerName customer) Proxy (Merge warehouse leastItem)
 				item <- buyCheapestItem ("customer " ++ customerName customer) warehouse leastItem customer
 				str <- display item
---				let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str ++ " " ++ show tx
---				drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--				let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str
+--				drawDot msg Proxy (Merge warehouse leastItem)
 				return str
 			writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time
-	let noBalance2 e@(NoBalance msg) = error $ "exception: "++msg
-	let anyException (e::SomeException) = error $ "exception: "++show e
+	let noBalance2 e@(NoBalance msg) = error $ "exception: " ++ show msg
+	let anyException (e::SomeException) = error $ "exception: " ++ show e
 	action `Catch.catches` [Catch.Handler noBalance2,Catch.Handler anyException]
 
-customerJob' :: (Layers l Outside,Display Outside inc (ListMod thunk l inc (Item mod l inc)),IncK inc Int,IncK inc (ListMod' thunk l inc (Item mod l inc)),IncK inc (ListMod' mod l inc (String, Int)),IncK inc (ListMod' mod l inc (Item mod l inc)),Output thunk l inc,Input mod l inc,Display Outside inc (ListMod mod l inc (String,Int)),Display Outside inc (mod l inc Int))
+customerJob' :: (Draw inc (thunk l inc (ListMod' thunk l inc (Item mod l inc))),Draw inc (mod l inc (ListMod' mod l inc (Item mod l inc))),
+	Layers l Outside,Display Outside inc (ListMod thunk l inc (Item mod l inc)),IncK inc Int,IncK inc (ListMod' thunk l inc (Item mod l inc)),IncK inc (ListMod' mod l inc (String, Int)),IncK inc (ListMod' mod l inc (Item mod l inc)),Output thunk l inc,Input mod l inc,Display Outside inc (ListMod mod l inc (String,Int)),Display Outside inc (mod l inc Int))
 	=> IncParams inc -> CustomersData mod thunk l inc -> Bool -> Customer mod l inc -> IO ()
 customerJob' params (warehouse,leastItem) choice customer = do	
 	let action = if choice
 		then do -- list the cheapest item
 			(time,item) <- timeItT $ runIncrementalWithParams params $ do
---				drawDot ("customer listing" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
-				item <- forceOutside leastItem
-				str <- display item
---				let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str ++ " " ++ show tx
---				drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
-				return str
+--				drawDot ("customer listing" ++ customerName customer ) Proxy (Merge warehouse leastItem)
+				e <- cheapestItem' ("customer " ++ customerName customer) warehouse leastItem
+				case e of
+					Left item -> do
+						str <- display item
+--						let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str
+--						drawDot msg Proxy (Merge warehouse leastItem)
+						return str
+					Right e -> return $ show e
 			writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time
 		else do -- buy the cheapest item
 			(time,item) <- timeItT $ runIncrementalWithParams params $ do
---				drawDot ("customer buying" ++ customerName customer ++ " " ++ show tx) proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--				drawDot ("customer buying" ++ customerName customer ) Proxy (Merge warehouse leastItem)
 				e <- buyCheapestItem' ("customer " ++ customerName customer) warehouse leastItem customer
 				case e of
 					Left item -> do
 						str <- display item
---						let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str ++ " " ++ show tx
---						drawDot msg proxyTxAdapton proxyIORef proxyIO (Merge warehouse leastItem)
+--						let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str
+--						drawDot msg Proxy (Merge warehouse leastItem)
 						return str
 					Right e -> return $ show e
 			writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time
@@ -346,7 +351,7 @@ customersSTMBench :: TxBenchmark STM (CustomersData STMVar T Outside STM) Bool (
 customersSTMBench = TxBenchmark "CustomerSTM" genCustomersData genCustomersThreads customerJob'
 
 customersSHFSTMBench :: TxBenchmark SHFSTM (CustomersData SHFSTMVar T Outside SHFSTM) Bool (Customer SHFSTMVar Outside SHFSTM)
-customersSHFSTMBench = TxBenchmark "CustomerSTM" genCustomersData genCustomersThreads customerJob'
+customersSHFSTMBench = TxBenchmark "CustomerSHFSTM" genCustomersData genCustomersThreads customerJob'
 
 customersLazyNonIncBench :: TxBenchmark LazyNonInc (CustomersData LazyNonIncM LazyNonIncU Outside LazyNonInc) Bool (Customer LazyNonIncM Outside LazyNonInc)
 customersLazyNonIncBench = TxBenchmark "CustomerLazyNonInc" genCustomersData genCustomersThreads customerJob'
@@ -354,20 +359,26 @@ customersLazyNonIncBench = TxBenchmark "CustomerLazyNonInc" genCustomersData gen
 customersAdaptonBench :: TxBenchmark Adapton (CustomersData M U Inside Adapton) Bool (Customer M Inside Adapton)
 customersAdaptonBench = TxBenchmark "CustomerAdapton" genCustomersData genCustomersThreads customerJob'
 
-customersTxAdaptonEBench :: TxBenchmark TxAdaptonE (CustomersData TxME TxUE Inside TxAdaptonE) Bool (Customer TxME Inside TxAdaptonE)
+customersTxAdaptonEBench :: TxBenchmark TxAdaptonE (CustomersData (TxME Versioned) TxUE Inside TxAdaptonE) Bool (Customer (TxME Versioned) Inside TxAdaptonE)
 customersTxAdaptonEBench = TxBenchmark "CustomerTxAdaptonE" genCustomersData genCustomersThreads customerJob
 
-customersTxAdaptonEBench' :: TxBenchmark TxAdaptonE (CustomersData TxME TxUE Inside TxAdaptonE) Bool (Customer TxME Inside TxAdaptonE)
+customersTxAdaptonEBench' :: TxBenchmark TxAdaptonE (CustomersData (TxME Versioned) TxUE Inside TxAdaptonE) Bool (Customer (TxME Versioned) Inside TxAdaptonE)
 customersTxAdaptonEBench' = TxBenchmark "CustomerTxAdaptonE" genCustomersData genCustomersThreads customerJob'
 
-customersNonIncEBench :: TxBenchmark TxAdaptonE (CustomersData TxME T Outside TxAdaptonE) Bool (Customer TxME Outside TxAdaptonE)
-customersNonIncEBench = TxBenchmark "CustomerNonIncE" genCustomersData genCustomersThreads customerJob
+customersTxAdaptonCBench :: TxBenchmark TxAdaptonC (CustomersData (TxMC Versioned) TxUC Inside TxAdaptonC) Bool (Customer (TxMC Versioned) Inside TxAdaptonC)
+customersTxAdaptonCBench = TxBenchmark "CustomerTxAdaptonC" genCustomersData genCustomersThreads customerJob
 
-customersNonIncCBench :: TxBenchmark TxAdaptonC (CustomersData TxMC T Outside TxAdaptonC) Bool (Customer TxMC Outside TxAdaptonC)
-customersNonIncCBench = TxBenchmark "CustomerNonIncC" genCustomersData genCustomersThreads customerJob
+customersTxAdaptonCBench' :: TxBenchmark TxAdaptonC (CustomersData (TxMC Versioned) TxUC Inside TxAdaptonC) Bool (Customer (TxMC Versioned) Inside TxAdaptonC)
+customersTxAdaptonCBench' = TxBenchmark "CustomerTxAdaptonC" genCustomersData genCustomersThreads customerJob'
+
+customersNonIncEBench :: TxBenchmark TxAdaptonE (CustomersData (TxME Versioned) T Outside TxAdaptonE) Bool (Customer (TxME Versioned) Outside TxAdaptonE)
+customersNonIncEBench = TxBenchmark "CustomerNonIncE" genCustomersData genCustomersThreads customerJob'
+
+customersNonIncCBench :: TxBenchmark TxAdaptonC (CustomersData (TxMC Versioned) T Outside TxAdaptonC) Bool (Customer (TxMC Versioned) Outside TxAdaptonC)
+customersNonIncCBench = TxBenchmark "CustomerNonIncC" genCustomersData genCustomersThreads customerJob'
 
 main :: IO ()
-main = do
+main = {-flip Exception.finally (mergeGraphsInto' "tx.pdf") $-} do
 	-- synchronous debugging I/O
 	hSetBuffering stdout NoBuffering
 	
@@ -375,20 +386,21 @@ main = do
 		
 		-- compare to other STMs
 --		runTxBenchmark customersSTMBench defaultIncParams (10^4) 10 5
---		runTxBenchmark customersSHFSTMBench defaultIncParams (10^4) 30 5
-		runTxBenchmark customersNonIncEBench ((defaultIncParamsProxy proxyTxAdaptonE) { txAdaptonMemoSize = 10^4 }) (10^4) 10 5
+--		runTxBenchmark customersSHFSTMBench defaultIncParams (10^4) 10 5
+--		runTxBenchmark customersNonIncEBench ((defaultIncParamsProxy proxyTxAdaptonE) { txAdaptonMemoSize = 10^4 }) (10^4) 10 5
 		
 		-- non-incremental, non-threaded
 --		runTxBenchmark customersLazyNonIncBench (defaultIncParamsProxy proxyLazyNonInc) (10^5) 50 1
 		-- incremental, non-threaded
---		runTxBenchmark customersAdaptonBench ((defaultIncParamsProxy proxyAdapton) { adaptonMemoSize = 10^5 }) (10^5) 250 1
+--		runTxBenchmark customersAdaptonBench ((defaultIncParamsProxy proxyAdapton) { adaptonMemoSize = 10^5 }) (10^5) 20 1
 
 		-- non-incremental, threaded
---		runTxBenchmark customersNonIncEBench defaultIncParams (10^4) 20 1
---		runTxBenchmark customersNonIncCBench defaultIncParams (10^5) 40 1
+--		runTxBenchmark customersNonIncEBench ((defaultIncParamsProxy proxyTxAdaptonE) { txAdaptonMemoSize = 10^4 }) (10^4) 40 1
+--		runTxBenchmark customersNonIncCBench ((defaultIncParamsProxy proxyTxAdaptonC) { txAdaptonMemoSize = 10^4 }) (10^4) 40 1
     	
 		-- incremental, 1 thread
---		runTxBenchmark customersTxAdaptonEBench ((defaultIncParamsProxy proxyTxAdaptonE) { txAdaptonMemoSize = 10^3 }) (10^3) 40 1
+		runTxBenchmark customersTxAdaptonEBench ((defaultIncParamsProxy proxyTxAdaptonE) { txAdaptonMemoSize = 10^4 }) (10^4) 10 5
+--		runTxBenchmark customersTxAdaptonCBench ((defaultIncParamsProxy proxyTxAdaptonC) { txAdaptonMemoSize = 10^4 }) (10^4) 10 5
 	
 	return ()
 

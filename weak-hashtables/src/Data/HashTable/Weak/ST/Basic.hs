@@ -97,7 +97,6 @@ module Data.HashTable.Weak.ST.Basic
 ------------------------------------------------------------------------------
 import           Control.Exception                 (assert)
 import           Control.Monad                     hiding (foldM, mapM_)
-import           Control.Monad.ST                  (ST)
 import           Data.Bits
 import           Data.Hashable                     (Hashable)
 import qualified Data.Hashable                     as H
@@ -188,6 +187,7 @@ instance C.HashTable HashTable where
     lookup          = lookup
     foldM           = foldM
     foldWeakM           = foldWeakM
+    foldStopM = foldStopM
     mapM_           = mapM_
     mapWeakM_           = mapWeakM_
     computeOverhead = computeOverhead
@@ -229,6 +229,9 @@ newSizedWithMkWeak n (MkWeak mkWeak) = do
     return $ HT (stref,w)
 {-# INLINE newSizedWithMkWeak #-}
 
+table_finalizer :: (Eq k,Hashable k) => STRef s (HashTable_ s k v) -> IO ()
+table_finalizer htRef = unsafeSTToIO $ readSTRef htRef >>= mapM_' (\(!k,!w) -> unsafeIOToST $ Weak.finalize w)
+{-# INLINE table_finalizer #-}
 
 ------------------------------------------------------------------------------
 newSizedReal :: Int -> ST s (HashTable_ s k v)
@@ -238,8 +241,8 @@ newSizedReal m = do
     let m' = ((m + numElemsInCacheLine - 1) `div` numElemsInCacheLine)
              * numElemsInCacheLine
     h  <- U.newArray m'
-    k  <- newArray m undefined
-    v  <- newArray m undefined
+    k  <- newArray m (error "newSizedReal")
+    v  <- newArray m (error "newSizedReal")
     ld <- newSizeRefs
     return $! HashTable m ld h k v
 
@@ -291,7 +294,7 @@ lookup htRef !k = do
             if (idx < 0 || idx < start || idx >= end)
                then return Nothing
                else do
-                 h0  <- U.readArray hashes idx
+                 !h0  <- U.readArray hashes idx
                  debug $ "h0 was " ++ show h0
 
                  if recordIsEmpty h0
@@ -325,7 +328,7 @@ insert :: (Eq k, Hashable k) =>
        -> k
        -> v
        -> ST s ()
-insert tbl k v = insertWithMkWeak tbl k v (MkWeak $ \v -> Weak.mkWeak v v)
+insert tbl !k !v = insertWithMkWeak tbl k v (MkWeak $ \v -> Weak.mkWeak v v)
 {-# INLINE insert #-}
 
 insertWeak :: (Eq k, Hashable k) =>
@@ -408,10 +411,6 @@ deleteWeak !w !k = do
 		Nothing -> return ()
 		Just stref -> let !h = hash k in unsafeSTToIO $ readSTRef stref >>= \ht -> delete' ht True k h >> return ()
 
-table_finalizer :: (Eq k,Hashable k) => STRef s (HashTable_ s k v) -> IO ()
-table_finalizer htRef = unsafeSTToIO $ readSTRef htRef >>= mapM_' (\(!k,!w) -> unsafeIOToST $ Weak.finalize w)
-{-# INLINE table_finalizer #-}
-
 finalize :: (Eq k,Hashable k) => HashTable s k v -> ST s ()
 finalize = unsafeIOToST . Weak.finalize . weakPtr
 
@@ -425,7 +424,7 @@ foldM f seed0 htRef = readRef htRef >>= work
       where
         go !i !seed | i >= sz = return seed
                     | otherwise = do
-            h <- U.readArray hashes i
+            !h <- U.readArray hashes i
             if recordIsEmpty h || recordIsDeleted h
               then go (i+1) seed
               else do
@@ -442,7 +441,7 @@ foldStopM f seed0 htRef = readRef htRef >>= work
       where
         go !i !seed | i >= sz = return seed
                     | otherwise = do
-            h <- U.readArray hashes i
+            !h <- U.readArray hashes i
             if recordIsEmpty h || recordIsDeleted h
               then go (i+1) seed
               else do
@@ -459,7 +458,7 @@ foldWeakM f seed0 htRef = readRef htRef >>= work
       where
         go !i !seed | i >= sz = return seed
                     | otherwise = do
-            h <- U.readArray hashes i
+            !h <- U.readArray hashes i
             if recordIsEmpty h || recordIsDeleted h
               then go (i+1) seed
               else do
@@ -479,14 +478,14 @@ mapM_ f htRef = readRef htRef >>= work
       where
         go !i | i >= sz = return ()
               | otherwise = do
-            h <- U.readArray hashes i
+            !h <- U.readArray hashes i
             if recordIsEmpty h || recordIsDeleted h
               then go (i+1)
               else do
                 k <- readArray keys i
                 w <- readArray values i
                 mb <- unsafeIOToST $ Weak.deRefWeak w
-                _ <- case mb of { Nothing -> return undefined; Just v -> f (k,v) }
+                _ <- case mb of { Nothing -> return (error "mapM_"); Just v -> f (k,v) }
                 go (i+1)
 
 mapWeakM_ :: ((k,Weak v) -> ST s b) -> HashTable s k v -> ST s ()
@@ -499,7 +498,7 @@ mapM_' f ht = work ht
       where
         go !i | i >= sz = return ()
               | otherwise = do
-            h <- U.readArray hashes i
+            !h <- U.readArray hashes i
             if recordIsEmpty h || recordIsDeleted h
               then go (i+1)
               else do
@@ -597,7 +596,7 @@ rehashAll (HashTable sz loadRef hashes keys values) sz' = do
       where
         go !i | i >= sz   = return ()
               | otherwise = {-# SCC "growTable/rehash" #-} do
-                    h0 <- U.readArray hashes i
+                    !h0 <- U.readArray hashes i
                     when (not (recordIsEmpty h0 || recordIsDeleted h0)) $ do
                         k <- readArray keys i
                         w <- readArray values i
@@ -705,7 +704,7 @@ delete' (HashTable sz loadRef hashes keys values) clearOut k h = do
             -- an empty or a deleted marker somewhere in the table. Assert this
             -- here.
             assert (idx >= 0) $ return ()
-            h0 <- U.readArray hashes idx
+            !h0 <- U.readArray hashes idx
             debug $ "h0 was " ++ show h0
 
             if recordIsEmpty h0
@@ -741,8 +740,8 @@ delete' (HashTable sz loadRef hashes keys values) clearOut k h = do
                             when (clearOut || not samePlace) $ do
                                 bumpDel loadRef 1
                                 U.writeArray hashes idx deletedMarker
-                                writeArray keys idx undefined
-                            readArray values idx >>= unsafeIOToST . Weak.finalize -- finalize both for deletes and inserts
+                                writeArray keys idx (error "delete'")
+                            readArray values idx >>= \w -> unsafeIOToST $! Weak.finalize $! w -- finalize both for deletes and inserts
                             return (True, fp `mappend` (Slot idx 0))
                           else go fp (idx + 1) wrap'
                       else go fp (idx + 1) wrap'

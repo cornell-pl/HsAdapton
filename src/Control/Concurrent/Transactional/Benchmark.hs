@@ -1,10 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables, FlexibleContexts #-}
 
-module Control.Monad.Transactional.Benchmark where
+module Control.Concurrent.Transactional.Benchmark where
 
 import Data.Proxy
 import Control.Monad.Incremental
-import Control.Monad.Transactional
+import Control.Concurrent.Transactional
 import System.TimeIt
 import Control.Monad.Incremental.Display
 import Control.Concurrent.Async
@@ -38,10 +38,11 @@ runTxBenchmark :: TxBenchmark inc a b t -> IncParams inc -> Int -> Int -> Int ->
 runTxBenchmark bench (params :: IncParams inc) size runs threads = do
 	let inc = Proxy :: Proxy inc
 	
-	writeChan debugChan $ "running benchmark " ++ show (txBenchName bench)
+	writeChan debugChan $ "generating benchmark data " ++ show (txBenchName bench)
 	(s,chgs) <- txBenchData bench params size (runs * threads)
 	let l = length chgs
 	let chgss = splitListAt (l `div` threads) chgs
+	writeChan debugChan $ "generating benchmark threads " ++ show (txBenchName bench)
 	ts <- txBenchThreads bench params threads s
 	let incThreadLoop t chgs = case chgs of
 		[] -> return ()
@@ -55,6 +56,7 @@ runTxBenchmark bench (params :: IncParams inc) size runs threads = do
 		writeChan debugChan $ "total time: " ++ show time
 		return time
 
+	writeChan debugChan $ "running benchmark " ++ show (txBenchName bench)
 	runThreads
 	
 

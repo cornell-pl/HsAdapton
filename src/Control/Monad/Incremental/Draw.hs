@@ -6,10 +6,9 @@ import Control.Monad.Incremental
 import Control.Monad.Incremental.Internal.Adapton.Algorithm
 import Control.Monad.Incremental.Internal.Adapton.Layers
 import Control.Monad.Incremental.Internal.Adapton.Types hiding (MData)
-import Control.Monad.Ref
- as WeakSet
 import Control.Monad.Trans
 
+import Control.Concurrent.MVar.Exts
 import Control.DeepSeq as Seq
 
 import Control.Monad
@@ -21,7 +20,7 @@ import qualified Data.Map as Map
 import Data.Set (Set(..))
 import qualified Data.Set as Set
 import Data.UUID.V1
-import Control.Concurrent
+import Control.Concurrent hiding (readMVar)
 import qualified Data.Sequence as Seq
 import qualified Data.Text as Strict
 import qualified Data.Text.IO as Strict
@@ -49,7 +48,6 @@ import System.IO
 import System.Directory
 import System.IO.Unsafe
 import System.Mem
-import Control.Monad.Ref
 
 import Data.WithClass.MData
 
@@ -76,42 +74,64 @@ $( derive makeDeepTypeable ''Merge )
 -- hack to automatize drawing sequences
 
 declareMVar "tempGraphs"  [t| [(FilePath,Bool)] |] [e| [] |]
+declareMVar "drawnNodes"  [t| Map ThreadId [String] |] [e| Map.empty |]
 declareMVar "drawnDependents"  [t| Map ThreadId [String] |] [e| Map.empty |]
 declareMVar "drawnDependencies"  [t| Map ThreadId [String] |] [e| Map.empty |]
 
---checkDrawnDependencies :: (Layer l inc, m) => String -> l inc [a] -> l inc [a]
---checkDrawnDependencies node m = do
---	threadid <- liftIO myThreadId
---	nodesmap <- liftIO $ takeMVar drawnDependencies
-----	let nodes = maybe [] id $ Map.lookup threadid nodesmap
---	if node `elem` nodesmap
---		then inL (liftIO $ putMVar drawnDependencies nodesmap) >> return []
---		else inL (liftIO $ putMVar drawnDependencies $ node:nodesmap) >> m
+unlessDrawnDependents :: String -> IO ([a],Map k v) -> IO ([a],Map k v)
+unlessDrawnDependents node m = do
+	threadid <- myThreadId
+	nodesmap <- readMVar "unlessDrawnDependents" drawnDependents
+	let nodes = maybe [] id $ Map.lookup threadid nodesmap
+	if node `elem` nodes
+		then return ([],Map.empty)
+		else m
+
+checkDrawn :: Layer l inc => String -> l inc DrawDot -> l inc DrawDot
+checkDrawn node m = do
+	threadid <- unsafeIOToInc $ myThreadId
+	ok <- unsafeIOToInc $ modifyMVarMasked' "checkDrawn" drawnNodes $ \nodesmap -> do
+		let nodes = maybe [] id $ Map.lookup threadid nodesmap
+		if node `elem` nodes
+			then return (nodesmap,False)
+			else return (Map.insertWith (++) threadid [node] nodesmap,True)
+	if ok then m else return ([],[],Map.empty)
 
 checkDrawnDependents :: String -> IO ([a],Map k v) -> IO ([a],Map k v)
 checkDrawnDependents node m = do
 	threadid <- myThreadId
-	nodesmap <- takeMVar drawnDependents
-	let nodes = maybe [] id $ Map.lookup threadid nodesmap
-	if node `elem` nodes
-		then (putMVar drawnDependents nodesmap) >> (return ([],Map.empty))
-		else (putMVar drawnDependents $ Map.insertWith (++) threadid [node] nodesmap) >> m
+	ok <- modifyMVarMasked' "checkDrawnDependents" drawnDependents $ \nodesmap -> do
+		let nodes = maybe [] id $ Map.lookup threadid nodesmap
+		if node `elem` nodes
+			then return (nodesmap,False)
+			else return (Map.insertWith (++) threadid [node] nodesmap,True)
+	if ok then m else return ([],Map.empty)
 
 checkDrawnDependentsLayer :: Layer l inc => String -> l inc ([a],Map k v) -> l inc ([a],Map k v)
 checkDrawnDependentsLayer node m = do
 	threadid <- unsafeIOToInc $ myThreadId
-	nodesmap <- unsafeIOToInc $ takeMVar drawnDependents
-	let nodes = maybe [] id $ Map.lookup threadid nodesmap
-	if node `elem` nodes
-		then (unsafeIOToInc $ putMVar drawnDependents nodesmap) >> (return ([],Map.empty))
-		else (unsafeIOToInc $ putMVar drawnDependents $ Map.insertWith (++) threadid [node] nodesmap) >> m
+	ok <- unsafeIOToInc $ modifyMVarMasked' "checkDrawnDependentsLayer" drawnDependents $ \nodesmap -> do
+		let nodes = maybe [] id $ Map.lookup threadid nodesmap
+		if node `elem` nodes
+			then return (nodesmap,False)
+			else return (Map.insertWith (++) threadid [node] nodesmap,True)
+	if ok then m else return ([],Map.empty)
+
+checkDrawnDependenciesLayer :: Layer l inc => String -> l inc (String,[a],Map k v) -> l inc (String,[a],Map k v)
+checkDrawnDependenciesLayer node m = do
+	threadid <- unsafeIOToInc $ myThreadId
+	ok <- unsafeIOToInc $ modifyMVarMasked' "checkDrawnDependenciesLayer" drawnDependencies $ \nodesmap -> do
+		let nodes = maybe [] id $ Map.lookup threadid nodesmap
+		if node `elem` nodes
+			then return (nodesmap,False)
+			else return (Map.insertWith (++) threadid [node] nodesmap,True)
+	if ok then m else return ("",[],Map.empty)
 
 resetDrawnNodes :: IO ()
 resetDrawnNodes = do
 	threadid <- liftIO myThreadId
 	let delete = return . Map.delete threadid
---	let delete = \_ -> return []
-	liftIO $ modifyMVar_ drawnDependencies delete >> modifyMVar_ drawnDependents delete
+	liftIO $ modifyMVarMasked_' "resetDrawnNodes" drawnNodes delete >> modifyMVarMasked_' "resetDrawnNodes" drawnDependencies delete >> modifyMVarMasked_' "resetDrawnNodes" drawnDependents delete
 
 -- * Graphviz Drawing classes
 
@@ -135,7 +155,7 @@ drawPDF label inc v = do
 	filename <- unsafeIOToInc $ liftM toString $ nextUUIDSafe
 	let pdfFile = dir </> addExtension filename "pdf"
 	drawToPDF label inc v pdfFile
-	unsafeIOToInc $ modifyMVar_ tempGraphs (return . ((pdfFile,True):))
+	unsafeIOToInc $ modifyMVarMasked_' "drawPDF" tempGraphs (return . ((pdfFile,True):))
 --	liftIO $ putStrLn $ "drew " ++ filename ++ ".pdf"
 	
 drawDot :: Draw inc a => String -> Proxy inc -> a -> Outside inc ()
@@ -145,7 +165,7 @@ drawDot label inc v = do
 	filename <- unsafeIOToInc $ liftM toString $ nextUUIDSafe
 	let dotFile = dir </> addExtension filename "dot"
 	drawToDot label inc v dotFile
-	unsafeIOToInc $ modifyMVar_ tempGraphs (return . ((dotFile,False):))
+	unsafeIOToInc $ modifyMVarMasked_' "drawDot" tempGraphs (return . ((dotFile,False):))
 --	liftIO $ putStrLn $ "drew " ++ filename ++ ".dot"
 
 mergeGraphsInto :: (Layer Outside inc) => FilePath -> Outside inc ()
@@ -159,7 +179,9 @@ dotToPDF dot = do
 	
 mergeGraphsInto' :: FilePath -> IO ()
 mergeGraphsInto' pdfFile = do
-	graphs <- modifyMVar tempGraphs (\pdfs -> return ([],pdfs))
+	threadDelay 1000000
+	debugM ("merging graphs into " ++ show pdfFile) $ return ()
+	graphs <- modifyMVarMasked' "mergeGraphsInto'" tempGraphs (\pdfs -> return ([],pdfs))
 	let convert (file,typ) = case typ of
 		False -> dotToPDF file
 		True -> return file
@@ -171,9 +193,11 @@ mergeGraphsInto' pdfFile = do
 
 drawToDot :: Draw inc a => String -> Proxy inc -> a -> FilePath -> Outside inc ()
 drawToDot label inc v dotFile = do
+--	unsafeIOToInc $ debugM ("drawing to " ++ dotFile) $ return ()
 	graph <- drawGraph label inc v
 	let txt = Seq.force $ printDotGraph graph
 	unsafeIOToInc $ T.writeFile dotFile txt
+--	unsafeIOToInc $ debugM ("drawn to " ++ dotFile) $ return ()
 	return ()
 	
 drawToPDF :: Draw inc a => String -> Proxy inc -> a -> FilePath -> Outside inc ()
@@ -185,23 +209,17 @@ drawToPDF label inc v pdfFile = do
 drawGraph :: Draw inc a => String -> Proxy inc -> a -> Outside inc (DotGraph String)
 drawGraph label inc x = do
 	unsafeIOToInc resetDrawnNodes
---	liftIO printAllRefs
 	let labelNode = Gen.DN $ DotNode {nodeID = label, nodeAttributes = [Shape PlainText,Label (StrLabel $ T.pack label)]}
 	dot <- liftM (\(x,y,z) -> drawGraphStatements $ labelNode : y ++ drawTable z) (draw inc x)
 	unsafeIOToInc resetDrawnNodes
 	return dot
 
 drawTable :: Map String String -> [DotStatement String]
-drawTable tbl = [DN (DotNode {nodeID = "memos", nodeAttributes = [Shape PlainText,Label (HtmlLabel (Table (HTable {tableFontAttrs = Nothing, tableAttrs = [Border 1,CellBorder 1,CellSpacing 0], tableRows = rows })))]})]
+drawTable tbl = if Map.null tbl then [] else stmt
 	where
-	rows = Map.elems $ Map.mapWithKey drawCell tbl
+	stmt = [DN (DotNode {nodeID = "memos", nodeAttributes = [Shape PlainText,Label (HtmlLabel (Table (HTable {tableFontAttrs = Nothing, tableAttrs = [Border 1,CellBorder 1,CellSpacing 0], tableRows = rows })))]})]
+	rows = Prelude.map snd $ Map.toAscList $ Map.mapWithKey drawCell tbl
 	drawCell k v = HTML.Cells [LabelCell [] (Text [HTML.Str $ T.pack k]),HTML.LabelCell [] (Text [HTML.Str $ T.pack v])]
-	
-	
-
-
-	
-
 
 drawGraphStatements :: [Gen.DotStatement String] -> DotGraph String
 drawGraphStatements dot = DotGraph {strictGraph = False, directedGraph = True, graphID = Just (Gen.Str $ T.pack "AdaptonGraph"), graphStatements = Seq.fromList $ attributes++dot }
@@ -233,8 +251,8 @@ mergeDrawDot (xs1,dot1,tbl1) (xs2,dot2,tbl2) = return (xs1++xs2,dot1++dot2,Map.u
 
 lNode :: Bool -> String -> DotNode String
 lNode isUnevaluated thunkID = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {wColor = color, weighting = Nothing}],Shape Square,Label (StrLabel $ T.pack thunkID),Style [SItem Filled []],FillColor [WC {wColor = fillcolor, weighting = Nothing}]]}
-	where fillcolor = if isUnevaluated then X11Color CadetBlue4 else X11Color White
-	      color = if isUnevaluated then X11Color Black else X11Color CadetBlue4
+	where fillcolor = if isUnevaluated then X11Color RoyalBlue4 else X11Color White
+	      color = if isUnevaluated then X11Color Black else X11Color RoyalBlue4
 
 deadNode :: String -> DotNode String
 deadNode i = DotNode {nodeID = i, nodeAttributes = [Color [WC {wColor = color, weighting = Nothing}],Shape Terminator,Label (StrLabel $ T.pack i),Style [SItem Filled []],FillColor [WC {wColor = fillcolor, weighting = Nothing}]]}
@@ -253,8 +271,8 @@ iuNode thunkID label = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {w
 
 uNode :: Maybe Bool -> String -> String -> DotNode String
 uNode isDirtyUnevaluated thunkID label = DotNode {nodeID = thunkID, nodeAttributes = [Color [WC {wColor = color, weighting = Nothing}],Shape Circle,Label (StrLabel $ T.pack $ thunkID ++ label),Style [SItem Filled []],FillColor [WC {wColor = fillcolor, weighting = Nothing}]]}
-	where fillcolor = X11Color $ case isDirtyUnevaluated of { Nothing -> CadetBlue4; Just True -> Red ; Just False -> White }
-	      color = X11Color $ case isDirtyUnevaluated of { Nothing -> Black; Just True -> Black ; Just False -> CadetBlue4 }
+	where fillcolor = X11Color $ case isDirtyUnevaluated of { Nothing -> RoyalBlue4; Just True -> Red ; Just False -> White }
+	      color = X11Color $ case isDirtyUnevaluated of { Nothing -> Black; Just True -> Black ; Just False -> RoyalBlue4 }
 
 addAttribute :: Attribute -> DotNode String -> DotNode String
 addAttribute att n = n { nodeAttributes = att : nodeAttributes n }

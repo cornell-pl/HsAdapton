@@ -6,7 +6,7 @@ module System.Mem.WeakMap where
 -- | Requires the package hashtables.
 
 
-import Control.Monad.Ref.Exts
+import Data.IORef.Exts
 import Prelude hiding (lookup,mapM_)
 import qualified Prelude
 import Control.Exception
@@ -23,7 +23,7 @@ import Data.Hashable
 import GHC.Base
 import Control.Monad.Trans
 import Data.Unique
-import Control.Monad.Ref
+
 import Data.Strict.Tuple as Strict
 import Data.HashMap.Strict (HashMap(..))
 import qualified Data.HashMap.Strict as HashMap
@@ -39,6 +39,10 @@ type WeakMap' k v = IORef (HashMap k (Weak v))
 
 instance WeakKey (WeakMap k v) where
 	mkWeakKey (WeakMap (tbl :!: _)) = Weak.mkWeakKey tbl
+
+-- does not finalize
+clean' :: WeakMap k v -> IO ()
+clean' (WeakMap (tbl :!: _)) = writeIORef' tbl HashMap.empty
 
 toMap :: (Eq k,Hashable k) => WeakMap k v -> IO (HashMap k v)
 toMap (WeakMap (tbl :!: _)) = do
@@ -64,6 +68,13 @@ new' = do
 	tbl <- newIORef HashMap.empty
 	weak_tbl <- Weak.mkWeakKey tbl tbl Nothing
 	return $ WeakMap (tbl :!: weak_tbl)
+	
+{-# NOINLINE copy' #-}
+copy' :: (Eq k,Hashable k) => WeakMap k v -> IO (WeakMap k v)
+copy' (WeakMap (src_tbl :!: _)) = do
+	tbl <- readIORef src_tbl >>= newIORef
+	weak_tbl <- Weak.mkWeakKey tbl tbl Nothing
+	return $ WeakMap (tbl :!: weak_tbl)
 
 --{-# NOINLINE newFor #-}
 ---- | creates a new weak table that is uniquely identified by an argument value @a@
@@ -79,6 +90,18 @@ new' = do
 --	tbl <- newIORef HashMap.empty
 --	weak_tbl <- mkWeak tbl $ Just $ table_finalizer tbl
 --	return $ WeakMap (tbl :!: weak_tbl)
+
+null' :: WeakMap k v -> IO Bool
+null' w_tbl@(WeakMap (tbl :!: weak_tbl)) = liftM HashMap.null $ readIORef tbl
+
+null :: WeakMap k v -> IO Bool
+null w_tbl@(WeakMap (tbl :!: weak_tbl)) = readIORef tbl >>= HashMap.foldr g (return True)
+	where g w mr = do
+		mb <- Weak.deRefWeak w
+		case mb of
+			Nothing -> mr
+			Just v -> return False
+	
 
 finalize :: (Eq k,Hashable k) => WeakMap k v -> IO ()
 finalize w_tbl@(WeakMap (_ :!: weak_tbl)) = do
@@ -117,11 +140,11 @@ insertWithMkWeak :: (Eq k,Hashable k) => WeakMap k v -> k -> v -> MkWeak -> IO (
 insertWithMkWeak w_tbl@(WeakMap (tbl :!: _)) k v (MkWeak mkWeak) = do
 	weak <- mkWeak v $ Just $ deleteFinalized w_tbl k
 	delete w_tbl k
-	flip mapRefM_ tbl (return . HashMap.insert k weak)
+	modifyIORef' tbl (HashMap.insert k weak)
 	
 {-# INLINE insertWeak #-}
 insertWeak :: (Eq k,Hashable k) => WeakMap k v -> k -> Weak v -> IO ()
-insertWeak (WeakMap (tbl :!: _)) k weak = flip mapRefM_ tbl (return . HashMap.insert k weak)
+insertWeak (WeakMap (tbl :!: _)) k weak = modifyIORef' tbl (HashMap.insert k weak)
 
 -- non-overlapping union
 extendWeak :: (Eq k,Hashable k) => WeakMap k v -> k -> Weak v -> IO ()
@@ -129,7 +152,7 @@ extendWeak = mergeWeak (\_ _ -> return False)
 
 -- non-overlapping union
 mergeWeak :: (Eq k,Hashable k) => (v -> v -> IO Bool) -> WeakMap k v -> k -> Weak v -> IO ()
-mergeWeak doOverwrite (WeakMap (tbl :!: _)) k weak = flip mapRefM_ tbl $ \m -> do
+mergeWeak doOverwrite (WeakMap (tbl :!: _)) k weak = modifyIORefM_' tbl $ \m -> do
 	case HashMap.lookup k m of
 		Nothing -> do
 			return $ HashMap.insert k weak m
@@ -154,7 +177,7 @@ deleteFinalized (WeakMap (_ :!: weak_tbl)) = finalizeEntry' weak_tbl where
 		mb <- Weak.deRefWeak weak_tbl
 		case mb of
 			Nothing -> return ()
-			Just r -> flip mapRefM_ r $ \m -> do
+			Just r -> modifyIORefM_' r $ \m -> do
 				case HashMap.lookup k m of
 					Nothing -> return m
 					Just w -> do
@@ -228,7 +251,7 @@ unionWithKey' wmap m@(WeakMap (tbl :!: _)) = do
 --		mb <- Weak.deRefWeak w_map
 --		case mb of
 --			Nothing -> return ()
---			Just wm -> mapRefM_ (\m -> Foldable.foldlM purgeMap HashMap.empty (Map.toList m)) wm
+--			Just wm -> modifyIORefM' (\m -> Foldable.foldlM purgeMap HashMap.empty (Map.toList m)) wm
 --	
 --	purgeMap :: (Ord k,Hashable k) => Map k (Weak v) -> (k,Weak v) -> IO (Map k (Weak v))
 --	purgeMap m (k,w) = do

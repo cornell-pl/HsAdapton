@@ -2,7 +2,7 @@
 
 module Control.Monad.Incremental where
 
-import Control.Monad.Ref
+
 import Control.Monad.Trans.Class
 
 import Data.Typeable
@@ -73,8 +73,17 @@ instance Layers Inside Inside where
 instance Layers Outside Outside where
 	liftLayer = id
 
+data LayerK = Inside | Outside deriving Typeable
+
+class Typeable l => LayerKind l where
+	toLayerKind :: Proxy l -> LayerK
+instance LayerKind Inside where
+	toLayerKind _ = Inside
+instance LayerKind Outside where
+	toLayerKind _ = Outside
+
 -- | Incremental computation layers
-class (Monad (l inc),Incremental inc) => Layer l inc where
+class (LayerKind l,Monad (l inc),Incremental inc) => Layer l inc where
 	inside :: Inside inc a -> l inc a
 	outside :: l inc a -> Outside inc a
 	isInside :: l inc Bool

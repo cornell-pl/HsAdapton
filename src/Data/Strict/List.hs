@@ -2,7 +2,7 @@
 
 module Data.Strict.List where
 
-import Prelude hiding (mapM,mapM_,map,sequence)
+import Prelude hiding (mapM,mapM_,map,sequence,length)
 import Data.Typeable
 import Data.Foldable as Foldable
 
@@ -47,3 +47,8 @@ reverse = Foldable.foldl' (flip SCons) SNil
 null :: SList a -> Bool
 null SNil = True
 null (SCons _ _) = False
+
+length :: SList a -> Int
+length SNil = 0
+length (SCons _ xs) = succ (length xs)
+

@@ -12,7 +12,6 @@ import System.Mem.Weak
 
 import Control.Monad.IO.Class
 import Data.Unique
-import Control.Monad.Ref
 import Data.Hashable
 import Control.Concurrent
 import Data.Global.TH as TH

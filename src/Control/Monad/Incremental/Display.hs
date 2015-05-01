@@ -17,7 +17,6 @@ import Control.Monad.Trans
 import Control.Monad
 import Data.Typeable
 import Data.WithClass.MData
-import Control.Monad.Ref
 
 
 class (Layer l inc) => Display l inc a where

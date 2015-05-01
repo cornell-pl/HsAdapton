@@ -35,3 +35,10 @@
   (major1) == 0 && (major2) <  10 || \
   (major1) == 0 && (major2) == 10 && (minor) <= 12)
 
+/* package weak-1.0 */
+#define VERSION_weak "1.0"
+#define MIN_VERSION_weak(major1,major2,minor) (\
+  (major1) <  1 || \
+  (major1) == 1 && (major2) <  0 || \
+  (major1) == 1 && (major2) == 0 && (minor) <= 0)
+

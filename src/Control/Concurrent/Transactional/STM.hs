@@ -2,9 +2,9 @@
 
 -- STM as a transactional incremental computation framework that just recomputes output thunks from scratch
 
-module Control.Monad.Transactional.STM where
+module Control.Concurrent.Transactional.STM where
 
-import Control.Monad.Transactional
+import Control.Concurrent.Transactional
 import Control.Monad.Incremental
 import Control.Exception
 import qualified Control.Concurrent.STM as STM
@@ -46,7 +46,7 @@ instance Incremental STM where
 	-- | this function is actually safe in this context, since we support no incrementality
 	unsafeWorld = InsideSTM . unOutsideSTM
 	
-	runIncrementalWithParams params (OutsideSTM stm) = STM.atomically stm
+	runIncrementalWithParams params stm = STM.atomically (unOutsideSTM $ outside stm)
 	
 	data IncParams STM = STMParams
 	defaultIncParams = STMParams
@@ -58,7 +58,6 @@ newtype STMVar (l :: * -> * -> *) inc a = STMVar { unSTMVar :: STM.TVar a } deri
 
 -- STM does not use @IORef@s, but we nonetheless need to pass them as a witness that @IO@ supports references
 instance Transactional STM where
-	atomically (OutsideSTM stm) = STM.atomically stm
 	retry = OutsideSTM STM.retry
 	orElse (OutsideSTM stm1) (OutsideSTM stm2) = OutsideSTM $ STM.orElse stm1 stm2
 
@@ -82,10 +81,10 @@ instance Layer l STM => Input STMVar l STM where
 $(deriveMemo ''STMVar)
 
 instance DeepTypeable STMVar where
-	typeTree _ = MkTypeTree (mkName "Control.Monad.Transactional.STM.STMVar") [] []
+	typeTree _ = MkTypeTree (mkName "Control.Concurrent.Transactional.STM.STMVar") [] []
 
 instance (DeepTypeable l,DeepTypeable inc,DeepTypeable a) => DeepTypeable (STMVar l inc a) where
-	typeTree (_ :: Proxy (STMVar l inc a)) = MkTypeTree (mkName "Control.Monad.Transactional.STM.STMVar") args [MkConTree (mkName "Control.Monad.Transactional.STM.STMVar") [typeTree (Proxy::Proxy (STM.TVar a))]]
+	typeTree (_ :: Proxy (STMVar l inc a)) = MkTypeTree (mkName "Control.Concurrent.Transactional.STM.STMVar") args [MkConTree (mkName "Control.Concurrent.Transactional.STM.STMVar") [typeTree (Proxy::Proxy (STM.TVar a))]]
 		where args = [typeTree (Proxy::Proxy l),typeTree (Proxy::Proxy inc),typeTree (Proxy::Proxy a)]
 
 $(derive makeDeepTypeableAbstract ''STM)
