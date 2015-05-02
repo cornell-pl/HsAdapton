@@ -13,6 +13,7 @@ import Control.Monad.Incremental.Internal.Adapton.Layers
 import Control.Monad.Incremental.Internal.Adapton.Draw
 import Control.Monad.Incremental.Internal.Adapton.Types hiding (MData)
 
+import Safe
 import Control.Monad.Trans
 
 import Control.Monad
@@ -40,7 +41,7 @@ import Data.DeriveTH
 import System.Mem.Weak as Weak
 
 import System.Process
-import Data.IORef
+import Data.IORef.Exts
 import System.FilePath.Posix
 import System.IO
 import System.Directory
@@ -198,7 +199,7 @@ getTxDependentsStatus isFuture txlogs meta = do
 		otherwise -> return ((dependentsTxNM meta,Nothing),TxStatus (Read Nothing :!: False))
 
 drawDynTxVar :: (TxLayer Outside c,TxLayer Inside c) => DynTxVar c -> Outside (TxAdapton c) (String,[DotStatement String],Map.Map String String)
-drawDynTxVar (DynTxU (BuffTxU buff_dta) _ (u :: TxU c l (TxAdapton c) a) txstat) = do
+drawDynTxVar (DynTxU buff_dta _ (u :: TxU c l (TxAdapton c) a) txstat) = do
 	let l = Proxy :: Proxy l
 	(_,stmts,html) <- case (toLayerKind l) of
 		Inside -> let u1 :: TxU c Inside (TxAdapton c) a = coerce u in draw Proxy u1
@@ -206,7 +207,7 @@ drawDynTxVar (DynTxU (BuffTxU buff_dta) _ (u :: TxU c l (TxAdapton c) a) txstat)
 	stat <- unsafeIOToInc $ readIORef txstat
 	str <- case stat of
 		(isEvalOrWrite -> Just _) -> do
-			(dta,_) <- unsafeIOToInc $ readIORef buff_dta
+			(dta,_) <- unsafeIOToInc $ liftM (fromJustNote $ "drawDynTxVar " ++ show stat) $ readIORef' buff_dta
 			case dta of
 				TxValue 0# v _ _ -> inside $ displayK v
 				TxValue 1# v _ _ -> liftM (++"*") $ inside $ displayK v
@@ -220,7 +221,7 @@ drawDynTxVar (DynTxU (BuffTxU buff_dta) _ (u :: TxU c l (TxAdapton c) a) txstat)
 				TxConst v -> inside $ displayK v
 				otherwise -> return ""
 	return (str,stmts,html)
-drawDynTxVar (DynTxM (BuffTxM value) _ (m :: TxM i c l (TxAdapton c) a) txstat) = do
+drawDynTxVar (DynTxM (value) _ (m :: TxM i c l (TxAdapton c) a) txstat) = do
 	let i = Proxy :: Proxy i
 	let l = Proxy :: Proxy l
 	(_,stmts,html) <- case (toIsolation i,toLayerKind l) of
@@ -233,7 +234,7 @@ drawDynTxVar (DynTxM (BuffTxM value) _ (m :: TxM i c l (TxAdapton c) a) txstat) 
 	stat <- unsafeIOToInc $ readIORef txstat
 	str <- case stat of
 		(isEvalOrWrite -> Just _) -> do
-			!v <- unsafeIOToInc $ readIORef value
+			!v <- unsafeIOToInc $ liftM (fromJustNote $ "drawDynTxVar " ++ show stat) $ readIORef value
 			inside $ displayK v
 		otherwise -> do
 			!v <- unsafeIOToInc $ readIORef (dataTxM m)

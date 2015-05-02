@@ -291,25 +291,28 @@ customerJob :: (Draw inc (mod l inc (ListMod' mod l inc (Item mod l inc))),Draw 
 	=> IncParams inc -> CustomersData mod thunk l inc -> Bool -> Customer mod l inc -> IO ()
 customerJob params (warehouse,leastItem) choice customer = do
 	let noBalance (NoBalance msg) = do
---		drawDot ("customer exception " ++ customerName customer ++ " " ++ msg) Proxy (Merge warehouse leastItem)
-		throw (NoBalance msg)		
+		drawDot ("customer exception " ++ customerName customer ++ " " ++ msg) Proxy (Merge warehouse leastItem)
+		throw (NoBalance msg)
+	let notFound (ItemNotFound msg) = do
+		drawDot ("customer exception " ++ customerName customer ++ " " ++ msg) Proxy (Merge warehouse leastItem)
+		throw (ItemNotFound msg)		
 	let action = if choice
 		then do -- list the cheapest item
-			(time,item) <- timeItT $ atomicallyWithParams params $ outside $ do
---				drawDot ("customer listing" ++ customerName customer) Proxy (Merge warehouse leastItem)
+			(time,item) <- timeItT $ atomicallyWithParams params $ flip Catch.catches [Handler noBalance,Handler notFound] $ outside $ do
+				drawDot ("customer listing" ++ customerName customer) Proxy (Merge warehouse leastItem)
 				item <- cheapestItem ("customer " ++ customerName customer) warehouse leastItem
 				str <- display item
---				let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str
---				drawDot msg Proxy (Merge warehouse leastItem)
+				let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str
+				drawDot msg Proxy (Merge warehouse leastItem)
 				return str
 			writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time
 		else do -- buy the cheapest item
-			(time,item) <- timeItT $ atomicallyWithParams params $ flip catch noBalance $ outside $ do
---				drawDot ("customer buying" ++ customerName customer) Proxy (Merge warehouse leastItem)
+			(time,item) <- timeItT $ atomicallyWithParams params $ flip Catch.catches [Handler noBalance,Handler notFound] $ outside $ do
+				drawDot ("customer buying" ++ customerName customer) Proxy (Merge warehouse leastItem)
 				item <- buyCheapestItem ("customer " ++ customerName customer) warehouse leastItem customer
 				str <- display item
---				let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str
---				drawDot msg Proxy (Merge warehouse leastItem)
+				let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str
+				drawDot msg Proxy (Merge warehouse leastItem)
 				return str
 			writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time
 	let noBalance2 e@(NoBalance msg) = error $ "exception: " ++ show msg
@@ -323,25 +326,25 @@ customerJob' params (warehouse,leastItem) choice customer = do
 	let action = if choice
 		then do -- list the cheapest item
 			(time,item) <- timeItT $ runIncrementalWithParams params $ do
---				drawDot ("customer listing" ++ customerName customer ) Proxy (Merge warehouse leastItem)
+				drawDot ("customer listing" ++ customerName customer ) Proxy (Merge warehouse leastItem)
 				e <- cheapestItem' ("customer " ++ customerName customer) warehouse leastItem
 				case e of
 					Left item -> do
 						str <- display item
---						let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str
---						drawDot msg Proxy (Merge warehouse leastItem)
+						let msg = "customer " ++ customerName customer ++ " found cheapest " ++ str
+						drawDot msg Proxy (Merge warehouse leastItem)
 						return str
 					Right e -> return $ show e
 			writeChan debugChan $ "customer " ++ customerName customer ++ " found cheapest " ++ item ++ " in " ++ show time
 		else do -- buy the cheapest item
 			(time,item) <- timeItT $ runIncrementalWithParams params $ do
---				drawDot ("customer buying" ++ customerName customer ) Proxy (Merge warehouse leastItem)
+				drawDot ("customer buying" ++ customerName customer ) Proxy (Merge warehouse leastItem)
 				e <- buyCheapestItem' ("customer " ++ customerName customer) warehouse leastItem customer
 				case e of
 					Left item -> do
 						str <- display item
---						let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str
---						drawDot msg Proxy (Merge warehouse leastItem)
+						let msg = "customer " ++ customerName customer ++ " bought cheapest " ++ str
+						drawDot msg Proxy (Merge warehouse leastItem)
 						return str
 					Right e -> return $ show e
 			writeChan debugChan $ "customer " ++ customerName customer ++ " bought cheapest " ++ item ++ " in " ++ show time
@@ -378,7 +381,7 @@ customersNonIncCBench :: TxBenchmark TxAdaptonC (CustomersData (TxMC Versioned) 
 customersNonIncCBench = TxBenchmark "CustomerNonIncC" genCustomersData genCustomersThreads customerJob'
 
 main :: IO ()
-main = {-flip Exception.finally (mergeGraphsInto' "tx.pdf") $-} do
+main = flip Exception.finally (mergeGraphsInto' "tx.pdf") $ do
 	-- synchronous debugging I/O
 	hSetBuffering stdout NoBuffering
 	
@@ -399,7 +402,7 @@ main = {-flip Exception.finally (mergeGraphsInto' "tx.pdf") $-} do
 --		runTxBenchmark customersNonIncCBench ((defaultIncParamsProxy proxyTxAdaptonC) { txAdaptonMemoSize = 10^4 }) (10^4) 40 1
     	
 		-- incremental, 1 thread
-		runTxBenchmark customersTxAdaptonEBench ((defaultIncParamsProxy proxyTxAdaptonE) { txAdaptonMemoSize = 10^4 }) (10^4) 10 5
+		runTxBenchmark customersTxAdaptonEBench ((defaultIncParamsProxy proxyTxAdaptonE) { txAdaptonMemoSize = 5^1, txAdaptonRepair = False }) (5^1) 10 5
 --		runTxBenchmark customersTxAdaptonCBench ((defaultIncParamsProxy proxyTxAdaptonC) { txAdaptonMemoSize = 10^4 }) (10^4) 10 5
 	
 	return ()

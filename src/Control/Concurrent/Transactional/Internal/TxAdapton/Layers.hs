@@ -40,6 +40,7 @@ import Data.Concurrent.Deque.Reference.DequeInstance
 import Data.List as List
 import Data.Global.TH as TH
 import Data.Monoid
+import Safe
 
 import Control.Concurrent.Transactional.Internal.TxAdapton.Types
 import Control.Applicative
@@ -101,7 +102,7 @@ isThunkTxStackElement (_ :!: SNothing :!: _) = False
 
 -- registers a new transaction-local allocation
 {-# INLINE newTxMLog #-}
-newTxMLog :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer l1 c,TxLayer Outside c) => TxM i c l1 (TxAdapton c) a -> l (TxAdapton c) ()
+newTxMLog :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer l1 c,TxLayer Outside c) => TxM i c l1 (TxAdapton c) a -> l (TxAdapton c) ()
 newTxMLog !m = do
 	!txlogs <- readTxLogs
 	!txid <- readTxIdRef
@@ -126,7 +127,7 @@ newTxULog !u = do
 -- reads a value from a transactional variable
 -- uses @unsafeCoerce@ since we know that the types match
 {-# INLINE readTxMValue #-}
-readTxMValue :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer l1 c,TxLayer Outside c) => TxM i c l1 (TxAdapton c) a -> l (TxAdapton c) (a,TxStatus)
+readTxMValue :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer l1 c,TxLayer Outside c) => TxM i c l1 (TxAdapton c) a -> l (TxAdapton c) (a,TxStatus)
 readTxMValue m = {-# SCC readTxMValue #-} do
 	!tbl <- readTxLogs
 	!txid <- readTxIdRef
@@ -137,7 +138,7 @@ readTxMValue m = {-# SCC readTxMValue #-} do
 		dynTxMValue tvar
 
 {-# INLINE writeTxMValue #-}
-writeTxMValue :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer l1 c,TxLayer Outside c) => TxM i c l1 (TxAdapton c) a -> a -> l (TxAdapton c) TxStatus
+writeTxMValue :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer l1 c,TxLayer Outside c) => TxM i c l1 (TxAdapton c) a -> a -> l (TxAdapton c) TxStatus
 writeTxMValue m v' = do
 	!tbl <- readTxLogs
 	!txid <- readTxIdRef
@@ -155,14 +156,14 @@ readTxUValue u status = do
 	(isFuture,rootThread) <- readRootTx
 	unsafeIOToInc $ do
 		!thread <- myThreadId
-		DynTxU (BuffTxU buff_dta) txdeps u txstat <- bufferTxU isFuture rootThread thread u status tbl
+		DynTxU buff_dta txdeps u txstat <- bufferTxU isFuture rootThread thread u status tbl
 		!stat <- readIORef txstat
 		case stat of
 			(isEvalOrWrite -> Just _) -> do
-				!(dta,_) <- readIORef $ coerceIORefBuffTxUData buff_dta
-				return $! (dta,stat)
+				!(dta,_) <- liftM (fromJustNote $ "readTxUValue " ++ show (idTxNM $ metaTxU u) ++ " " ++ show stat) $ readIORef' buff_dta
+				return $! (coerce dta,stat)
 			otherwise -> do
-				!v <- readIORef $ coerceIORefTxUData $ dataTxU u
+				!v <- readIORef $ coerce $ dataTxU u
 				return $! (v,stat)
 
 {-# INLINE writeTxUValue #-}
@@ -311,7 +312,7 @@ mergeFutureTxLog doWrites !parent_isFuture parent_thread child_thread parent_txl
 	
 	let updEntry acc@(dirties,commits) (uid,child_tvar) = do
 		case child_tvar of
-			DynTxM (BuffTxM buff_dta) _ (m :: TxM i c l (TxAdapton c) a) child_stat -> do
+			DynTxM (buff_dta) _ (m :: TxM i c l (TxAdapton c) a) child_stat -> do
 				let i = Proxy :: Proxy i
 				c_stat <- readIORef' child_stat
 				child <- liftM Prelude.fst $ dynTxMValue child_tvar
@@ -332,13 +333,13 @@ mergeFutureTxLog doWrites !parent_isFuture parent_thread child_thread parent_txl
 								Cumulative -> do -- resolve conflict, dirty both
 									new_value <- do
 										original <- findTxMLogValue child_txlogs2 m
-										(parent :: a) <- liftM (coerce . Prelude.fst) $ dynTxMValue parent_tvar
+										(parent :: a) <- liftM Prelude.fst $ dynTxMValue parent_tvar
 										let resolve :: a -> a -> a -> Inside (TxAdapton c) a = coerce $ resolveTxM m
 										Reader.runReaderT (runTxInner $ resolve original parent child) child_env
 									(dirties',commits') <- mergeEntries True True False acc parent_txlogs child_txlogs parent_tvar child_tvar
 									let commit = do
 										case c_stat of
-											TxStatus (Write _ :!: _) -> writeIORef' buff_dta new_value
+											TxStatus (Write _ :!: _) -> writeIORef' buff_dta $! Just $! new_value
 											TxStatus (New _ :!: _) -> writeIORef' (dataTxM m) new_value
 									return (dirties',commits' >> commit)
 							(isWriteOrNewTrue -> True,_,_) -> do -- keep parent entry, dirty child entry

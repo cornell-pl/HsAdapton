@@ -56,7 +56,7 @@ testprofspace2fast:
 	hp2ps -e8in -c test.hp
 	ps2pdf test.ps > test.pdf
 benx:
-	ghc --make -O3 -threaded bench.hs -fforce-recomp -isrc
+	ghc --make -O3 -threaded bench.hs -fforce-recomp
 	./bench --output bench.html
 benxfast:
 	ghc --make -threaded bench.hs -fforce-recomp -isrc

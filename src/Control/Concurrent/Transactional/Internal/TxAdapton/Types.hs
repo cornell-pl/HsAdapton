@@ -161,19 +161,23 @@ data TxStatusVar = Read !(Maybe Unique) | Eval !(Maybe Unique) | Write !(Maybe U
 -- write is a write to a modifiable or dirtying of a thunk
 -- new is for new transaction allocations; the boolean denotes whether the new variable depends on a written variable or not
 
+appendUniques Nothing mb2 = mb2
+appendUniques mb1 Nothing = mb1
+appendUniques mb1 mb2 = error $ "not appending two uniques " ++ show mb1 ++ show mb2
+
 instance Monoid TxStatusVar where
 	mempty = Read Nothing
-	mappend (Read n1) (Read n2) = Read (max n1 n2)
-	mappend (Read n1) (Eval n2) = Eval (max n1 n2)
-	mappend (Read n1) (Write n2) = Write (max n1 n2)
+	mappend (Read n1) (Read n2) = Read (appendUniques n1 n2)
+	mappend (Read n1) (Eval n2) = Eval (appendUniques n1 n2)
+	mappend (Read n1) (Write n2) = Write (appendUniques n1 n2)
 	mappend (Read n1) (New b) = New b
-	mappend (Eval n1) (Read n2) = Eval (max n1 n2)
-	mappend (Eval n1) (Eval n2) = Eval (max n1 n2)
-	mappend (Eval n1) (Write n2) = Write (max n1 n2)
+	mappend (Eval n1) (Read n2) = Eval (appendUniques n1 n2)
+	mappend (Eval n1) (Eval n2) = Eval (appendUniques n1 n2)
+	mappend (Eval n1) (Write n2) = Write (appendUniques n1 n2)
 	mappend (Eval n1) (New b) = New b
-	mappend (Write n1) (Read n2) = Write (max n1 n2)
-	mappend (Write n1) (Eval n2) = Write (max n1 n2)
-	mappend (Write n1) (Write n2) = Write (max n1 n2)
+	mappend (Write n1) (Read n2) = Write (appendUniques n1 n2)
+	mappend (Write n1) (Eval n2) = Write (appendUniques n1 n2)
+	mappend (Write n1) (Write n2) = Write (appendUniques n1 n2)
 	mappend (Write b1) (New j) = New True
 	mappend (New i) (Read _) = New i
 	mappend (New i) (Eval _) = New i
@@ -202,7 +206,7 @@ type family TxResolve i inc a :: * where
 	TxResolve Forgetful inc a = ()
 	TxResolve Cumulative inc a = Resolve inc a
 
-defaultTxResolve :: (IsolationKind i,Layer Inside inc) => Proxy i -> Proxy inc -> Proxy a -> TxResolve i inc a
+defaultTxResolve :: (Typeable (TxResolve i inc a),Typeable inc,Typeable a,IsolationKind i,Layer Inside inc) => Proxy i -> Proxy inc -> Proxy a -> TxResolve i inc a
 defaultTxResolve i (inc :: Proxy inc) (a :: Proxy a) = case toIsolation i of
 	Versioned -> coerce ()
 	Forgetful -> coerce ()
@@ -299,12 +303,15 @@ type WaitQueue = Deque Threadsafe Threadsafe SingleEnd SingleEnd Grow Safe Lock
 -- buffered dependends EXTEND the original dependents
 type BuffTxUData c l inc a = (TxUData c l inc a , (Either (TxDependencies c) (Weak (TxDependencies c))))
 
-newtype BuffTxU (c :: TxConflict) (l :: * -> * -> *) a = BuffTxU { unBuffTxU :: IORef (BuffTxUData c l (TxAdapton c) a) } deriving Typeable
+type BuffTxU c l a = IORef (Maybe (BuffTxUData c l (TxAdapton c) a))
 
-blankBuffTxU = liftM BuffTxU $ newIORef $ error "BuffTxU"
-blankBuffTxM = liftM BuffTxM $ newIORef $ error "BuffTxM"
+blankBuffTxU :: IO (BuffTxU c l a)
+blankBuffTxU = newIORef Nothing
+blankBuffTxM :: IO (BuffTxM a)
+blankBuffTxM = newIORef Nothing
 
-newtype BuffTxM (c :: TxConflict) (l :: * -> * -> *) a = BuffTxM { unBuffTxM :: IORef a } deriving Typeable
+type BuffTxM a = IORef (Maybe a)
+
 
 type TxDependencies c = IORef [(TxDependency c,Weak (TxDependency c))]
 -- bool says whether the dependency is original or buffered
@@ -331,8 +338,8 @@ data WeakTxVar c where
 -- new = Nothing Nothing new
 -- buffered dependents are ALWAYS seen as an overlay over the original dependents
 data DynTxVar c where
-	DynTxU :: (IncK (TxAdapton c) a,TxLayer l c) => (BuffTxU c l a) -> (TxDependents c) -> !(TxU c l (TxAdapton c) a) -> !(IORef TxStatus) -> DynTxVar c
-	DynTxM :: (IncK (TxAdapton c) a,TxLayer l c,IsolationKind i) => (BuffTxM c l a) -> (TxDependents c) -> !(TxM i c l (TxAdapton c) a) -> !(IORef TxStatus) -> DynTxVar c
+	DynTxU :: (IncK (TxAdapton c) a,TxLayer l c) => BuffTxU c l a -> (TxDependents c) -> !(TxU c l (TxAdapton c) a) -> !(IORef TxStatus) -> DynTxVar c
+	DynTxM :: (Typeable (TxResolve i (TxAdapton c) a),IncK (TxAdapton c) a,TxLayer l c,IsolationKind i) => BuffTxM a -> (TxDependents c) -> !(TxM i c l (TxAdapton c) a) -> !(IORef TxStatus) -> DynTxVar c
 --	DynTxL :: Maybe (BuffTxL l inc a) -> TxL l inc a -> TxStatus -> DynTxVar
 
 data DynTxFuture c where
@@ -340,7 +347,7 @@ data DynTxFuture c where
 
 -- we use a lock-free map since multiple threads may be accessing it to register/unregister new txlogs
 -- a persistent memo table and a family of buffered (transaction-local) memo tables indexed by a buffered tx log
--- note that added entries to the memotable are always New (hence we have TxU and not BuffTxU in buffered tables)
+-- note that added entries to the memotable are always New (hence we have TxU and not in buffered tables)
 type TxMemoTable c k b = (MemoTable k (TxU c Inside (TxAdapton c) b) :!: CMap.Map ThreadId (TxBuffMemoTables c k b))
 
 type TxBuffMemoTables c k b = IORef (Map Unique [TxBuffMemoTable c k b])
@@ -667,12 +674,12 @@ tryRelease lck = do
 	if isLocked then release lck else return ()
 {-# INLINE tryRelease #-}
 
-dynTxMValue :: DynTxVar c -> IO (a,TxStatus)
-dynTxMValue (DynTxM (BuffTxM buff_value) txdeps m txstat) = do
+dynTxMValue :: Typeable a => DynTxVar c -> IO (a,TxStatus)
+dynTxMValue (DynTxM (buff_value) txdeps m txstat) = do
 	stat <- readIORef' txstat
 	case stat of
 		(isEvalOrWrite -> Just _) -> do
-			!v <- readIORef buff_value
+			!v <- liftM (fromJustNote $ "dynTxMValue " ++ show stat) $ readIORef buff_value
 			let !c = coerce v
 			return $! (c,stat)
 		otherwise -> do
@@ -735,17 +742,20 @@ dynTxVarBufferedDependents (DynTxU _ txdeps u txstat) = do
 	case stat of
 		(TxStatus (New _ :!: _)) -> return $ dependentsTxNM $ metaTxU u
 		otherwise -> return txdeps
-{-# INLINE dynTxVarBufferedDependents #-}
+{-# INLINE dynTxVarBufferedDependents #-}	
 
 dynTxVarDependencies :: DynTxVar c -> IO (Maybe (TxDependencies c))
-dynTxVarDependencies (DynTxU (BuffTxU buff_dta) _ u txstat) = do
+dynTxVarDependencies (DynTxU (buff_dta) _ u txstat) = do
 	!stat <- readIORef txstat
 	case stat of
 		(isEvalOrWrite -> Just _) -> do
-			!(dta,_) <- readIORef buff_dta
-			case dta of
-				TxValue dirty value force dependencies -> return $ Just dependencies
-				otherwise -> return Nothing
+			mb <- readIORef' buff_dta
+			case mb of
+				Just !(dta,_) -> do
+					case dta of
+						TxValue dirty value force dependencies -> return $ Just dependencies
+						otherwise -> return Nothing
+				Nothing -> error $ "dynTxVarDependencies " ++ show stat
 		otherwise -> do
 			(readIORef $ dataTxU u) >>= \dta -> case dta of
 				TxValue dirty value force dependencies -> return $ Just dependencies
@@ -756,12 +766,12 @@ dynTxVarDependencies _ = return Nothing
 -- Read = an entry is enough
 -- Eval = a transaction-consistent entry is enough
 -- Write = creates a new or inconsistent entry
-bufferTxM :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c) => Bool -> ThreadId -> ThreadId -> TxM i c l (TxAdapton c) a -> TxStatus -> TxLogs c -> IO (DynTxVar c)
+bufferTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c) => Bool -> ThreadId -> ThreadId -> TxM i c l (TxAdapton c) a -> TxStatus -> TxLogs c -> IO (DynTxVar c)
 bufferTxM isFuture rootThread thread m st@(TxStatus (Read _ :!: i)) (txlogs :: TxLogs c) = doBlock (Proxy :: Proxy c) $ do
 	let !idm = idTxNM $ metaTxM m
 	mb <- findTxContentEntry isFuture thread txlogs (metaTxM m)
 	case mb of
-		Just (!tvar@(DynTxM (BuffTxM buff_dta) txdeps u txstat),!isTop) -> do
+		Just (!tvar@(DynTxM (buff_dta) txdeps u txstat),!isTop) -> do
 			!status <- readIORef txstat
 			case status of
 				TxStatus (New _ :!: j) -> if isTop
@@ -787,7 +797,7 @@ bufferTxM isFuture rootThread thread m st@(TxStatus (Read _ :!: i)) (txlogs :: T
 						return tvar
 					else do
 						let !newst = status `mappend` st
-						buff_dta' <- if isRead status then blankBuffTxM else liftM (BuffTxM) (liftM coerceIORef $ copyIORef' buff_dta)
+						buff_dta' <- if isRead status then blankBuffTxM else (liftM coerce $ copyIORef' buff_dta)
 						txdeps' <- WeakMap.copy' txdeps
 						txstat' <- newIORef' newst
 						let tvar' = DynTxM buff_dta' txdeps' m txstat'
@@ -806,7 +816,7 @@ bufferTxM isFuture rootThread thread m st@(TxStatus (Eval _ :!: i)) (txlogs :: T
 	let !idm = idTxNM $ metaTxM m
 	mb <- findTxContentEntry isFuture thread txlogs (metaTxM m)
 	case mb of
-		Just (!tvar@(DynTxM (BuffTxM buff_dta) txdeps m txstat),!isTop) -> do
+		Just (!tvar@(DynTxM (buff_dta) txdeps m txstat),!isTop) -> do
 			!status <- readIORef txstat
 			case status of
 				TxStatus (New _ :!: j) -> if isTop
@@ -817,10 +827,10 @@ bufferTxM isFuture rootThread thread m st@(TxStatus (Eval _ :!: i)) (txlogs :: T
 						return tvar
 					else do
 						let !newst = dirtyStatus st status
-						buff_dta' <- copyIORef' $ dataTxM m
+						buff_dta' <- readIORef' (dataTxM m) >>= newIORef' . Just
 						txstat' <- newIORef' newst
 						txdeps' <- WeakMap.new'
-						let tvar' = DynTxM (BuffTxM buff_dta') txdeps' m txstat'
+						let tvar' = DynTxM (buff_dta') txdeps' m txstat'
 						addTxLogEntryUp thread txlogs idm tvar'
 						addTxNotifies rootThread (Just status) newst txlogs idm (notifiesTxNM $! metaTxM m)
 						return tvar'
@@ -828,17 +838,17 @@ bufferTxM isFuture rootThread thread m st@(TxStatus (Eval _ :!: i)) (txlogs :: T
 					then do
 						let !newst = st `mappend` status
 						buff_value' <- readIORef' $ dataTxM m
-						writeIORef buff_dta $! buff_value'
+						writeIORef buff_dta $! Just $! buff_value'
 						writeIORef' txstat newst
 						addTxNotifies rootThread (Just status) newst txlogs idm (notifiesTxNM $! metaTxM m)
 						return tvar
 					else do
 						let !newst = st `mappend` status
 						buff_value' <- readIORef' $ dataTxM m
-						buff_dta' <- newIORef' buff_value'
+						buff_dta' <- newIORef' $! Just $! buff_value'
 						txdeps' <- WeakMap.copy' txdeps
 						txstat' <- newIORef' newst
-						let tvar' = DynTxM (BuffTxM buff_dta') txdeps' m txstat'
+						let tvar' = DynTxM (buff_dta') txdeps' m txstat'
 						addTxLogEntryUp thread txlogs idm tvar'
 						addTxNotifies rootThread (Just status) newst txlogs idm (notifiesTxNM $! metaTxM m)
 						return tvar'
@@ -853,28 +863,28 @@ bufferTxM isFuture rootThread thread m st@(TxStatus (Eval _ :!: i)) (txlogs :: T
 						!buff_dta' <- copyIORef' buff_dta
 						txdeps' <- WeakMap.copy' txdeps
 						txstat' <- newIORef' newst
- 						let tvar' = DynTxM (BuffTxM buff_dta') txdeps' m txstat'
+ 						let tvar' = DynTxM (buff_dta') txdeps' m txstat'
 						addTxLogEntryUp thread txlogs idm tvar'
 						addTxNotifies rootThread (Just status) newst txlogs idm (notifiesTxNM $! metaTxM m)
 						return tvar'
 		Nothing -> do
 			buff_value' <- readIORef' (dataTxM m)
-			buff_dta' <- newIORef' buff_value'
+			buff_dta' <- newIORef' $! Just $! buff_value'
 			txdeps' <- WeakMap.new'
 			txstat' <- newIORef' st
-			let tvar' = DynTxM (BuffTxM buff_dta') txdeps' m txstat'
+			let tvar' = DynTxM (buff_dta') txdeps' m txstat'
 			addTxLogEntryUp thread txlogs idm tvar'
 			addTxNotifies rootThread Nothing st txlogs idm (notifiesTxNM $! metaTxM m)
 			return tvar'
 bufferTxM isFuture rootThread thread m status txlogs = changeTxM isFuture rootThread thread m Nothing status txlogs
 
 -- changes a modifiable, or just buffers it
-changeTxM :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c) => Bool -> ThreadId -> ThreadId -> TxM i c l (TxAdapton c) a -> Maybe a -> TxStatus ->  TxLogs c -> IO (DynTxVar c)
+changeTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c) => Bool -> ThreadId -> ThreadId -> TxM i c l (TxAdapton c) a -> Maybe a -> TxStatus ->  TxLogs c -> IO (DynTxVar c)
 changeTxM isFuture rootThread thread m mbv' st@(isEvalOrWrite -> Just (n,i)) (txlogs :: TxLogs c) = doBlock (Proxy :: Proxy c) $ do
 	let !idm = idTxNM $ metaTxM m
 	mb <- findTxContentEntry isFuture thread txlogs (metaTxM m)
 	case mb of
-		Just (!tvar@(DynTxM (BuffTxM buff_dta) txdeps _ txstat),!isTop) -> do
+		Just (!tvar@(DynTxM (buff_dta) txdeps _ txstat),!isTop) -> do
 			!status <- readIORef txstat
 			case status of
 				TxStatus (Read _ :!: i) -> if isTop
@@ -882,7 +892,7 @@ changeTxM isFuture rootThread thread m mbv' st@(isEvalOrWrite -> Just (n,i)) (tx
 						let !newst = status `mappend` st
 						!old_value <- readIORef $ dataTxM m
 						let !v' = maybe old_value id mbv'
-						writeIORef (coerceIORef buff_dta) $! v'
+						writeIORef (coerce buff_dta) $! Just $! v'
 						writeIORef' txstat newst
 						addTxNotifies rootThread (Just status) newst txlogs idm (notifiesTxNM $! metaTxM m)
 						return tvar
@@ -890,10 +900,10 @@ changeTxM isFuture rootThread thread m mbv' st@(isEvalOrWrite -> Just (n,i)) (tx
 						let !newst = status `mappend` st
 						!old_value <- readIORef $ dataTxM m
 						let !v' = maybe old_value id mbv'
-						buff_dta' <- newIORef $! v'
+						buff_dta' <- newIORef $! Just $! v'
 						txdeps' <- WeakMap.copy' txdeps
 						txstat' <- newIORef' newst
-						let tvar' = DynTxM (BuffTxM buff_dta') txdeps' m txstat'
+						let tvar' = DynTxM (buff_dta') txdeps' m txstat'
 						addTxLogEntryUp thread txlogs idm tvar'
 						addTxNotifies rootThread (Just status) newst txlogs idm (notifiesTxNM $! metaTxM m)
 						return tvar'
@@ -911,7 +921,7 @@ changeTxM isFuture rootThread thread m mbv' st@(isEvalOrWrite -> Just (n,i)) (tx
 						let !newst = dirtyStatus st status
 						buff_dta' <- case mbv' of
 							Nothing -> blankBuffTxM
-							Just v' -> liftM BuffTxM $ newIORef $! v'
+							Just v' -> newIORef $! Just $! v'
 						txdeps' <- WeakMap.new'
 						txstat' <- newIORef' newst
 						let tvar' = DynTxM buff_dta' txdeps' m txstat'
@@ -921,30 +931,30 @@ changeTxM isFuture rootThread thread m mbv' st@(isEvalOrWrite -> Just (n,i)) (tx
 				otherwise -> if isTop
 					then do
 						let newst = status `mappend` st
-						!buff_value <- readIORef $ coerceIORef buff_dta
+						!buff_value <- liftM (fromJustNote $ "changeTxM " ++ show status) $ readIORef $ coerce $ buff_dta
 						let !v' = maybe buff_value id mbv'
-						writeIORef (coerceIORef buff_dta) $! v'
+						writeIORef (coerce buff_dta) $! Just $! v'
 						writeIORef' txstat newst
 						addTxNotifies rootThread (Just status) newst txlogs idm (notifiesTxNM $! metaTxM m)
 						return tvar
 					else do
 						let newst = status `mappend` st
-						!buff_value <- readIORef $ coerceIORef buff_dta
+						!buff_value <- liftM (fromJustNote $ "changeTxM " ++ show status) $ readIORef $ coerce buff_dta
 						let !v' = maybe buff_value id mbv'
-						buff_dta' <- newIORef $! v'
+						buff_dta' <- newIORef $! Just $! v'
 						txdeps' <- WeakMap.copy' txdeps
 						txstat' <- newIORef' newst
-						let tvar' = DynTxM (BuffTxM buff_dta') txdeps' m txstat'
+						let tvar' = DynTxM (buff_dta') txdeps' m txstat'
 						addTxLogEntryUp thread txlogs idm tvar'
 						addTxNotifies rootThread (Just status) newst txlogs idm (notifiesTxNM $! metaTxM m)
 						return tvar'
 		Nothing -> do
 			!old_value <- readIORef $ dataTxM m
 			let !v' = maybe old_value id mbv'
-			buff_dta <- newIORef' v'
+			buff_dta <- newIORef' $ Just $! v'
 			txdeps <- WeakMap.new'
 			txstat <- newIORef' st
-			let tvar = DynTxM (BuffTxM buff_dta) txdeps m txstat
+			let tvar = DynTxM (buff_dta) txdeps m txstat
 			addTxLogEntryUp thread txlogs idm tvar
 			addTxNotifies rootThread Nothing st txlogs idm (notifiesTxNM $! metaTxM m)
 			return tvar
@@ -955,7 +965,7 @@ bufferTxU isFuture rootThread thread u st@(TxStatus (Read _ :!: i)) (txlogs :: T
 	let !idu = idTxNM $ metaTxU u
 	mb <- findTxContentEntry isFuture thread txlogs (metaTxU u)
 	case mb of
-		Just (!tvar@(DynTxU (BuffTxU buff_dta) txdeps _ txstat),!isTop) -> do
+		Just (!tvar@(DynTxU (buff_dta) txdeps _ txstat),!isTop) -> do
 			!status <- readIORef txstat
 			case status of
 				TxStatus (New _ :!: j) -> if isTop
@@ -981,7 +991,7 @@ bufferTxU isFuture rootThread thread u st@(TxStatus (Read _ :!: i)) (txlogs :: T
 						return tvar
 					else do
 						let !newst = status `mappend` st
-						!buff_dta' <- if isRead status then blankBuffTxU else liftM BuffTxU (liftM coerceIORefBuffTxUData $ copyIORef' buff_dta)
+						buff_dta' <- liftM coerce $ copyIORef' buff_dta
 						txdeps' <- WeakMap.copy' txdeps
 						txstat' <- newIORef' newst
 						let tvar' = DynTxU buff_dta' txdeps' u txstat'
@@ -1000,7 +1010,7 @@ bufferTxU isFuture rootThread thread u st@(TxStatus (Eval _ :!: i)) (txlogs :: T
 	let !idu = idTxNM $ metaTxU u
 	mb <- findTxContentEntry isFuture thread txlogs (metaTxU u)
 	case mb of
-		Just (!tvar@(DynTxU (BuffTxU buff_dta) txdeps _ txstat),!isTop) -> do
+		Just (!tvar@(DynTxU buff_dta txdeps _ txstat),!isTop) -> do
 			!status <- readIORef txstat
 			case status of
 				TxStatus (New _ :!: j) -> if isTop
@@ -1011,7 +1021,7 @@ bufferTxU isFuture rootThread thread u st@(TxStatus (Eval _ :!: i)) (txlogs :: T
 						return tvar
 					else do -- we need to define a layer over the new local variable
 						let !newst = dirtyStatus st status
-						buff_dta' <- blankBuffTxU
+						buff_dta' <- readIORef (coerce $ dataTxU u) >>= copyTxUData >>= newIORef' . Just
 						txdeps' <- WeakMap.new'
 						txstat' <- newIORef' newst
 						let tvar' = DynTxU buff_dta' txdeps' u txstat'
@@ -1021,16 +1031,16 @@ bufferTxU isFuture rootThread thread u st@(TxStatus (Eval _ :!: i)) (txlogs :: T
 				TxStatus (Read _ :!: _) -> if isTop
 					then do
 						let !newst = status `mappend` st
-						readIORef (coerceIORefTxUData $ dataTxU u) >>= copyTxUData >>= writeIORef' buff_dta
+						readIORef (coerce $ dataTxU u) >>= copyTxUData >>= writeIORef' buff_dta . Just
 						writeIORef' txstat newst
 						addTxNotifies rootThread (Just status) newst txlogs idu (notifiesTxNM $! metaTxU u)
 						return tvar
 					else do
 						let !newst = status `mappend` st
-						buff_dta' <- readIORef (dataTxU u) >>= copyTxUData >>= newIORef'
+						buff_dta' <- readIORef (dataTxU u) >>= copyTxUData >>= newIORef' . Just
 						txdeps' <- WeakMap.copy' txdeps
 						txstat' <- newIORef' newst
-						let tvar' = DynTxU (BuffTxU buff_dta') txdeps' u txstat'
+						let tvar' = DynTxU (buff_dta') txdeps' u txstat'
 						addTxLogEntryUp thread txlogs idu tvar'
 						addTxNotifies rootThread (Just status) newst txlogs idu (notifiesTxNM $! metaTxU u)
 						return tvar'
@@ -1045,15 +1055,15 @@ bufferTxU isFuture rootThread thread u st@(TxStatus (Eval _ :!: i)) (txlogs :: T
 						buff_dta' <- copyIORef' buff_dta
 						txdeps' <- WeakMap.copy' txdeps
 						txstat' <- newIORef' newst
-						let tvar' = DynTxU (BuffTxU $ coerceIORefBuffTxUData buff_dta') txdeps' u txstat'
+						let tvar' = DynTxU (coerce buff_dta') txdeps' u txstat'
 						addTxLogEntryUp thread txlogs idu tvar'
 						addTxNotifies rootThread (Just status) newst txlogs idu (notifiesTxNM $! metaTxU u)
 						return tvar'
 		Nothing -> do
-			!buff_dta <- (readIORef $ dataTxU u) >>= copyTxUData >>= newIORef'
+			!buff_dta <- (readIORef $ dataTxU u) >>= copyTxUData >>= newIORef' . Just
 			txdeps <- WeakMap.new'
 			txstat <- newIORef' st
-			let tvar = DynTxU (BuffTxU buff_dta) txdeps u txstat
+			let tvar = DynTxU (buff_dta) txdeps u txstat
 			addTxLogEntryUp thread txlogs idu tvar
 			addTxNotifies rootThread Nothing st txlogs idu (notifiesTxNM $! metaTxU u)
 			return tvar
@@ -1065,24 +1075,24 @@ changeTxU isFuture rootThread thread u mbChgDta status@(isEvalOrWrite -> Just (n
 	let !idu = idTxNM $ metaTxU u
 	mb <- findTxContentEntry isFuture thread txlogs (metaTxU u)
 	case mb of
-		Just (!tvar@(DynTxU (BuffTxU buff_dta) txdeps u txstat),!isTop) -> do
+		Just (!tvar@(DynTxU buff_dta txdeps u txstat),!isTop) -> do
 			!buff_status <- readIORef txstat
 			case buff_status of
 				TxStatus (Read _ :!: _) -> if isTop
 					then do
 						let !newst = buff_status `mappend` status
-						readIORef (dataTxU u) >>= copyTxUData >>= writeIORef' buff_dta
-						modifyIORefM_' (coerceIORefBuffTxUData buff_dta) (maybe return id mbChgDta)
+						readIORef (dataTxU u) >>= copyTxUData >>= writeIORef' buff_dta . Just
+						modifyIORefM_' (coerce buff_dta) (liftM Just . maybe return id mbChgDta . fromJust)
 						writeIORef' txstat newst
 						addTxNotifies rootThread (Just buff_status) newst txlogs idu (notifiesTxNM $! metaTxU u)
 						return tvar
 					else do
 						let !newst = buff_status `mappend` status
 						txdeps' <- WeakMap.copy' txdeps
-						!buff_dta' <- readIORef (dataTxU u) >>= copyTxUData >>= newIORef'
-						modifyIORefM_' (coerceIORefBuffTxUData buff_dta') (maybe return id mbChgDta)
+						!buff_dta' <- readIORef (dataTxU u) >>= copyTxUData >>= newIORef' . Just
+						modifyIORefM_' (coerce buff_dta') (liftM Just . maybe return id mbChgDta . fromJust)
 						txstat' <- newIORef' newst
-						let !tvar' = DynTxU (BuffTxU buff_dta') txdeps' u txstat'
+						let !tvar' = DynTxU (buff_dta') txdeps' u txstat'
 						addTxLogEntryUp thread txlogs idu tvar'
 						addTxNotifies rootThread (Just buff_status) newst txlogs idu (notifiesTxNM $! metaTxU u)
 						return tvar'
@@ -1092,17 +1102,17 @@ changeTxU isFuture rootThread thread u mbChgDta status@(isEvalOrWrite -> Just (n
 						let !newst = mappend buff_status status
 						case mbChgDta of
 							Nothing -> return ()
-							Just chgDta -> deadWeak >>= \w -> modifyIORefM_' (coerceIORefTxUData $ dataTxU u) (liftM (Prelude.fst) . chgDta . (,Right w)) 
+							Just chgDta -> deadWeak >>= \w -> modifyIORefM_' (coerce $ dataTxU u) (liftM (Prelude.fst) . chgDta . (,Right w)) 
 						writeIORef' txstat newst
 						addTxNotifies rootThread (Just buff_status) newst txlogs idu (notifiesTxNM $! metaTxU u)
 						return tvar
 					else do -- we can't modify new variables created at another transactional layer
 						let !newst = dirtyStatus status buff_status
-						!buff_dta' <- readIORef (dataTxU u) >>= copyTxUData >>= newIORef'
-						modifyIORefM_' (coerceIORefBuffTxUData buff_dta') (maybe return id mbChgDta) 
+						!buff_dta' <- readIORef (dataTxU u) >>= copyTxUData >>= newIORef' . Just
+						modifyIORefM_' (coerce buff_dta') (liftM Just . maybe return id mbChgDta . fromJust) 
 						txdeps' <- WeakMap.new'
 						txstat' <- newIORef' newst
-						let tvar' = DynTxU (BuffTxU buff_dta') txdeps' u txstat'
+						let tvar' = DynTxU (buff_dta') txdeps' u txstat'
 						addTxLogEntryUp thread txlogs idu tvar'
 						addTxNotifies rootThread (Just buff_status) newst txlogs idu (notifiesTxNM $! metaTxU u)
 						return tvar'
@@ -1111,7 +1121,7 @@ changeTxU isFuture rootThread thread u mbChgDta status@(isEvalOrWrite -> Just (n
 					then do
 						let !newst = mappend buff_status status
 						let chg = maybe return id mbChgDta
-						modifyIORefM_' (coerceIORefBuffTxUData buff_dta) chg 
+						modifyIORefM_' (coerce buff_dta) (liftM Just . chg . fromJustNote ("changeTxU " ++ show buff_status))
 						writeIORef' txstat newst
 						addTxNotifies rootThread (Just buff_status) newst txlogs idu (notifiesTxNM $! metaTxU u)
 						return tvar
@@ -1119,10 +1129,10 @@ changeTxU isFuture rootThread thread u mbChgDta status@(isEvalOrWrite -> Just (n
 						let !newst = mappend buff_status status
 						!buff_dta' <- copyIORef' buff_dta
 						let chg = maybe return id mbChgDta
-						modifyIORefM_' (coerceIORefBuffTxUData buff_dta') chg 
+						modifyIORefM_' (coerce buff_dta) (liftM Just . chg . fromJustNote ("changeTxU " ++ show buff_status))
 						txstat' <- newIORef' newst
 						txdeps' <- WeakMap.copy' txdeps
-						let !tvar' = DynTxU (BuffTxU $ buff_dta') txdeps' u txstat'
+						let !tvar' = DynTxU (buff_dta') txdeps' u txstat'
 						-- all changes are logged on the nested transaction's log
 						addTxLogEntryUp thread txlogs idu tvar'
 						addTxNotifies rootThread (Just buff_status) newst txlogs idu (notifiesTxNM $! metaTxU u)
@@ -1130,10 +1140,10 @@ changeTxU isFuture rootThread thread u mbChgDta status@(isEvalOrWrite -> Just (n
 						
 		Nothing -> do
 			txdeps <- WeakMap.new'
-			!buff_dta <- (readIORef $ dataTxU u) >>= copyTxUData >>= newIORef'
-			modifyIORefM_' buff_dta (maybe return id mbChgDta) 
+			!buff_dta <- (readIORef $ dataTxU u) >>= copyTxUData >>= newIORef' . Just
+			modifyIORefM_' buff_dta $ \(Just dta) -> liftM Just $! maybe return id mbChgDta dta
 			txstat <- newIORef' status
-			let !tvar = DynTxU (BuffTxU buff_dta) txdeps u txstat
+			let !tvar = DynTxU (buff_dta) txdeps u txstat
 			addTxLogEntryUp thread txlogs idu tvar
 			addTxNotifies rootThread Nothing status txlogs idu (notifiesTxNM $! metaTxU u)
 			return tvar
@@ -1147,37 +1157,17 @@ copyTxUData dta@(TxValue dirty value force dependencies) = do
 	return $! (TxValue dirty value force buff_dependencies,Left dependencies)
 copyTxUData dta = deadWeak >>= \w -> return $! (dta,Right w)
 
-#ifndef DEBUG
-coerceIORefBuffTxUData = coerce
-coerceIORefTxUData = coerce
-coerceTxU = coerce
-coerceTxM = coerce
-coerceIORef = coerce
-coerce = Unsafe.unsafeCoerce
-#endif
-#ifdef DEBUG
-{-# INLINE coerceIORefBuffTxUData #-}
-coerceIORefBuffTxUData :: (Typeable c,Typeable l,Typeable a,Typeable l1,Typeable a1) => IORef (BuffTxUData c l (TxAdapton c) a) -> IORef (BuffTxUData c l1 (TxAdapton c) a1)
-coerceIORefBuffTxUData = coerce
-coerceIORefTxUData :: (Typeable c,Typeable l,Typeable a,Typeable l1,Typeable a1) => IORef (TxUData c l (TxAdapton c) a) -> IORef (TxUData c l1 (TxAdapton c) a1)
-coerceIORefTxUData = coerce
-coerceTxU :: (Typeable c,Typeable l,Typeable a,Typeable l1,Typeable a1) => TxU c l (TxAdapton c) a -> TxU c l1 (TxAdapton c) a1
-coerceTxU = coerce
-coerceTxM :: (Typeable c,Typeable l,Typeable a,Typeable l1,Typeable a1) => TxM i c l (TxAdapton c) a -> TxM i c l1 (TxAdapton c) a1
-coerceTxM = coerce
-coerceIORef :: (Typeable a,Typeable a1) => IORef a -> IORef a1
-coerceIORef = coerce
+-- #ifndef DEBUG
+-- coerce = Unsafe.unsafeCoerce
+-- #endif
+-- #ifdef DEBUG
 coerce :: (Typeable a,Typeable b) => a -> b
 coerce = coerce' Proxy where
 	coerce' :: (Typeable a,Typeable b) => Proxy b -> a -> b
 	coerce' b (x::a) = case cast x of
 		Nothing -> error $ "failed coerce: cast " ++ show (typeRep (Proxy :: Proxy a)) ++ " into " ++ show (typeRep b)
 		Just y -> y
-#endif
-{-# INLINE coerceIORefTxUData #-}
-{-# INLINE coerceTxU #-}
-{-# INLINE coerceTxM #-}
-{-# INLINE coerceIORef #-}
+-- #endif
 {-# INLINE coerce #-}
 
 {-# INLINE findTxContentEntry #-}
@@ -1249,7 +1239,7 @@ addTxLogEntryDown !thread !txlogs@(SCons txlog txtail) !uid !(wtvar :: Weak (Dyn
 
 -- updates a transaction-local new entry with a nested entry
 commitNestedDynTxVar :: (TxLayer Outside c) => DynTxVar c -> Unique -> IO ()
-commitNestedDynTxVar (DynTxU (BuffTxU buff_dta) txdeps u txstat :: DynTxVar c) parent_id = do
+commitNestedDynTxVar (DynTxU (buff_dta) txdeps u txstat :: DynTxVar c) parent_id = do
 	let !proxy = Proxy :: Proxy c
 	stat <- readIORef' txstat	
 	case stat of
@@ -1260,25 +1250,31 @@ commitNestedDynTxVar (DynTxU (BuffTxU buff_dta) txdeps u txstat :: DynTxVar c) p
 		TxStatus (Eval (Just ((==parent_id) -> True)) :!: b) -> do
 			WeakMap.unionWithKey' (dependentsTxNM $ metaTxU u) txdeps
 			WeakMap.clean' txdeps
-			(dta,ori_dependencies) <- readIORef' buff_dta
-			case dta of
-				TxValue dirty value force txrdependencies -> commitDependenciesTx txrdependencies ori_dependencies
-				otherwise -> return ()
-			writeIORef' (dataTxU u) dta
-			writeIORef buff_dta $ error "BuffTxU"
+			mb <- readIORef' buff_dta
+			case mb of
+				Just (dta,ori_dependencies) -> do
+					case dta of
+						TxValue dirty value force txrdependencies -> commitDependenciesTx txrdependencies ori_dependencies
+						otherwise -> return ()
+					writeIORef' (dataTxU u) dta
+				Nothing -> error $ "commitNestedDynTxVar " ++ show stat
+			writeIORef buff_dta Nothing
 			writeIORef' txstat $ mkNew stat
 		TxStatus (Write (Just ((==parent_id) -> True)) :!: b) -> do
 			WeakMap.unionWithKey' (dependentsTxNM $ metaTxU u) txdeps
 			WeakMap.clean' txdeps
-			(dta,ori_dependencies) <- readIORef' buff_dta
-			case dta of
-				TxValue dirty value force txrdependencies -> commitDependenciesTx txrdependencies ori_dependencies
-				otherwise -> return ()
-			writeIORef' (dataTxU u) dta
-			writeIORef buff_dta $ error "BuffTxU"
+			mb <- readIORef' buff_dta
+			case mb of
+				Just (dta,ori_dependencies) -> do
+					case dta of
+						(TxValue dirty value force txrdependencies) -> commitDependenciesTx txrdependencies ori_dependencies
+						otherwise -> return ()
+					writeIORef' (dataTxU u) dta
+				Nothing -> error $ "commitNestedDynTxVar " ++ show stat
+			writeIORef buff_dta Nothing
 			writeIORef' txstat $ mkNew stat
 		otherwise -> return ()
-commitNestedDynTxVar (DynTxM (BuffTxM buff_dta) txdeps m txstat :: DynTxVar c) parent_id = do
+commitNestedDynTxVar (DynTxM (buff_dta) txdeps m txstat :: DynTxVar c) parent_id = do
 	let !proxy = Proxy :: Proxy c
 	stat <- readIORef' txstat	
 	case stat of
@@ -1289,22 +1285,26 @@ commitNestedDynTxVar (DynTxM (BuffTxM buff_dta) txdeps m txstat :: DynTxVar c) p
 		TxStatus (Eval (Just ((==parent_id) -> True)) :!: b) -> do
 			WeakMap.unionWithKey' (dependentsTxNM $ metaTxM m) txdeps
 			WeakMap.clean' txdeps
-			buff_value <- readIORef' buff_dta
-			writeIORef' (dataTxM m) buff_value
-			writeIORef buff_dta $ error "BuffTxM"
+			mb_buff_value <- readIORef' buff_dta
+			case mb_buff_value of
+				Nothing -> error $ "commitNestedDynTxVar " ++ show stat
+				Just buff_value -> writeIORef' (dataTxM m) $ buff_value
+			writeIORef buff_dta Nothing
 			writeIORef' txstat $ mkNew stat
 		TxStatus (Write (Just ((==parent_id) -> True)) :!: b) -> do
 			WeakMap.unionWithKey' (dependentsTxNM $ metaTxM m) txdeps
 			WeakMap.clean' txdeps
-			buff_value <- readIORef' buff_dta
-			writeIORef' (dataTxM m) buff_value
-			writeIORef buff_dta $ error "BuffTxM"
+			mb_buff_value <- readIORef' buff_dta
+			case mb_buff_value of
+				Nothing -> error $ "commitNestedDynTxVar " ++ show stat
+				Just buff_value -> writeIORef' (dataTxM m) buff_value
+			writeIORef buff_dta Nothing
 			writeIORef' txstat $ mkNew stat
 		otherwise -> return ()
 
 -- conflates all the blocks of a txlog
 flattenTxLogBlocks :: TxLayer Outside c => TxLog c -> IO (TxLogBlock c)
-flattenTxLogBlocks txlog = do
+flattenTxLogBlocks (txlog :: TxLog c) = doBlock (Proxy :: Proxy c) $ do
 	blocks <- readIORef $ txLogBuff txlog
 	block <- flattenMemoTables blocks
 	writeIORef' (txLogBuff txlog) [block]
@@ -1325,14 +1325,14 @@ flattenMemoTables (b1:b2:bs) = do
 --findTxContentEntry :: TxLayer Outside c => Bool -> ThreadId -> TxLogs c -> TxNodeMeta c -> IO (Maybe (DynTxVar c,Bool))
 --findTxLogEntry :: TxLogs c -> Unique -> IO (Maybe (DynTxVar c,Bool))
 
-findTxMContentValue :: TxLayer Outside c => Bool -> ThreadId -> TxLogs c -> TxM i c l (TxAdapton c) a -> IO a
+findTxMContentValue :: (Typeable a,TxLayer Outside c) => Bool -> ThreadId -> TxLogs c -> TxM i c l (TxAdapton c) a -> IO a
 findTxMContentValue isFuture thread txlogs m = do
 	mb <- findTxContentEntry isFuture thread txlogs (metaTxM m)
 	case mb of
 		Just (tvar,_) -> liftM Prelude.fst $ dynTxMValue tvar
 		Nothing -> readIORef' (dataTxM m)
 
-findTxMLogValue :: TxLogs c -> TxM i c l (TxAdapton c) a -> IO a
+findTxMLogValue :: Typeable a => TxLogs c -> TxM i c l (TxAdapton c) a -> IO a
 findTxMLogValue  txlogs m = do
 	mb <- findTxLogEntry txlogs (idTxNM $ metaTxM m)
 	case mb of
@@ -1354,11 +1354,11 @@ mergeTxLog doWrites !isFuture !thread txlog1 txlogs2@(SCons txlog2 _) = flattenT
 
 -- merge the second variable over the first one
 mergeDynTxVar :: Bool -> DynTxVar c -> DynTxVar c -> IO ()
-mergeDynTxVar overwriteData (DynTxM (BuffTxM buff_dta1) buff_deps1 m1 stat1) (DynTxM (BuffTxM buff_dta2) buff_deps2 m2 stat2) = do
+mergeDynTxVar overwriteData (DynTxM (buff_dta1) buff_deps1 m1 stat1) (DynTxM (buff_dta2) buff_deps2 m2 stat2) = do
 	when overwriteData $ readIORef' buff_dta2 >>= writeIORef' buff_dta1 . coerce
 	WeakMap.unionWithKey' buff_deps1 buff_deps2
 	modifyIORefM_' stat1 $ \s1 -> readIORef' stat2 >>= \s2 -> return (mappend s1 s2)
-mergeDynTxVar overwriteData (DynTxU (BuffTxU buff_dta1) buff_deps1 m1 stat1) (DynTxU (BuffTxU buff_dta2) buff_deps2 m2 stat2) = do	
+mergeDynTxVar overwriteData (DynTxU (buff_dta1) buff_deps1 m1 stat1) (DynTxU (buff_dta2) buff_deps2 m2 stat2) = do	
 	when overwriteData $ readIORef' buff_dta2 >>= writeIORef' buff_dta1 . coerce
 	WeakMap.unionWithKey' buff_deps1 buff_deps2
 	modifyIORefM_' stat1 $ \s1 -> readIORef' stat2 >>= \s2 -> return (mappend s1 s2)
@@ -1421,7 +1421,7 @@ dirtyRecursivelyBufferedDynTxVar isFuture !thread txlogs tvar = do
 
 -- dirties a buffered variable in-place without changing its status
 dirtyBufferedTxData :: DynTxVar c -> IO ()
-dirtyBufferedTxData (DynTxU (BuffTxU buff_dta) _ u txstat) = do
+dirtyBufferedTxData (DynTxU (buff_dta) _ u txstat) = do
 	!stat <- readIORef txstat
 	case stat of
 		TxStatus (New _ :!: _) -> modifyIORefM_' (dataTxU u) chgDirty
@@ -1430,12 +1430,12 @@ dirtyBufferedTxData (DynTxU (BuffTxU buff_dta) _ u txstat) = do
   where
 	chgDirty (TxValue _ value force dependencies) = return $ TxValue 1# value force dependencies
 	chgDirty dta = return dta
-	chgDirtyBuff (TxValue _ value force dependencies,ori) = (TxValue 1# value force dependencies,ori)
+	chgDirtyBuff (Just (TxValue _ value force dependencies,ori)) = Just $! (TxValue 1# value force dependencies,ori)
 	chgDirtyBuff dta = dta
 dirtyBufferedTxData _ = return ()
 
 forgetBufferedTxData :: ThreadId -> DynTxVar c -> IO ()
-forgetBufferedTxData thread (DynTxU (BuffTxU buff_dta) _ u txstat) = do
+forgetBufferedTxData thread (DynTxU (buff_dta) _ u txstat) = do
 	!stat <- readIORef txstat
 	-- unmemoize this thunk from the buffered memotables for this thread
 	let unmemo = do
@@ -1452,12 +1452,12 @@ forgetBufferedTxData thread (DynTxU (BuffTxU buff_dta) _ u txstat) = do
 		clearTxDependencies False dependencies
 		return $ TxThunk force
 	forget dta = return dta	
-	forgetBuff (TxValue _ value force dependencies,ori) = do
+	forgetBuff (Just (TxValue _ value force dependencies,ori)) = do
 		ori' <- case ori of
 			Left deps -> liftM Right $ mkWeakRefKey deps deps Nothing
 			Right wdeps -> return $ Right wdeps
 		clearTxDependencies False dependencies
-		return (TxThunk force,ori)
+		return $ Just $! (TxThunk force,ori)
 	forgetBuff dta = return dta
 forgetBufferedTxData thread _ = return ()
 
@@ -1505,14 +1505,14 @@ unbufferDynTxVar' isFuture thread onlyWrites txlogs (uid,entry) = do
 -- we need to clear the dependencies of unbuffered variables
 -- buffered dependents are ALWAYS preserved, but dirtied in case we discard the buffered data
 unbufferDynTxVar'' :: TxLayer Outside c => Bool -> ThreadId -> TxLogs c -> Bool -> DynTxVar c -> IO ()
-unbufferDynTxVar'' isFuture thread txlogs onlyWrites tvar@(DynTxU (BuffTxU dta) txdeps u txstat) = do
+unbufferDynTxVar'' isFuture thread txlogs onlyWrites tvar@(DynTxU (dta) txdeps u txstat) = do
 	!stat <- readIORef txstat
 	case stat of
 		-- we don't unbuffer the value of New variables; New variables cannot have original dependents
 		TxStatus (New i :!: b) -> when (if onlyWrites then i else True) $ do 
 --			debugTx' $ "unbuffered " ++ show stat ++ " " ++ show (idTxNM $ metaTxU u)
 			dirtyBufferedDynTxVar isFuture thread txlogs tvar
-			writeIORef txstat $! TxStatus (New False :!: b)
+			writeIORef' txstat $ TxStatus (New False :!: b)
 		otherwise -> when ((if onlyWrites then isWriteOrNewTrue else Prelude.const True) stat) $ do
 --			debugTx' $ "unbuffered " ++ show stat ++ " " ++ show (idTxNM $ metaTxU u)
 			let !nested = isNested stat
@@ -1521,22 +1521,22 @@ unbufferDynTxVar'' isFuture thread txlogs onlyWrites tvar@(DynTxU (BuffTxU dta) 
 			dirtyBufferedDynTxVar isFuture thread txlogs tvar
 			-- unbuffer the thunk, so that the fresher original data is used instead
 			hasDeps <- WeakMap.null' txdeps
-			writeIORef txstat $! TxStatus (Read nested :!: hasDeps)
-			writeIORef dta $ error "BuffTxU"
-unbufferDynTxVar'' isFuture thread txlogs onlyWrites tvar@(DynTxM (BuffTxM dta) txdeps m txstat) = do
+			writeIORef' txstat $ TxStatus (Read nested :!: hasDeps)
+			writeIORef dta Nothing
+unbufferDynTxVar'' isFuture thread txlogs onlyWrites tvar@(DynTxM buff_dta txdeps m txstat) = do
 	!stat <- readIORef txstat
 	case stat of
 		TxStatus (New i :!: b) -> when (if onlyWrites then i else True) $ do
 --			debugTx' $ "unbuffered " ++ show stat ++ " " ++ show (idTxNM $ metaTxM m)
 			dirtyBufferedDynTxVar isFuture thread txlogs tvar
-			writeIORef txstat $! TxStatus (New False :!: b)
+			writeIORef' txstat $ TxStatus (New False :!: b)
 		otherwise -> when ((if onlyWrites then isWriteOrNewTrue else Prelude.const True) stat) $ do
 --			debugTx' $ "unbuffered " ++ show stat ++ " " ++ show (idTxNM $ metaTxM m)
 			let !nested = isNested stat
 			hasDeps <- WeakMap.null' txdeps
 			dirtyBufferedDynTxVar isFuture thread txlogs tvar
-			writeIORef txstat $! TxStatus (Read nested :!: hasDeps)
-			writeIORef dta $ error "BuffTxM"
+			writeIORef' txstat $ TxStatus (Read nested :!: hasDeps)
+			writeIORef buff_dta Nothing
 	
 {-# INLINE clearTxDependencies #-}
 -- clear only buffered dependencies

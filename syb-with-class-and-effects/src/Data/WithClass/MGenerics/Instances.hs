@@ -240,7 +240,7 @@ instance (DeepTypeable s,DeepTypeable a) => DeepTypeable (ST s a) where
 ------------------------------------------------------------------------------
 
 -- instances of this kind are the motivation for the generalization of this package
-instance (DeepTypeable a, m,MData ctx m a,Sat (ctx (IORef a))) => MData ctx m (IORef a) where
+instance (DeepTypeable a,MonadIO m,MData ctx m a,Sat (ctx (IORef a))) => MData ctx m (IORef a) where
 	gfoldl ctx k z ior = liftIO (readIORef ior) >>= \x -> z (\mx -> mx >>= liftIO . newIORef) >>= flip k (return x)
 	toConstr ctx x   = dataTypeOf ctx x >>= \t -> return $ indexConstr t 1
 	gunfold ctx k z c = case constrIndex c of

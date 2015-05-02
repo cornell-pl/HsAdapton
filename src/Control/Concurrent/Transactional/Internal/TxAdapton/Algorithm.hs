@@ -67,7 +67,7 @@ import Debug
 
 -- ** strict inputs @M@
 
-instance (IsolationKind i,TxLayer Outside c,TxLayer Inside c) => Thunk (TxM i c) Inside (TxAdapton c) where
+instance (TxLayer Outside c,TxLayer Inside c) => Thunk (TxM Versioned c) Inside (TxAdapton c) where
 	new = modInnerTxM
 	{-# INLINE new #-}
 	newc = refInnerTxM
@@ -75,7 +75,7 @@ instance (IsolationKind i,TxLayer Outside c,TxLayer Inside c) => Thunk (TxM i c)
 	read = getInnerTxM
 	{-# INLINE read #-}
 
-instance (IsolationKind i,TxLayer Inside c,TxLayer Outside c) => Thunk (TxM i c) Outside (TxAdapton c) where
+instance (TxLayer Inside c,TxLayer Outside c) => Thunk (TxM Versioned c) Outside (TxAdapton c) where
 	new = modOuterTxM
 	{-# INLINE new #-}
 	newc = refOuterTxM
@@ -83,7 +83,7 @@ instance (IsolationKind i,TxLayer Inside c,TxLayer Outside c) => Thunk (TxM i c)
 	read = getOuterTxM
 	{-# INLINE read #-}
 
-instance (IsolationKind i,TxLayer Outside c,TxLayer Inside c) => Input (TxM i c) Inside (TxAdapton c) where
+instance (TxLayer Outside c,TxLayer Inside c) => Input (TxM Versioned c) Inside (TxAdapton c) where
 	ref = refInnerTxM
 	{-# INLINE ref #-}
 	get = getInnerTxM
@@ -97,7 +97,91 @@ instance (IsolationKind i,TxLayer Outside c,TxLayer Inside c) => Input (TxM i c)
 	modOutside = \c -> outside c >>= refOutside
 	{-# INLINE modOutside #-}
 
-instance (IsolationKind i,TxLayer Inside c,TxLayer Outside c) => Input (TxM i c) Outside (TxAdapton c) where
+instance (TxLayer Inside c,TxLayer Outside c) => Input (TxM Versioned c) Outside (TxAdapton c) where
+	ref = refOuterTxM
+	{-# INLINE ref #-}
+	get = getOuterTxM
+	{-# INLINE get #-}
+	set = setOuterTxM
+	{-# INLINE set #-}
+	refOutside = refOuterTxM
+	{-# INLINE refOutside #-}
+	modOutside = \c -> c >>= refOutside
+	{-# INLINE modOutside #-}
+	
+instance (TxLayer Outside c,TxLayer Inside c) => Thunk (TxM Forgetful c) Inside (TxAdapton c) where
+	new = modInnerTxM
+	{-# INLINE new #-}
+	newc = refInnerTxM
+	{-# INLINE newc #-}
+	read = getInnerTxM
+	{-# INLINE read #-}
+
+instance (TxLayer Inside c,TxLayer Outside c) => Thunk (TxM Forgetful c) Outside (TxAdapton c) where
+	new = modOuterTxM
+	{-# INLINE new #-}
+	newc = refOuterTxM
+	{-# INLINE newc #-}
+	read = getOuterTxM
+	{-# INLINE read #-}
+
+instance (TxLayer Outside c,TxLayer Inside c) => Input (TxM Forgetful c) Inside (TxAdapton c) where
+	ref = refInnerTxM
+	{-# INLINE ref #-}
+	get = getInnerTxM
+	{-# INLINE get #-}
+	set = setInnerTxM
+	{-# INLINE set #-}
+	getOutside = getOuterTxM
+	{-# INLINE getOutside #-}
+	refOutside = refOuterTxM
+	{-# INLINE refOutside #-}
+	modOutside = \c -> outside c >>= refOutside
+	{-# INLINE modOutside #-}
+
+instance (TxLayer Inside c,TxLayer Outside c) => Input (TxM Forgetful c) Outside (TxAdapton c) where
+	ref = refOuterTxM
+	{-# INLINE ref #-}
+	get = getOuterTxM
+	{-# INLINE get #-}
+	set = setOuterTxM
+	{-# INLINE set #-}
+	refOutside = refOuterTxM
+	{-# INLINE refOutside #-}
+	modOutside = \c -> c >>= refOutside
+	{-# INLINE modOutside #-}
+
+instance (TxLayer Outside c,TxLayer Inside c) => Thunk (TxM Cumulative c) Inside (TxAdapton c) where
+	new = modInnerTxM
+	{-# INLINE new #-}
+	newc = refInnerTxM
+	{-# INLINE newc #-}
+	read = getInnerTxM
+	{-# INLINE read #-}
+
+instance (TxLayer Inside c,TxLayer Outside c) => Thunk (TxM Cumulative c) Outside (TxAdapton c) where
+	new = modOuterTxM
+	{-# INLINE new #-}
+	newc = refOuterTxM
+	{-# INLINE newc #-}
+	read = getOuterTxM
+	{-# INLINE read #-}
+
+instance (TxLayer Outside c,TxLayer Inside c) => Input (TxM Cumulative c) Inside (TxAdapton c) where
+	ref = refInnerTxM
+	{-# INLINE ref #-}
+	get = getInnerTxM
+	{-# INLINE get #-}
+	set = setInnerTxM
+	{-# INLINE set #-}
+	getOutside = getOuterTxM
+	{-# INLINE getOutside #-}
+	refOutside = refOuterTxM
+	{-# INLINE refOutside #-}
+	modOutside = \c -> outside c >>= refOutside
+	{-# INLINE modOutside #-}
+
+instance (TxLayer Inside c,TxLayer Outside c) => Input (TxM Cumulative c) Outside (TxAdapton c) where
 	ref = refOuterTxM
 	{-# INLINE ref #-}
 	get = getOuterTxM
@@ -119,17 +203,17 @@ cumulativeInnerTxM resolve m = m >>= refInnerTxMWith resolve
 cumulativeOuterTxM :: (TxLayer Inside c,IncK (TxAdapton c) a,TxLayer Outside c) => Resolve (TxAdapton c) a -> Outside (TxAdapton c) a -> Outside (TxAdapton c) (TxM Cumulative c Outside (TxAdapton c) a)
 cumulativeOuterTxM resolve m = m >>= refOuterTxMWith resolve
 
-modInnerTxM :: (IsolationKind i,TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => Inside (TxAdapton c) a -> Inside (TxAdapton c) (TxM i c Inside (TxAdapton c) a)
+modInnerTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => Inside (TxAdapton c) a -> Inside (TxAdapton c) (TxM i c Inside (TxAdapton c) a)
 modInnerTxM m = m >>= refInnerTxM
-modOuterTxM :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer Inside c,TxLayer Outside c) => Outside (TxAdapton c) a -> Outside (TxAdapton c) (TxM i c Outside (TxAdapton c) a)
+modOuterTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer Inside c,TxLayer Outside c) => Outside (TxAdapton c) a -> Outside (TxAdapton c) (TxM i c Outside (TxAdapton c) a)
 modOuterTxM m = m >>= refOuterTxM
 
-refOuterTxM :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => a -> Outside (TxAdapton c) (TxM i c l (TxAdapton c) a)
+refOuterTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => a -> Outside (TxAdapton c) (TxM i c l (TxAdapton c) a)
 refOuterTxM = refOuterTxM' Proxy Proxy
-refOuterTxM' :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => Proxy i -> Proxy (TxAdapton c) -> a -> Outside (TxAdapton c) (TxM i c l (TxAdapton c) a)
+refOuterTxM' :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => Proxy i -> Proxy (TxAdapton c) -> a -> Outside (TxAdapton c) (TxM i c l (TxAdapton c) a)
 refOuterTxM' i inc (v::a) = refOuterTxMWith (defaultTxResolve i inc (Proxy :: Proxy a)) v
 
-refOuterTxMWith :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Inside c,TxLayer Outside c) => TxResolve i (TxAdapton c) a -> a -> Outside (TxAdapton c) (TxM i c l (TxAdapton c) a)
+refOuterTxMWith :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Inside c,TxLayer Outside c) => TxResolve i (TxAdapton c) a -> a -> Outside (TxAdapton c) (TxM i c l (TxAdapton c) a)
 refOuterTxMWith (resolve :: TxResolve i (TxAdapton c) a) v = doBlockTx $ do
 	let proxy = Proxy :: Proxy c
 	m <- unsafeIOToInc $! do
@@ -159,12 +243,12 @@ refOuterTxMWith (resolve :: TxResolve i (TxAdapton c) a) v = doBlockTx $ do
 	newTxMLog m
 	return $! m
 
-refInnerTxM :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => a -> Inside (TxAdapton c) (TxM i c l (TxAdapton c) a)
+refInnerTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => a -> Inside (TxAdapton c) (TxM i c l (TxAdapton c) a)
 refInnerTxM = refInnerTxM' Proxy Proxy
-refInnerTxM' :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => Proxy i -> Proxy (TxAdapton c) -> a -> Inside (TxAdapton c) (TxM i c l (TxAdapton c) a)
+refInnerTxM' :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => Proxy i -> Proxy (TxAdapton c) -> a -> Inside (TxAdapton c) (TxM i c l (TxAdapton c) a)
 refInnerTxM' i inc (v::a) = refInnerTxMWith (defaultTxResolve i inc (Proxy :: Proxy a)) v
 
-refInnerTxMWith :: (IsolationKind i,TxLayer Outside c,IncK (TxAdapton c) a,TxLayer l c,TxLayer Inside c) => TxResolve i (TxAdapton c) a -> a -> Inside (TxAdapton c) (TxM i c l (TxAdapton c) a)
+refInnerTxMWith :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,TxLayer Outside c,IncK (TxAdapton c) a,TxLayer l c,TxLayer Inside c) => TxResolve i (TxAdapton c) a -> a -> Inside (TxAdapton c) (TxM i c l (TxAdapton c) a)
 refInnerTxMWith (resolve :: TxResolve i (TxAdapton c) a) v = doBlockTx $ do
 	let proxy = Proxy :: Proxy c
 	idU <- unsafeIOToInc newUnique
@@ -196,7 +280,7 @@ refInnerTxMWith (resolve :: TxResolve i (TxAdapton c) a) v = doBlockTx $ do
 	return $! m
 
 {-# INLINE getInnerTxM #-}
-getInnerTxM :: (IsolationKind i,TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => TxM i c Inside (TxAdapton c) a -> Inside (TxAdapton c) a
+getInnerTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => TxM i c Inside (TxAdapton c) a -> Inside (TxAdapton c) a
 getInnerTxM = \t -> {-# SCC getInnerTxM #-} doBlockTx $ do
 	(!value,!status) <- readTxMValue t -- read from the buffer
 	addTxDependency (metaTxM t) (checkTxM t $! value) status -- updates dependencies of callers
@@ -205,24 +289,24 @@ getInnerTxM = \t -> {-# SCC getInnerTxM #-} doBlockTx $ do
 	return value
 
 {-# INLINE getOuterTxM #-}	
-getOuterTxM :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c) => TxM i c l (TxAdapton c) a -> Outside (TxAdapton c) a
+getOuterTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c) => TxM i c l (TxAdapton c) a -> Outside (TxAdapton c) a
 getOuterTxM = \t -> {-# SCC getOuterTxM #-} liftM Prelude.fst $ readTxMValue t
 
 {-# INLINE checkTxM #-}
-checkTxM :: (IsolationKind i,TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => TxM i c Inside (TxAdapton c) a -> a -> Inside (TxAdapton c) (Bool,TxStatus)
+checkTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => TxM i c Inside (TxAdapton c) a -> a -> Inside (TxAdapton c) (Bool,TxStatus)
 checkTxM t oldv = do
 	(!value,!status) <- readTxMValue t
 	let !ok = oldv == value
 	return $! (ok,status)
 
-setInnerTxM :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer Outside c,TxLayer Inside c) => TxM i c Inside (TxAdapton c) a -> a -> Outside (TxAdapton c) ()
+setInnerTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer Outside c,TxLayer Inside c) => TxM i c Inside (TxAdapton c) a -> a -> Outside (TxAdapton c) ()
 setInnerTxM t v' = doBlockTx $ do
 	(!v,_) <- readTxMValue t
 	unless (v == v') $ do
 		writeTxMValue t v'
 		dirtyTx (metaTxM t)
 
-setOuterTxM :: (IsolationKind i,IncK (TxAdapton c) a,TxLayer Outside c) => TxM i c Outside (TxAdapton c) a -> a -> Outside (TxAdapton c) ()
+setOuterTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer Outside c) => TxM i c Outside (TxAdapton c) a -> a -> Outside (TxAdapton c) ()
 setOuterTxM t v' = doBlockTx $ do
 	(!v,_) <- readTxMValue t
 	writeTxMValue t v'
@@ -645,7 +729,7 @@ insertTxDependent !did !d !deps = WeakMap.insertWeak deps did d
 -- the second returned action wakes up sleeping txs that are listening to changed modifiables
 -- we can commit buffered dependents of Writes even when doEvals is False because: if X=Write and X -buffered->Y then Y=Write
 commitDynTxVar :: (TxLayer Outside c) => DynTxVar c -> Bool -> Bool -> IO (RepairDynTxVar c,Wakes)
-commitDynTxVar (DynTxU (BuffTxU buff_dta) txdeps u txstat :: DynTxVar c) doWrites doEvals = do
+commitDynTxVar (DynTxU buff_dta txdeps u txstat :: DynTxVar c) doWrites doEvals = do
 	let !proxy = Proxy :: Proxy c
 	stat <- readIORef' txstat
 	case stat of
@@ -665,7 +749,7 @@ commitDynTxVar (DynTxU (BuffTxU buff_dta) txdeps u txstat :: DynTxVar c) doWrite
 				WeakMap.unionWithKey' (dependentsTxNM $ metaTxU u) txdeps
 			let idu = (idTxNM $ metaTxU u)
 			let commit = do
-				(dta,ori_dependencies) <- readIORef' buff_dta
+				(dta,ori_dependencies) <- liftM (fromJustNote $ "commitDynTxVar " ++ show stat) $ readIORef' buff_dta
 				case dta of
 					TxValue dirty value force txrdependencies -> do
 						markOriginalDependenciesTx txrdependencies
@@ -684,7 +768,7 @@ commitDynTxVar (DynTxU (BuffTxU buff_dta) txdeps u txstat :: DynTxVar c) doWrite
 			-- commit the buffered data to the original thunk
 			-- for dependencies we change the reference itself
 			let commit = do
-				(dta,ori_dependencies) <- readIORef' buff_dta
+				(dta,ori_dependencies) <- liftM (fromJustNote $ "commitDynTxVar " ++ show stat) $ readIORef' buff_dta
 				case dta of
 					TxValue dirty value force txrdependencies -> do
 						markOriginalDependenciesTx txrdependencies
@@ -726,7 +810,7 @@ commitDynTxVar (DynTxU (BuffTxU buff_dta) txdeps u txstat :: DynTxVar c) doWrite
 						else return mempty
 					return (checks,Map.empty)
 		st -> error $ "commitDynTxU " ++ show st
-commitDynTxVar (DynTxM (BuffTxM value) txdeps m txstat :: DynTxVar c) doWrites doEvals = do
+commitDynTxVar (DynTxM value txdeps m txstat :: DynTxVar c) doWrites doEvals = do
 	let !proxy = Proxy :: Proxy c
 	stat <- readIORef' txstat
 	case stat of
@@ -744,7 +828,7 @@ commitDynTxVar (DynTxM (BuffTxM value) txdeps m txstat :: DynTxVar c) doWrites d
 				WeakMap.unionWithKey' (dependentsTxNM $ metaTxM m) txdeps
 
 			let idm = idTxNM $ metaTxM m
-			let commit = readIORef' value >>= writeIORef' (dataTxM m)
+			let commit = readIORef' value >>= writeIORef' (dataTxM m) . fromJustNote ("commitDynTxVar " ++ show stat)
 			when doEvals commit
 			checks <- if doEvals && b
 				then checkTxNotifies proxy False (metaTxM m) (notifiesTxNM $ metaTxM m)
@@ -753,7 +837,7 @@ commitDynTxVar (DynTxM (BuffTxM value) txdeps m txstat :: DynTxVar c) doWrites d
 		TxStatus (Write Nothing :!: b) -> do
 			when (doWrites && b) $ -- all buffered dependents of a write must be writes
 				WeakMap.unionWithKey' (dependentsTxNM $ metaTxM m) txdeps
-			let commit = readIORef' value >>= writeIORef' (dataTxM m)
+			let commit = readIORef' value >>= writeIORef' (dataTxM m) . fromJustNote ("commitDynTxVar " ++ show stat)
 			let idm = idTxNM $ metaTxM m
 			if doWrites
 				then do
@@ -844,7 +928,7 @@ liftTxLogsWrites thread (SCons txlog txlogs) = do
 
 -- extends a base txlog with all its enclosing txlogs, ignoring writes in all of them
 {-# INLINE flattenTxLogs_ #-}
-flattenTxLogs_ txlogs = readRootTx >>= \(isFuture,rootThread) -> unsafeIOToInc myThreadId >>= \thread -> flattenTxLogs isFuture rootThread thread txlogs >> return ()
+flattenTxLogs_ txlogs = doBlockTx $ readRootTx >>= \(isFuture,rootThread) -> unsafeIOToInc myThreadId >>= \thread -> flattenTxLogs isFuture rootThread thread txlogs >> return ()
 flattenTxLogs :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => Bool -> ThreadId -> ThreadId -> TxLogs c -> l (TxAdapton c) (TxLog c)
 flattenTxLogs isFuture rootThread thread txlogs@(SCons toptxlog SNil) = {-# SCC flattenTxLogs #-} unbufferTopTxLog isFuture thread txlogs True >> return toptxlog
 flattenTxLogs isFuture rootThread thread (SCons txlog txlogs) = {-# SCC flattenTxLogs #-} do
@@ -1285,7 +1369,9 @@ resetTx (m :: l (TxAdapton c) a) = do
 	let l = Proxy :: Proxy l
 	!thread <- unsafeIOToInc myThreadId
 	-- unmemoize all old buffered memotables
-	readTxLogs >>= unsafeIOToInc . unbufferTxLogMemos thread
+	txlogs <- readTxLogs
+	unsafeIOToInc $ Foldable.mapM_ finalizeTxLog txlogs
+	unsafeIOToInc $ unbufferTxLogMemos thread txlogs
 	!now <- unsafeIOToInc $! startTx (Proxy :: Proxy c) >>= newIORef'
 	!stack <- unsafeIOToInc $! newIORef' SNil
 	!params <- readTxParams
@@ -1332,8 +1418,8 @@ instance TxConflictClass EarlyConflict where
 	exitTx = readTxId >>= unsafeIOToInc . deleteLiveTx -- wait until it is safe to exit the current transaction (i.e., when others transactions will no longer throw asynchronous exceptions to the current thread)
 	{-# INLINE exitTx #-}
 		
-	restartTxWithRepair (Just (from :!: TxRepair repair)) msg threadid m = restartTx threadid $ debugTx msg >> repair >> m
-	restartTxWithRepair Nothing msg threadid m = resetTx $ debugTx msg >> m
+	restartTxWithRepair (Just (from :!: TxRepair repair)) msg threadid m = restartTx threadid $ debugTx ("restarting "++msg) >> repair >> m
+	restartTxWithRepair Nothing msg threadid m = resetTx $ debugTx ("reseting "++msg) >> m
 	{-# INLINE restartTxWithRepair #-}
 
 	validateTxs _ _ _ = return Nothing -- no intermediate validation, only when invalidation exceptions are received
@@ -1394,10 +1480,10 @@ instance TxConflictClass CommitConflict where
 		
 	restartTxWithRepair (Just (newtime :!: TxRepair repair)) msg starttime m = do
 		unsafeIOToInc $ updateRunningTx starttime newtime
-		restartTx newtime $ debugTx msg >> repair >> m
+		restartTx newtime $ debugTx ("restarting "++msg) >> repair >> m
 	restartTxWithRepair Nothing msg starttime m = do
 		unsafeIOToInc $ deleteRunningTx starttime
-		resetTx $ debugTx msg >> m
+		resetTx $ debugTx ("reseting "++msg) >> m
 	{-# INLINE restartTxWithRepair #-}
 	
 	validateTxs = validateTxsCommit
