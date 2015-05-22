@@ -81,7 +81,7 @@ declareMVar "drawnDependencies"  [t| Map ThreadId [String] |] [e| Map.empty |]
 unlessDrawnDependents :: String -> IO ([a],Map k v) -> IO ([a],Map k v)
 unlessDrawnDependents node m = do
 	threadid <- myThreadId
-	nodesmap <- readMVar "unlessDrawnDependents" drawnDependents
+	nodesmap <- readMVar drawnDependents
 	let nodes = maybe [] id $ Map.lookup threadid nodesmap
 	if node `elem` nodes
 		then return ([],Map.empty)
@@ -90,7 +90,7 @@ unlessDrawnDependents node m = do
 checkDrawn :: Layer l inc => String -> l inc DrawDot -> l inc DrawDot
 checkDrawn node m = do
 	threadid <- unsafeIOToInc $ myThreadId
-	ok <- unsafeIOToInc $ modifyMVarMasked' "checkDrawn" drawnNodes $ \nodesmap -> do
+	ok <- unsafeIOToInc $ modifyMVarMasked' drawnNodes $ \nodesmap -> do
 		let nodes = maybe [] id $ Map.lookup threadid nodesmap
 		if node `elem` nodes
 			then return (nodesmap,False)
@@ -100,7 +100,7 @@ checkDrawn node m = do
 checkDrawnDependents :: String -> IO ([a],Map k v) -> IO ([a],Map k v)
 checkDrawnDependents node m = do
 	threadid <- myThreadId
-	ok <- modifyMVarMasked' "checkDrawnDependents" drawnDependents $ \nodesmap -> do
+	ok <- modifyMVarMasked' drawnDependents $ \nodesmap -> do
 		let nodes = maybe [] id $ Map.lookup threadid nodesmap
 		if node `elem` nodes
 			then return (nodesmap,False)
@@ -110,7 +110,7 @@ checkDrawnDependents node m = do
 checkDrawnDependentsLayer :: Layer l inc => String -> l inc ([a],Map k v) -> l inc ([a],Map k v)
 checkDrawnDependentsLayer node m = do
 	threadid <- unsafeIOToInc $ myThreadId
-	ok <- unsafeIOToInc $ modifyMVarMasked' "checkDrawnDependentsLayer" drawnDependents $ \nodesmap -> do
+	ok <- unsafeIOToInc $ modifyMVarMasked' drawnDependents $ \nodesmap -> do
 		let nodes = maybe [] id $ Map.lookup threadid nodesmap
 		if node `elem` nodes
 			then return (nodesmap,False)
@@ -120,7 +120,7 @@ checkDrawnDependentsLayer node m = do
 checkDrawnDependenciesLayer :: Layer l inc => String -> l inc (String,[a],Map k v) -> l inc (String,[a],Map k v)
 checkDrawnDependenciesLayer node m = do
 	threadid <- unsafeIOToInc $ myThreadId
-	ok <- unsafeIOToInc $ modifyMVarMasked' "checkDrawnDependenciesLayer" drawnDependencies $ \nodesmap -> do
+	ok <- unsafeIOToInc $ modifyMVarMasked' drawnDependencies $ \nodesmap -> do
 		let nodes = maybe [] id $ Map.lookup threadid nodesmap
 		if node `elem` nodes
 			then return (nodesmap,False)
@@ -131,7 +131,7 @@ resetDrawnNodes :: IO ()
 resetDrawnNodes = do
 	threadid <- liftIO myThreadId
 	let delete = return . Map.delete threadid
-	liftIO $ modifyMVarMasked_' "resetDrawnNodes" drawnNodes delete >> modifyMVarMasked_' "resetDrawnNodes" drawnDependencies delete >> modifyMVarMasked_' "resetDrawnNodes" drawnDependents delete
+	liftIO $ modifyMVarMasked_' drawnNodes delete >> modifyMVarMasked_' drawnDependencies delete >> modifyMVarMasked_' drawnDependents delete
 
 -- * Graphviz Drawing classes
 
@@ -155,7 +155,7 @@ drawPDF label inc v = do
 	filename <- unsafeIOToInc $ liftM toString $ nextUUIDSafe
 	let pdfFile = dir </> addExtension filename "pdf"
 	drawToPDF label inc v pdfFile
-	unsafeIOToInc $ modifyMVarMasked_' "drawPDF" tempGraphs (return . ((pdfFile,True):))
+	unsafeIOToInc $ modifyMVarMasked_' tempGraphs (return . ((pdfFile,True):))
 --	liftIO $ putStrLn $ "drew " ++ filename ++ ".pdf"
 	
 drawDot :: Draw inc a => String -> Proxy inc -> a -> Outside inc ()
@@ -165,7 +165,7 @@ drawDot label inc v = do
 	filename <- unsafeIOToInc $ liftM toString $ nextUUIDSafe
 	let dotFile = dir </> addExtension filename "dot"
 	drawToDot label inc v dotFile
-	unsafeIOToInc $ modifyMVarMasked_' "drawDot" tempGraphs (return . ((dotFile,False):))
+	unsafeIOToInc $ modifyMVarMasked_' tempGraphs (return . ((dotFile,False):))
 --	liftIO $ putStrLn $ "drew " ++ filename ++ ".dot"
 
 mergeGraphsInto :: (Layer Outside inc) => FilePath -> Outside inc ()
@@ -181,7 +181,7 @@ mergeGraphsInto' :: FilePath -> IO ()
 mergeGraphsInto' pdfFile = do
 	threadDelay 1000000
 	debugM ("merging graphs into " ++ show pdfFile) $ return ()
-	graphs <- modifyMVarMasked' "mergeGraphsInto'" tempGraphs (\pdfs -> return ([],pdfs))
+	graphs <- modifyMVarMasked' tempGraphs (\pdfs -> return ([],pdfs))
 	let convert (file,typ) = case typ of
 		False -> dotToPDF file
 		True -> return file

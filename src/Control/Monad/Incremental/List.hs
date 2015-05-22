@@ -504,23 +504,23 @@ instance (DeepTypeable mod,DeepTypeable l,DeepTypeable inc,DeepTypeable a,DeepTy
 	typeTree (_::Proxy (JoinListMod' mod l inc a)) = MkTypeTree (mkName "Control.Monad.Incremental.List.JoinListMod'") args [MkConTree (mkName "Control.Monad.Incremental.List.EmptyMod") [],MkConTree (mkName "Control.Monad.Incremental.List.SingleMod") [typeTree (Proxy::Proxy a)],MkConTree (mkName "Control.Monad.Incremental.List.JoinMod") [typeTree (Proxy::Proxy (JoinListMod mod l inc a))]]
 		where args = [typeTree (Proxy::Proxy mod),typeTree (Proxy::Proxy l),typeTree (Proxy::Proxy inc),typeTree (Proxy::Proxy a)]
 
-type JoliftIOistU l a = JoinListMod U l Adapton a
-type JoliftIOistU' l a = JoinListMod' U l Adapton a
+type JoinListU l a = JoinListMod U l Adapton a
+type JoinListU' l a = JoinListMod' U l Adapton a
 
-type JoliftIOistM l a = JoinListMod M l Adapton a
-type JoliftIOistM' l a = JoinListMod' M l Adapton a
+type JoinListM l a = JoinListMod M l Adapton a
+type JoinListM' l a = JoinListMod' M l Adapton a
 
-type JoliftIOistL l a = JoinListMod L l Adapton a
-type JoliftIOistL' l a = JoinListMod' L l Adapton a
+type JoinListL l a = JoinListMod L l Adapton a
+type JoinListL' l a = JoinListMod' L l Adapton a
 
-type JoliftIOistLazyNonIncU l a = JoinListMod LazyNonIncU l LazyNonInc a
-type JoliftIOistLazyNonIncU' l a = JoinListMod' LazyNonIncU l LazyNonInc a
+type JoinListLazyNonIncU l a = JoinListMod LazyNonIncU l LazyNonInc a
+type JoinListLazyNonIncU' l a = JoinListMod' LazyNonIncU l LazyNonInc a
 
-type JoliftIOistLazyNonIncL l a = JoinListMod LazyNonIncL l LazyNonInc a
-type JoliftIOistLazyNonIncL' l a = JoinListMod' LazyNonIncL l LazyNonInc a
+type JoinListLazyNonIncL l a = JoinListMod LazyNonIncL l LazyNonInc a
+type JoinListLazyNonIncL' l a = JoinListMod' LazyNonIncL l LazyNonInc a
 
-type JoliftIOistLazyNonIncM l a = JoinListMod LazyNonIncM l LazyNonInc a
-type JoliftIOistLazyNonIncM' l a = JoinListMod' LazyNonIncM l LazyNonInc a
+type JoinListLazyNonIncM l a = JoinListMod LazyNonIncM l LazyNonInc a
+type JoinListLazyNonIncM' l a = JoinListMod' LazyNonIncM l LazyNonInc a
 
 instance (Display l1 inc a,Display l1 inc (JoinListMod mod l inc a)) => Display l1 inc (JoinListMod' mod l inc a) where
 	displaysPrec proxyL proxyInc EmptyMod r = return $ "EmptyMod" ++ r
@@ -555,18 +555,18 @@ instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable l,Sat (ctx (JoinListMod
       dataTypeOf ctx x = return ty where
             ty = mkDataType "Todo.JoinListMod'" [mkConstr ty "EmptyMod" [] Prefix,mkConstr ty "SingleMod" [] Prefix,mkConstr ty "JoinMod" [] Prefix]
 
-joliftIOistInc :: (IncK inc (JoinListMod' mod l inc a),Output mod l inc) => JoinListMod mod l inc a -> JoinListMod mod l inc a -> l inc (JoinListMod mod l inc a)
-joliftIOistInc mxs mys = thunk $ return $ JoinMod mxs mys
+joinListInc :: (IncK inc (JoinListMod' mod l inc a),Output mod l inc) => JoinListMod mod l inc a -> JoinListMod mod l inc a -> l inc (JoinListMod mod l inc a)
+joinListInc mxs mys = thunk $ return $ JoinMod mxs mys
 
-joliftIOistInc' :: (IncK inc (JoinListMod' mod l inc a),Output mod l inc) => JoinListMod' mod l inc a -> JoinListMod' mod l inc a -> l inc (JoinListMod' mod l inc a)
-joliftIOistInc' mxs mys = do
+joinListInc' :: (IncK inc (JoinListMod' mod l inc a),Output mod l inc) => JoinListMod' mod l inc a -> JoinListMod' mod l inc a -> l inc (JoinListMod' mod l inc a)
+joinListInc' mxs mys = do
 	txs <- thunk $ return mxs
 	tys <- thunk $ return mys
 	return $ JoinMod txs tys
 
 -- | a self-pruning joinlist concatenation operation
-joliftIOistPruneInc :: (IncK inc (JoinListMod' mod l inc a),Output mod l inc) => JoinListMod mod l inc a -> JoinListMod mod l inc a -> l inc (JoinListMod mod l inc a)
-joliftIOistPruneInc tx ty = thunk $ do
+joinListPruneInc :: (IncK inc (JoinListMod' mod l inc a),Output mod l inc) => JoinListMod mod l inc a -> JoinListMod mod l inc a -> l inc (JoinListMod mod l inc a)
+joinListPruneInc tx ty = thunk $ do
 	x <- force tx
 	isEmptyJoinListMod' x >>= \b -> if b
 		then force ty
@@ -576,9 +576,9 @@ joliftIOistPruneInc tx ty = thunk $ do
 				then return x
 				else return $ JoinMod tx ty
 
-mapJoliftIOistInc :: (IncK inc (JoinListMod' thunk l inc b),IncK inc (JoinListMod' mod l inc a),Thunk mod l inc,Eq (JoinListMod thunk l inc b),Memo (JoinListMod mod l inc a),Output thunk l inc)
+mapJoinListInc :: (IncK inc (JoinListMod' thunk l inc b),IncK inc (JoinListMod' mod l inc a),Thunk mod l inc,Eq (JoinListMod thunk l inc b),Memo (JoinListMod mod l inc a),Output thunk l inc)
 	=> (a -> l inc b) -> JoinListMod mod l inc a -> l inc (JoinListMod thunk l inc b)
-mapJoliftIOistInc f = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
+mapJoinListInc f = memo $ \recur mxs -> read mxs >>= \xs -> case xs of
 	EmptyMod -> return EmptyMod
 	SingleMod x -> liftM SingleMod $ f x
 	JoinMod mxs1 mxs2 -> do

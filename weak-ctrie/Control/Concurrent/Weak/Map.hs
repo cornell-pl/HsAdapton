@@ -29,6 +29,8 @@ module Control.Concurrent.Weak.Map
       -- * Query
     , lookup
 	, lookupOrInsert, lookupOrInsertMkWeak
+	
+	, unsafeMapM_, unsafeToList
 
     ) where
 
@@ -130,3 +132,28 @@ table_finalizer :: (Eq k, Hashable k) => WeakMap' k v -> IO ()
 table_finalizer tbl = do
 	pairs <- CMap.unsafeToList tbl
 	sequence_ [ Weak.finalize w | (_,w) <- pairs ]
+
+unsafeMapM_ :: ((k,v) -> IO r) -> WeakMap k v -> IO ()
+unsafeMapM_ f (WeakMap (tbl_ref :!: _)) = do
+	tbl <- readIORef tbl_ref
+	xs <- CMap.unsafeToList tbl
+	let step (k,w) = do
+		mb <- Weak.deRefWeak w
+		case mb of
+			Nothing -> return ()
+			Just v -> f (k,v) >> return ()
+	Control.Monad.mapM_ step xs
+	
+unsafeToList :: WeakMap k v -> IO [(k,v)]
+unsafeToList (WeakMap (tbl_ref :!: _)) = do
+	tbl <- readIORef tbl_ref
+	xs <- CMap.unsafeToList tbl
+	let step (k,w) mvs = do
+		mb <- Weak.deRefWeak w
+		case mb of
+			Nothing -> mvs
+			Just v -> liftM ((k,v):) mvs
+	foldr step (return []) xs
+	
+
+

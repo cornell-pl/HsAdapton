@@ -44,9 +44,14 @@ unKindTV t = t
 deriveMemoId :: Name -> Q [Dec]
 deriveMemoId name = do
 	x <- reify name
-	let decl = case x of
-		TyConI dec -> convert $ everywhere (mkT unKindTV) dec
+	case x of
+		TyConI dec -> deriveMemoIdFromDec dec
 		otherwise -> error "deriveMemoId"
+
+deriveMemoIdFromDec :: Dec -> Q [Dec]
+deriveMemoIdFromDec dec = do
+	let name = decName dec
+	let decl = convert $ everywhere (mkT unKindTV) dec
 	let ty = foldl AppT (ConT name) (map (VarT . mkName) $ H.dataDeclVars decl)
 	let rty = return ty
 	[d|
@@ -61,9 +66,14 @@ deriveMemoId name = do
 deriveMemo :: Name -> Q [Dec]
 deriveMemo name = do
 	x <- reify name
-	let decl = case x of
-		TyConI dec -> convert $ everywhere (mkT unKindTV) dec
-		otherwise -> error "deriveMemoId"
+	case x of
+		TyConI dec -> deriveMemoFromDec dec
+		otherwise -> error "deriveMemo"
+
+deriveMemoFromDec :: Dec -> Q [Dec]
+deriveMemoFromDec dec = do
+	let name = decName dec
+	let decl = convert $ everywhere (mkT unKindTV) dec
 	let vars = map (VarT . mkName) $ H.dataDeclVars decl
 	let ty = foldl AppT (ConT name) vars
 	let rty = return ty
@@ -75,13 +85,40 @@ deriveMemo name = do
 			{-# INLINE memoWeak #-}
 			memoWeak = \x -> MkWeak $ mkWeak x |]
 
+deriveMemoNewType :: Dec -> Q [Dec]
+deriveMemoNewType dec = do
+	let (NewtypeD _ name args con _) = everywhere (mkT unKindTV) dec
+	let vars = map (\(PlainTV n) -> VarT n) args
+	let ty = foldl AppT (ConT name) vars
+	let rty = return ty
+	(destrE,innerty) <- case con of
+		NormalC conname [(_,innerty)] -> do
+			x <- newName "x"
+			return (LamE [ConP conname [VarP x]] (VarE x),innerty)
+		RecC conname [(destrname,_,innerty)] -> return (VarE destrname,innerty)
+		otherwise -> error "deriveMemoNewType"
+	let rdestrE = return destrE
+	let rinnerty = return innerty
+	[d|
+		instance (Typeable $rty,Memo $rinnerty) => Memo $rty where
+			type Key $rty = Key $rinnerty
+			{-# INLINE memoKey #-}
+			memoKey = memoKey . $rdestrE
+			{-# INLINE memoWeak #-}
+			memoWeak = memoWeak . $rdestrE |]
+
 -- | creates a @Memo@ instance not supporting memoization (i.e., all values are treated as being different)
 deriveNoMemo :: Name -> Q [Dec]
 deriveNoMemo name = do
 	x <- reify name
-	let decl = case x of
-		TyConI dec -> convert $ everywhere (mkT unKindTV) dec
+	case x of
+		TyConI dec -> deriveNoMemoFromDec dec
 		otherwise -> error "deriveMemoId"
+			
+deriveNoMemoFromDec :: Dec -> Q [Dec]
+deriveNoMemoFromDec dec = do
+	let name = decName dec
+	let decl = convert $ everywhere (mkT unKindTV) dec
 	let ty = foldl AppT (ConT name) (map (VarT . mkName) $ H.dataDeclVars decl)
 	let rty = return ty
 	[d|
@@ -91,3 +128,9 @@ deriveNoMemo name = do
 			memoKey = \x -> Neq
 			{-# INLINE memoWeak #-}
 			memoWeak = \x -> MkWeak mkDeadWeak |]
+			
+decName :: Dec -> Name
+decName (DataD _ name _ _ _) = name
+decName (NewtypeD _ name _ _ _) = name
+decName dec = error "not a data/newtype declaration"
+

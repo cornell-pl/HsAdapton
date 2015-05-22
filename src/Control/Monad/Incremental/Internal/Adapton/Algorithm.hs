@@ -11,7 +11,7 @@ import Control.Monad.Incremental.Internal.Adapton.Layers
 import Control.Monad.Incremental.Internal.Adapton.Types
 import Control.Monad.Incremental.Internal.Adapton.Memo
 import Control.Monad
-import Data.Strict.Maybe as Strict
+import qualified Data.Strict.Maybe as Strict
 import Debug
 import Data.Unique
 import System.Mem.Weak.Exts
@@ -22,7 +22,6 @@ import qualified System.Mem.MemoTable as MemoTable
 import Data.IORef.Exts
 import Data.IORef
 import Data.Strict.Tuple (Pair(..))
-import Data.Strict.List (SList(..))
 import qualified Data.Strict.List as SList
 import Data.Proxy
 import Data.WithClass.MData
@@ -74,10 +73,10 @@ instance (Layer Outside Adapton) => Input M Outside Adapton where
 	modOutside = \c -> c >>= refOutside
 	{-# INLINE modOutside #-}
 
-modInnerM :: (IncK inc a,Layer Inside inc) => Inside inc a -> Inside inc (M Inside inc a)
+modInnerM :: (AdaptonImpl inc,IncK inc a,Layer Inside inc) => Inside inc a -> Inside inc (M Inside inc a)
 modInnerM m = m >>= refInnerM
 
-modOuterM :: (IncK inc a,Layer Outside inc) => Outside inc a -> Outside inc (M Outside inc a)
+modOuterM :: (AdaptonImpl inc,IncK inc a,Layer Outside inc) => Outside inc a -> Outside inc (M Outside inc a)
 modOuterM m = m >>= refOuterM
 
 refOuterM :: (IncK inc a,Layer l inc,Layer Outside inc) => a -> Outside inc (M l inc a)
@@ -88,7 +87,7 @@ refOuterM v = unsafeIOToInc $ do
 	-- since the ref will never be reused, we don't need to worry about it's creator
 	return $ M (dta,(NodeMeta (idU,dependentsU,error "nodirty",return (),Nothing)))
 
-refInnerM :: (IncK inc a,Layer l inc,Layer Inside inc) => a -> Inside inc (M l inc a)
+refInnerM :: (AdaptonImpl inc,IncK inc a,Layer l inc,Layer Inside inc) => a -> Inside inc (M l inc a)
 refInnerM v = unsafeIOToInc $ do
 	idU <- newUnique
 	dta <- newIORef v
@@ -100,7 +99,7 @@ refInnerM v = unsafeIOToInc $ do
 -- forces a lazy modifiable (encoded as a plain thunk)
 -- the layer is just for uniformity, but it does not matter for @M@
 {-# INLINE getInnerM #-}
-getInnerM :: (Eq a,IncK inc a,Layer Inside inc) => M Inside inc a -> Inside inc a
+getInnerM :: (AdaptonImpl inc,Eq a,IncK inc a,Layer Inside inc) => M Inside inc a -> Inside inc a
 getInnerM = \t -> {-debug ("getInnerM " ++ show (hashUnique $ idNM $ metaM t)) $ -} unsafeIOToInc $  do
 	value <- readIORef (dataM t)
 	addDependency (metaM t) (unsafeIOToInc $ checkM t $! value) -- updates dependencies of callers
@@ -175,27 +174,25 @@ instance (Layer Outside Adapton) => Input L Outside Adapton where
 	modify = modifyL
 	{-# INLINE modify #-}
 
-refL :: (Layer l inc) => a -> l inc (L l inc a)
---refL :: (Layer l inc, m) => a -> Outer (L l inc a)
+refL :: (AdaptonImpl inc,Layer l inc) => a -> l inc (L l inc a)
 refL v = unsafeIOToInc $ do
 	idU <- newUnique
-	dta <- newIORef (LConst 0# v) 
+	dta <- newIORef (LConst v) 
 	dependentsU <- WeakMap.new 
 	creator <- mkRefCreator idU
 	return $ L (dta,(NodeMeta (idU,dependentsU,error "nodirty",return (),creator)))
 
-modL :: (Layer l inc) => l inc a -> l inc (L l inc a)
---modL :: (Layer l inc, m) => l inc a -> Outer (L l inc a)
+modL :: (AdaptonImpl inc,Layer l inc) => l inc a -> l inc (L l inc a)
 modL m = unsafeIOToInc $ do
 	idU <- newUnique
-	dta <- newIORef (LThunk 0# m)
+	dta <- newIORef (LThunk m)
 	dependentsU <- WeakMap.new
 	creator <- mkRefCreator idU
 	return $ L (dta,(NodeMeta (idU,dependentsU,error "nodirty",return (),creator)))
 
 -- forces a lazy modifiable (encoded as a plain thunk)
 {-# INLINE getInnerL #-}
-getInnerL :: (Eq a,IncK inc a,Layer Inside inc) => L Inside inc a -> Inside inc a
+getInnerL :: (AdaptonImpl inc,Eq a,IncK inc a,Layer Inside inc) => L Inside inc a -> Inside inc a
 getInnerL = \t -> {-debug ("getInnerL " ++ show (hashUnique $ idNM $ metaL t)) $ -} do
 	value <- getNoDependentsInnerL t
 	unsafeIOToInc $ addDependency (metaL t) (unsafeIOToInc $ checkL t $! value) -- updates dependencies of callers
@@ -203,81 +200,73 @@ getInnerL = \t -> {-debug ("getInnerL " ++ show (hashUnique $ idNM $ metaL t)) $
 
 -- forces a lazy modifiable (encoded as a plain thunk)
 {-# INLINE getOuterL #-}
-getOuterL :: (IncK inc a,Layer Outside inc) => L Outside inc a -> Outside inc a
+getOuterL :: (AdaptonImpl inc,IncK inc a,Layer Outside inc) => L Outside inc a -> Outside inc a
 getOuterL = error "getting a lazy modifiable outside" --getNoDependentsOuterL
 
 -- force that does not return the value nor adds dependencies, but instead checks whether the value has not changed
 {-# INLINE checkL #-}
-checkL :: (Eq a,IncK inc a,Layer Inside inc) => L Inside inc a -> a -> IO Bool
+checkL :: (AdaptonImpl inc,Eq a,IncK inc a,Layer Inside inc) => L Inside inc a -> a -> IO Bool
 checkL = \t oldv -> do
 	d <- readIORef (dataL t)
 	case d of
-		LThunk _ _ -> return False
-		LConst _ value -> return (oldv == value)
+		LThunk _ -> return False
+		LConst value -> return (oldv == value)
 
 {-# INLINE getNoDependentsInnerL #-}
-getNoDependentsInnerL :: (Layer Inside inc) => L Inside inc a -> Inside inc a
+getNoDependentsInnerL :: (AdaptonImpl inc,Layer Inside inc) => L Inside inc a -> Inside inc a
 getNoDependentsInnerL = \t -> {-debug ("getNoDependentsInnerL " ++ show (hashUnique $ idNM $ metaL t)) $ -} do
 	d <- unsafeIOToInc $ readIORef (dataL t)
 	case d of
-		LThunk _ force -> evaluateInnerL t force --unevaluated thunk
-		LConst _ value -> return value -- constant value
+		LThunk force -> evaluateInnerL t force --unevaluated thunk
+		LConst value -> return value -- constant value
 
 {-# INLINE getNoDependentsOuterL #-}
-getNoDependentsOuterL :: (Eq a,Layer Outside inc) => L Outside inc a -> Outside inc a
+getNoDependentsOuterL :: (AdaptonImpl inc,Eq a,Layer Outside inc) => L Outside inc a -> Outside inc a
 getNoDependentsOuterL = \t -> do
 	d <- unsafeIOToInc $ readIORef (dataL t)
 	case d of
-		LThunk _ force -> evaluateOuterL t force --unevaluated thunk
-		LConst _ value -> return value -- constant value
+		LThunk force -> evaluateOuterL t force --unevaluated thunk
+		LConst value -> return value -- constant value
 
 -- does not add the modifiable to the stack, as we do with thunks
 {-# INLINE evaluateInnerL #-}
-evaluateInnerL :: (Layer Inside inc) => L Inside inc a -> Inside inc a -> Inside inc a
+evaluateInnerL :: (AdaptonImpl inc,Layer Inside inc) => L Inside inc a -> Inside inc a -> Inside inc a
 evaluateInnerL t force = debug ("re-evaluatingInnerL " ++ show (hashUnique $ idNM $ metaL t)) $ do
-	unsafeIOToInc $ pushStack (metaL t :!: SNothing)
+	unsafeIOToInc $ pushStack (metaL t :!: Strict.Nothing)
 	value <- force
-	unsafeIOToInc $ writeIORef (dataL t) $! LConst 1# value
+	unsafeIOToInc $ writeIORef (dataL t) $! LConst value
 	popStack'
 	return value
 
 -- does not add the modifiable to the stack, as we do with thunks
 -- does not store the result in the modifiable
 {-# INLINE evaluateOuterL #-}
-evaluateOuterL :: (Eq a,Layer Outside inc) => L Outside inc a -> Outside inc a -> Outside inc a
+evaluateOuterL :: (AdaptonImpl inc,Eq a,Layer Outside inc) => L Outside inc a -> Outside inc a -> Outside inc a
 evaluateOuterL t force = debug ("re-evaluatingOuterL " ++ show (hashUnique $ idNM $ metaL t)) $ do
-	unsafeIOToInc $ pushStack (metaL t :!: SNothing)
+	unsafeIOToInc $ pushStack (metaL t :!: Strict.Nothing)
 	value <- force
-	markForcedL t
 	popStack'
 	return value
-
-markForcedL :: (Layer l inc) => L l inc a -> l inc ()
-markForcedL t = unsafeIOToInc $ do
-	d <- readIORef (dataL t)
-	writeIORef (dataL t) $! case d of
-		LThunk _ force -> LThunk 1# force
-		LConst _ value -> LConst 1# value
 
 setL :: (Eq a,IncK inc a,Layer Outside inc,Layer l inc) => L l inc a -> a -> Outside inc ()
 setL l v' = debug ("changed " ++ show (hashUnique $ idNM $ metaL l)) $ unsafeIOToInc $ do
 	d <- readIORef (dataL l)
-	let value_changed isForced = do
-		writeIORef (dataL l) $! LConst isForced v'
+	let value_changed = do
+		writeIORef (dataL l) $! LConst v'
 		dirty (metaL l) -- dirties only dependents
 	case d of
-		LThunk isForced m -> value_changed isForced
-		LConst isForced v -> if v==v'
+		LThunk m -> value_changed
+		LConst v -> if v==v'
 			then return ()
-			else value_changed isForced
+			else value_changed
 
 -- changes the value lazily, so it cannot perform equality
 overwriteL :: (Layer l inc) => L l inc a -> l inc a -> Outside inc ()
 overwriteL t m = unsafeIOToInc $ do
 	d <- readIORef (dataL t)
 	writeIORef (dataL t) $! case d of
-		LThunk isForced _ -> LThunk isForced m
-		LConst isForced _ -> LThunk isForced m
+		LThunk _ -> LThunk m
+		LConst _ -> LThunk m
 	dirty (metaL t) -- dirties only dependents
 
 -- appends a change to the chain of pending changes
@@ -285,8 +274,8 @@ modifyL :: (Layer l inc) => L l inc a -> (a -> l inc a) -> Outside inc ()
 modifyL t f = unsafeIOToInc $ do
 	d <- readIORef (dataL t)
 	writeIORef (dataL t) $! case d of
-		LThunk isForced force -> LThunk isForced $ force >>= f -- if it has never been evaluated, it remains so
-		LConst isForced value -> LThunk isForced $ f value
+		LThunk force -> LThunk $ force >>= f -- if it has never been evaluated, it remains so
+		LConst value -> LThunk $ f value
 	dirty (metaL t) -- dirties only dependents
 
 -- | Tests if a lazy modifiable has been evaluated
@@ -294,19 +283,8 @@ isUnevaluatedL :: (Layer l inc) => L l1 inc a -> l inc Bool
 isUnevaluatedL t = do
 	d <- unsafeIOToInc $ readIORef (dataL t)
 	case d of
-		LThunk _ force -> return True --unevaluated thunk
-		LConst _ value -> return False -- constant value
-
--- | Tests if a lazy modifiable has ever been forced
--- If it has never been forced, then we know that its dependents do not need to be repaired
-isUnforcedL :: (Layer l inc) => L l1 inc a -> l inc Bool
-isUnforcedL t = do
-	d <- unsafeIOToInc $ readIORef (dataL t)
-	case d of
-		LThunk 0# force -> return True
-		LThunk 1# force -> return False
-		LConst 0# value -> return True
-		LConst 1# value -> return False
+		LThunk force -> return True --unevaluated thunk
+		LConst value -> return False -- constant value
 
 -- * Thunks
 
@@ -352,6 +330,8 @@ instance (Layer Inside Adapton) => Output U Inside Adapton where
 	{-# INLINE memoAs #-}
 	gmemoQ = gmemoQU
 	{-# INLINE gmemoQ #-}
+	gmemoQAs = gmemoQUAs
+	{-# INLINE gmemoQAs #-}
 
 -- | Creates a new thunk
 thunkU :: (Layer l inc,Layer l1 inc) => l1 inc a -> l inc (U l1 inc a)
@@ -371,7 +351,7 @@ constU v = unsafeIOToInc $ do
 	return $ U (dta,(NodeMeta (idU,error "no dependents",error "no dirty",forgetUData' dta,Nothing)))
 
 -- | Force a computation without change propagation
-forceOuterU :: (IncK inc a,Layer Outside inc) => U Outside inc a -> Outside inc a
+forceOuterU :: (AdaptonImpl inc,IncK inc a,Layer Outside inc) => U Outside inc a -> Outside inc a
 forceOuterU = \t -> do
 	d <- unsafeIOToInc $ readIORef (dataU t)
 	case d of
@@ -381,7 +361,7 @@ forceOuterU = \t -> do
 
 -- | Force a computation with change propagation
 -- NOTE: if we allow @U@ thunks to be modified, then this constant optimization is unsound!
-forceInnerU :: (Eq a,IncK Adapton a,Layer Inside Adapton) => U Inside Adapton a -> Inside Adapton a
+forceInnerU :: (AdaptonImpl inc,Eq a,IncK inc a,Layer Inside inc) => U Inside inc a -> Inside inc a
 forceInnerU = \t -> {-debug ("forceInnerU " ++ show (hashUnique $ idU t)) $ -} do
 	value <- forceNoDependentsU t
 	has <- hasDependenciesU t -- for the case when a thunk is actually a constant computation (what arises frequently in generic code...), we don't need to record dependencies
@@ -409,7 +389,7 @@ oldvalueU t = do
 
 -- force that does not record any dependency on other thunks, e.g., (internally) when only displaying the contents or when only repairing
 {-# INLINE forceNoDependentsU #-}
-forceNoDependentsU :: (IncK Adapton a,Layer Inside Adapton) => U Inside Adapton a -> Inside Adapton a
+forceNoDependentsU :: (AdaptonImpl inc,IncK inc a,Layer Inside inc) => U Inside inc a -> Inside inc a
 forceNoDependentsU = \t -> {-debug ("forceNoDependentsU "++show (idNM $ metaU t)) $ -} do
 	d <- unsafeIOToInc $ readIORef (dataU t)
 	case d of
@@ -419,17 +399,17 @@ forceNoDependentsU = \t -> {-debug ("forceNoDependentsU "++show (idNM $ metaU t)
 		Const value -> return value -- constant value
 
 -- force that does not return the value nor adds dependencies, but instead checks whether the value has not changed
-checkU :: (Eq a,IncK Adapton a,Layer Inside Adapton) => U Inside Adapton a -> a -> Inside Adapton Bool
+checkU :: (AdaptonImpl inc,Eq a,IncK inc a,Layer Inside inc) => U Inside inc a -> a -> Inside inc Bool
 checkU t oldv = do
 	d <- unsafeIOToInc $ readIORef (dataU t)
 	case d of
 		Value 0# value force dependencies -> return (oldv==value)
 		Value 1# value force dependencies -> liftM (oldv ==) (repairInnerU t value force dependencies)
 		Thunk _ -> return False -- if the thunk has never been computed
-		Const value -> return False --return (oldv == value) -- assuming that @U@ thunks cannot be mutated, the value for constants cannot change
+		Const value -> return False -- given that @U@ thunks cannot be mutated, the value for constants cannot change
 
 -- used to avoid forcing the current node if none of the dependencies changes
-repairInnerU :: (Layer Inside Adapton) => U Inside Adapton a -> a -> Inside Adapton a -> IORef (Dependencies) -> Inside Adapton a
+repairInnerU :: (AdaptonImpl inc,Layer Inside inc) => U Inside inc a -> a -> Inside inc a -> IORef (Dependencies inc) -> Inside inc a
 repairInnerU t value force dependencies = {-# SCC repairInnerU #-} debug ("repairing thunk "++ show (hashUnique $ idNM $ metaU t)) $
 		unsafeIOToInc (readIORef dependencies) >>= foldr repair' norepair' . reverse --we need to reverse the dependency list to respect evaluation order
 	where
@@ -440,8 +420,8 @@ repairInnerU t value force dependencies = {-# SCC repairInnerU #-} debug ("repai
 		isDirty <- unsafeIOToInc $ readIORef dirtyW
 		if isDirty
 			then do
-				unsafeIOToInc $ writeIORef dirtyW $! False -- undirty the dependency
-				ok <- checkW -- checks if the dependency does not need to be re-evaluated (not dirty or the new value is the same as the old one)
+				unsafeIOToInc $ writeIORef' dirtyW False -- undirty the dependency
+				ok <- checkW -- checks if the dependency does not need to be re-evaluated (dependent not dirty or the new value is the same as the old one)
 				if ok
 					then debug ("dependency has not changed "++show (idNM $ srcMetaW) ++" "++show (idNM $ tgtMetaW)) m
 					else debug ("dependency has changed"++show (idNM $ srcMetaW) ++" "++show (idNM $ tgtMetaW)) $ unsafeIOToInc (clearDependencies dependencies >> newIORef []) >>= evaluateInnerU t force -- we create a new dependencies reference to free all the old data that depends on the it
@@ -450,9 +430,9 @@ repairInnerU t value force dependencies = {-# SCC repairInnerU #-} debug ("repai
 -- recomputes a node
 -- does not clear the dependencies on its own
 {-# INLINE evaluateInnerU #-}
-evaluateInnerU :: (Typeable inc,Layer Inside inc) => U Inside inc a -> Inside inc a -> IORef (Dependencies) -> Inside inc a
+evaluateInnerU :: (AdaptonImpl inc,Typeable inc,Layer Inside inc) => U Inside inc a -> Inside inc a -> IORef (Dependencies inc) -> Inside inc a
 evaluateInnerU t force dependencies = {-# SCC evaluateInnerU #-} debug ("re-evaluatingInnerU " ++ show (hashUnique $ idU t)) $ do
-	unsafeIOToInc $ pushStack (metaU t :!: SJust dependencies)
+	unsafeIOToInc $ pushStack (metaU t :!: Strict.Just dependencies)
 	value <- force
 	unsafeIOToInc $ writeIORef (dataU t) $! Value 0# value force dependencies
 	popStack'
@@ -499,11 +479,11 @@ gmemoQUAs ctx name (f :: (GenericQMemoU ctx Inside inc b -> GenericQMemoU ctx In
 
 {-# INLINE addDependency #-}
 -- adds a bidirectional dependency on a thunk
-addDependency :: (Layer Inside Adapton) => NodeMeta -> Inside Adapton Bool -> IO ()
+addDependency :: (AdaptonImpl inc,Layer Inside inc) => NodeMeta inc -> Inside inc Bool -> IO ()
 addDependency calleemeta check = do
 	!top <- topThunkStack
 	case top of
-		Just (callermeta :!: SJust callerdependencies) -> debug ("added BX dependency: "++show (hashUnique $ idNM calleemeta) ++ " -> " ++ show (hashUnique $ idNM callermeta)) $ do
+		Just (callermeta :!: Strict.Just callerdependencies) -> debug ("added BX dependency: "++show (hashUnique $ idNM calleemeta) ++ " -> " ++ show (hashUnique $ idNM callermeta)) $ do
 			dirtyW <- newIORef False 
 			let dependencyW = Dependency (calleemeta,dirtyW,check,callermeta)
 			let weakset = dependentsNM calleemeta
@@ -516,7 +496,7 @@ addDependency calleemeta check = do
 
 -- | deletes all dependencies, by running their finalizers; this will also kill the "inverse" dependents
 {-# INLINE clearDependencies #-}
-clearDependencies :: IORef (Dependencies) -> IO ()
+clearDependencies :: IORef (Dependencies inc) -> IO ()
 clearDependencies = \r -> readIORef r >>= mapM_ (liftIO . snd)
 
 {-# INLINE writeDirtyValue #-}
@@ -539,18 +519,18 @@ dirtyValue' dta = modifyIORef' dta (\(Value _ value force dependencies) -> Value
 -- XXX: we could refine the type system to prevent the modification of references created inside thunks, but that seems overcomplicated just to cut an edge case.
 -- dirtying purges dead weak pointers
 {-# INLINE dirty #-}
-dirty :: NodeMeta -> IO ()
+dirty :: NodeMeta inc -> IO ()
 dirty = \umeta -> do
 	dirtyCreator (creatorNM umeta) -- if we change a reference that was created inside some memoized thunk, we have to forget all the memoized data for the parent thunk
 	dirtyRecursively (dependentsNM umeta)
 
 -- does not remove dead dependencies
-dirtyRecursively :: Dependents -> IO ()
+dirtyRecursively :: Dependents inc -> IO ()
 dirtyRecursively deps = do
 	WeakMap.mapM_ dirty' deps -- take the chance to purge eventually dead pointers from dependents to dependencies (since there is no ultimate guarantee that finalizers run)
 	where
 	{-# INLINE dirty' #-}
-	dirty' :: (Unique,Dependent) -> IO ()
+	dirty' :: (Unique,Dependent inc) -> IO ()
 	dirty' = \(_,Dependency (srcMeta,dirty,check,tgtMeta)) -> do
 		isDirty <- readIORef dirty
 		unless isDirty $ do
@@ -559,7 +539,7 @@ dirtyRecursively deps = do
 			dirtyRecursively (dependentsNM tgtMeta) -- dirty recursively
 
 -- whenever a reference is changed, remove all the cached data of the parent thunk that created the reference, and dirty recursive thunks that depend on the parent thunk
-dirtyCreator :: Maybe (Creator) -> IO ()
+dirtyCreator :: Maybe (Creator inc) -> IO ()
 dirtyCreator Nothing = return ()
 dirtyCreator (Just wcreator) = do
 	mb <- liftIO $ deRefWeak wcreator
@@ -586,11 +566,11 @@ forgetUData' dta = do
 
 {-# INLINE mkRefCreator #-}
 -- if the parent is a reference, we don't need to remember it because no dirtying will be necessary
-mkRefCreator :: Unique -> IO (Maybe (Creator))
+mkRefCreator :: AdaptonImpl inc => Unique -> IO (Maybe (Creator inc))
 mkRefCreator = \idU -> liftIO $ do
 	top <- topStack
 	case top of
-		Just (callermeta :!: SJust callerdependencies) -> do
+		Just (callermeta :!: Strict.Just callerdependencies) -> do
 			weak <- mkWeakRefKey callerdependencies callermeta Nothing -- the parent reference should live as long as the creator's dependencies
 			{-debug (show (hashUnique idU) ++ "refparent " ++ show (hashUnique $ idNM callermeta)) $ -}
 			return $ Just weak

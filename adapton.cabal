@@ -63,6 +63,7 @@ Library
     Data.Memo
     Data.Strict.List
     Data.Strict.Maybe
+    Data.Strict.NeList
     System.Mem.MemoTable
     System.Mem.StableName.Exts
     System.Mem.WeakMap

@@ -100,9 +100,9 @@ instance (IncK inc a,Layer l inc,Output U l inc,MData (DrawDict inc) (Outside in
 				return ([thunkID],DN thunkNode : childrenEdges ++ dependentEdges ++ dependencyEdges ++ SG childrenRank : childrenDot,childrenTable `Map.union` dependentTable `Map.union` dependencyTable)
 			Nothing -> return ([thunkID],[DN thunkNode],Map.empty)
 
-drawDependents :: String -> Dependents -> IO ([DotStatement String],Map.Map String String)
+drawDependents :: String -> Dependents inc -> IO ([DotStatement String],Map.Map String String)
 drawDependents fromID deps = checkDrawnDependents fromID $ WeakMap.foldWeakM (drawDependent fromID) ([],Map.empty) deps
-drawDependent :: String -> ([DotStatement String],Map.Map String String) -> (Unique,Weak Dependent) -> IO ([DotStatement String],Map.Map String String)
+drawDependent :: String -> ([DotStatement String],Map.Map String String) -> (Unique,Weak (Dependent inc)) -> IO ([DotStatement String],Map.Map String String)
 drawDependent fromID (stmts,html) (_,weak) = do
 	mb <- deRefWeak weak
 	case mb of
@@ -120,15 +120,15 @@ drawDependent fromID (stmts,html) (_,weak) = do
 concatOut xs = (concat stmts,foldr Map.union Map.empty tbls)
 	where (stmts,tbls) = unzip xs
 
-drawDependencies :: String -> NodeMeta -> IO ([DotStatement String],Map.Map String String)
+drawDependencies :: String -> NodeMeta inc -> IO ([DotStatement String],Map.Map String String)
 drawDependencies toID meta = return ([],Map.empty) --checkDrawnDependencies toID $ do
 --	mb <- liftIO $ applyUDataOp (uDataOpUM meta) Nothing (liftM Just . getDependencies) -- recursive dependents
 --	case mb of
 --		Nothing -> return []
 --		Just deps -> drawDependencies' toID deps
-drawDependencies' :: String -> Dependencies -> IO ([DotStatement String],Map.Map String String)
+drawDependencies' :: String -> Dependencies inc -> IO ([DotStatement String],Map.Map String String)
 drawDependencies' toID dependencies = liftM concatOut $ mapM (drawDependency toID) dependencies
-drawDependency :: String -> (Dependency,IO ()) -> IO ([DotStatement String],Map.Map String String)
+drawDependency :: String -> (Dependency inc,IO ()) -> IO ([DotStatement String],Map.Map String String)
 drawDependency toID ((Dependency (srcMeta,dirty,check,tgtMeta)),_) = do
 	let ithunkID = show $ hashUnique $ idNM srcMeta
 	isDirty <- readIORef dirty
@@ -136,7 +136,7 @@ drawDependency toID ((Dependency (srcMeta,dirty,check,tgtMeta)),_) = do
 	(edges',edgesTable') <- drawDependencies ithunkID srcMeta -- recursive dependencies
 	return (DE (dependencyEdge isDirty toID ithunkID) : edges ++ edges',edgesTable `Map.union` edgesTable')
 
-getDependencies :: IORef (UData l inc a) -> IO Dependencies
+getDependencies :: IORef (UData l inc a) -> IO (Dependencies inc)
 getDependencies dta = do
 	d <- readIORef dta
 	case d of

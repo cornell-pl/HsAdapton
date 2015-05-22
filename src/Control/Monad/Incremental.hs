@@ -167,6 +167,13 @@ class (Thunk mod l inc,Layer l inc) => Output mod l inc where
 		    memo_func = f memo_func
 		in memo_func
 	{-# INLINE gmemoQ #-}
+	
+	gmemoQAs :: (Memo name,Typeable ctx,IncK inc b) => Proxy ctx -> name -> (GenericQMemo ctx mod l inc b -> GenericQMemo ctx mod l inc b) -> GenericQMemo ctx mod l inc b
+	gmemoQAs ctx name (f :: GenericQMemo ctx mod l inc b -> GenericQMemo ctx mod l inc b) =
+		let memo_func :: GenericQMemo ctx mod l inc b
+		    memo_func = f memo_func
+		in memo_func
+	{-# INLINE gmemoQAs #-}
 
 -- | Input modifiable references (can be directly mutated; are NOT updated for changes on other thunks/modifiables)
 -- inputs that support delayed changes are parameterized with the layer at which that computation should run
@@ -246,7 +253,7 @@ instance (Typeable a,IncK inc a,Sat (ctx (mod l1 inc a)),Eq a,MData ctx (l2 inc)
 	dataTypeOf ctx x = return ty
 		where ty = mkDataType "Control.Monad.Incremental.Thunk" [mkConstr ty "Thunk" [] Prefix]
 
--- this instance is too generic and causes overlapping proble, but should be used as a pattern for specific thunk types
+-- this instance is too generic and causes overlapping problems, but should be used as a pattern for specific thunk types
 --instance (Eq a,Layer l inc r m,Thunk mod l inc r m,MData ctx (l inc r m) a
 --		, Sat (ctx (mod l inc a)),DeepTypeable (mod l inc a)
 --		) => MData ctx (l inc r m) (mod l inc a) where

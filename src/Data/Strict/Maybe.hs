@@ -4,4 +4,4 @@ module Data.Strict.Maybe where
 
 import Data.Typeable
 
-data SMaybe a = SJust !a | SNothing deriving (Show,Eq,Ord,Typeable)
+data Maybe a = Just !a | Nothing deriving (Show,Eq,Ord,Typeable)

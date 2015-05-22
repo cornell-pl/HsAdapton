@@ -18,7 +18,6 @@ import Control.Monad
 import Data.Typeable
 import Data.WithClass.MData
 
-
 class (Layer l inc) => Display l inc a where
 	displaysPrec :: Proxy l -> Proxy inc -> a -> DisplayS l inc
 
@@ -130,9 +129,6 @@ nfDataIncProxy l inc = Proxy
 instance (Layer l inc,MData (NFDataIncDict l inc) (l inc) a) => NFDataInc l inc a where
 	nfDataInc l inc v = gmapQr (nfDataIncProxy l inc) (\() () -> return ()) () (nfDataIncDict dict l inc) v
 
-
-
-
 instance (IncK inc a,Display Outside inc a,Output T l inc) => Display Outside inc (T l inc a) where
 	displaysPrec proxyL proxyInc m rest = forceOutside m >>= \x -> liftM (\x -> "<" ++ x) $ displaysPrec proxyL proxyInc x ('>':rest)
 	{-# INLINE displaysPrec #-}
@@ -152,3 +148,8 @@ instance (IncK inc a,NFDataInc Inside inc a,Output T Inside inc) => NFDataInc In
 
 instance Show (T l inc a) where
 	show t = "T"
+	
+
+
+
+	

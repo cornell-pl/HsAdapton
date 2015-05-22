@@ -5,7 +5,7 @@ module Control.Concurrent.Transactional.Internal.TxAdapton.Draw where
 import Control.Concurrent.Transactional
 import Control.Concurrent.Transactional.Internal.TxAdapton.Types
 import Control.Concurrent.Transactional.Internal.TxAdapton.Layers
-import Control.Concurrent.Transactional.Internal.TxAdapton.Algorithm hiding (drawTxU,drawTxM)
+import Control.Concurrent.Transactional.Internal.TxAdapton.Algorithm
 import Control.Monad.Incremental
 import Control.Monad.Incremental.Draw
 import Control.Monad.Incremental.Internal.Adapton.Algorithm
@@ -15,7 +15,7 @@ import Control.Monad.Incremental.Internal.Adapton.Types hiding (MData)
 
 import Safe
 import Control.Monad.Trans
-
+import qualified Data.Strict.Maybe as Strict
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Strict.Tuple
@@ -61,14 +61,14 @@ import Debug
 
 statusColor :: TxStatus -> Color
 statusColor status = X11Color $ case status of
-	TxStatus (Read Nothing :!: False) -> Black
-	TxStatus (Read Nothing :!: True) -> SteelBlue
-	TxStatus (Read (Just _) :!: False) -> Aquamarine2
-	TxStatus (Read (Just _) :!: True) -> Aquamarine3
-	TxStatus (Eval Nothing :!: _) -> Blue4
-	TxStatus (Eval (Just _) :!: _) -> DarkViolet
-	TxStatus (Write Nothing :!: _) -> Chocolate4
-	TxStatus (Write (Just _) :!: _) -> Magenta
+	TxStatus (Read Strict.Nothing :!: False) -> Black
+	TxStatus (Read Strict.Nothing :!: True) -> SteelBlue
+	TxStatus (Read (Strict.Just _) :!: False) -> Aquamarine2
+	TxStatus (Read (Strict.Just _) :!: True) -> Aquamarine3
+	TxStatus (Eval Strict.Nothing :!: _) -> Blue4
+	TxStatus (Eval (Strict.Just _) :!: _) -> Magenta
+	TxStatus (Write Strict.Nothing :!: _) -> Chocolate4
+	TxStatus (Write (Strict.Just _) :!: _) -> DarkViolet
 	TxStatus (New False :!: _) -> Green4
 	TxStatus (New True :!: _) -> Yellow2
 
@@ -81,7 +81,7 @@ instance (IncK (TxAdapton c) a,TxLayer Inside c,TxLayer Outside c,TxLayer l c,MD
 		checkDrawn thunkID $ do
 --			debugTx $ "drawing " ++ show thunkID
 			start <- readTxId
-			(isFuture,_) <- readRootTx
+			(isFuture :!: _) <- readRootTx
 			thread <- unsafeIOToInc myThreadId
 			let label = show thread ++" "++ show start
 			let txt = DN $ DotNode {nodeID = label, nodeAttributes = [Shape PlainText,Label (StrLabel $ T.pack label)]}
@@ -101,7 +101,7 @@ instance (IncK (TxAdapton c) a,TxLayer Outside c,TxLayer Inside c,TxLayer l c,Ou
 		checkDrawn thunkID $ do
 --			debugTx $ "drawing " ++ show thunkID
 			isDirtyUnevaluated <- isDirtyUnevaluatedTxU t
-			(isFuture,_) <- readRootTx
+			(isFuture :!: _) <- readRootTx
 			(dependents,status) <- readTxLogs >>= \txlog -> unsafeIOToInc $ getTxDependentsStatus isFuture txlog (metaTxU t)
 			(dependentEdges,dependentsTable) <- drawTxDependents thunkID dependents
 			(thunkDependenciesStr,thunkDependencies,thunkTable) <- drawTxDependencies thunkID $ metaTxU t
@@ -136,7 +136,7 @@ drawTxDependent fromID (stmts,html) (_,weak) = do
 drawTxDependent' :: (TxLayer Outside c,TxLayer Inside c) => String -> ([DotStatement String],Map.Map String String) -> (TxDependency c) -> Outside (TxAdapton c) ([DotStatement String],Map.Map String String)
 drawTxDependent' fromID (stmts,html) (TxDependency (srcMetaW :!: dirtyW :!: checkW :!: tgtMetaW :!: oriW :!: _)) = do
 			let ithunkID = show $ hashUnique $ idTxNM tgtMetaW
-			(isFuture,_) <- readRootTx
+			(isFuture :!: _) <- readRootTx
 			isOriginal <- unsafeIOToInc $ readIORef oriW
 			(ithunkDependenciesStr,ithunkDependencies,ithunkTable) <- drawTxDependencies ithunkID tgtMetaW
 			(dependents,status) <- readTxLogs >>= \txlog -> unsafeIOToInc $ getTxDependentsStatus isFuture txlog tgtMetaW
@@ -152,7 +152,7 @@ dependentTxEdge isOriginal isDirty fromNode toNode = DotEdge {fromNode = fromNod
 drawTxDependencies :: (TxLayer Outside c,TxLayer Inside c) => String -> TxNodeMeta c -> Outside (TxAdapton c) (String,[DotStatement String],Map.Map String String)
 drawTxDependencies toID meta = do
 	txlogs <- readTxLogs
-	(isFuture,_) <- readRootTx
+	(isFuture :!: _) <- readRootTx
 	thread <- unsafeIOToInc myThreadId
 	mb <- unsafeIOToInc $ findTxContentEntry isFuture thread txlogs meta
 	
@@ -184,19 +184,19 @@ drawTxDependencies toID meta = do
 		return (strDependencies,stmts',html' `Map.union` Map.singleton (show $ idTxNM meta) strValue)
 	
 	case mb of
-		Nothing -> do
+		Strict.Nothing -> do
 			(_,stmts,html) <- drawTxNM meta
 			return ("?",stmts,html)
-		Just (!tvar,!isTop) -> drawTVar tvar
+		Strict.Just (tvar :!: isTop :!: _) -> drawTVar tvar
 
 getTxDependentsStatus :: TxLayer Outside c => Bool -> TxLogs c -> TxNodeMeta c -> IO ((TxDependents c,Maybe (TxDependents c)),TxStatus)
 getTxDependentsStatus isFuture txlogs meta = do		
 	thread <- myThreadId
 	mb <- findTxContentEntry isFuture thread txlogs meta
 	case mb of
-		Just (!(DynTxU _ txdeps _ txstat),!isTop) -> readIORef txstat >>= \stat -> return ((dependentsTxNM meta,Just txdeps),stat)
-		Just (!(DynTxM _ txdeps _ txstat),!isTop) -> readIORef txstat >>= \stat -> return ((dependentsTxNM meta,Just txdeps),stat)
-		otherwise -> return ((dependentsTxNM meta,Nothing),TxStatus (Read Nothing :!: False))
+		Strict.Just ((DynTxU _ txdeps _ txstat) :!: isTop :!: _) -> readIORef txstat >>= \stat -> return ((dependentsTxNM meta,Just txdeps),stat)
+		Strict.Just ((DynTxM _ txdeps _ txstat) :!: isTop :!: _) -> readIORef txstat >>= \stat -> return ((dependentsTxNM meta,Just txdeps),stat)
+		otherwise -> return ((dependentsTxNM meta,Nothing),TxStatus (Read Strict.Nothing :!: False))
 
 drawDynTxVar :: (TxLayer Outside c,TxLayer Inside c) => DynTxVar c -> Outside (TxAdapton c) (String,[DotStatement String],Map.Map String String)
 drawDynTxVar (DynTxU buff_dta _ (u :: TxU c l (TxAdapton c) a) txstat) = do
@@ -207,7 +207,7 @@ drawDynTxVar (DynTxU buff_dta _ (u :: TxU c l (TxAdapton c) a) txstat) = do
 	stat <- unsafeIOToInc $ readIORef txstat
 	str <- case stat of
 		(isEvalOrWrite -> Just _) -> do
-			(dta,_) <- unsafeIOToInc $ liftM (fromJustNote $ "drawDynTxVar " ++ show stat) $ readIORef' buff_dta
+			(dta :!: oris) <- unsafeIOToInc $ liftM (fromJustNote $ "drawDynTxVar " ++ show stat) $ readIORef' buff_dta
 			case dta of
 				TxValue 0# v _ _ -> inside $ displayK v
 				TxValue 1# v _ _ -> liftM (++"*") $ inside $ displayK v
@@ -241,9 +241,8 @@ drawDynTxVar (DynTxM (value) _ (m :: TxM i c l (TxAdapton c) a) txstat) = do
 			inside $ displayK v
 	return (str,stmts,html)
 	
-	
-drawTxU :: (IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => TxU c l (TxAdapton c) a -> Outside (TxAdapton c) (String,[DotStatement String],Map.Map String String)
-drawTxU (u :: TxU c l (TxAdapton c) a) = do
+drawTxNMU :: (IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => TxU c l (TxAdapton c) a -> Outside (TxAdapton c) (String,[DotStatement String],Map.Map String String)
+drawTxNMU (u :: TxU c l (TxAdapton c) a) = do
 --	let u1 :: TxU c Inside (TxAdapton c) a = coerce u
 	(_,stmts,html) <- drawTxNM (metaTxU u)
 	str <- do
@@ -255,8 +254,8 @@ drawTxU (u :: TxU c l (TxAdapton c) a) = do
 				otherwise -> return ""
 	return (str,stmts,html)	
 
-drawTxM :: (IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => TxM i c l (TxAdapton c) a -> Outside (TxAdapton c) (String,[DotStatement String],Map.Map String String)
-drawTxM (m :: TxM i c l (TxAdapton c) a) = do
+drawTxNMM :: (IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c,TxLayer Inside c) => TxM i c l (TxAdapton c) a -> Outside (TxAdapton c) (String,[DotStatement String],Map.Map String String)
+drawTxNMM (m :: TxM i c l (TxAdapton c) a) = do
 --	let m1 :: TxM i c Inside (TxAdapton c) a = coerce m
 	(_,stmts,html) <- drawTxNM (metaTxM m)
 	str <- do

@@ -36,8 +36,10 @@ import qualified System.Mem.MemoTable as MemoTable
 import Data.Unique
 import Data.IORef.Exts
 import Control.Monad.IO.Class
-import Data.Strict.Maybe as Strict
-import Data.Strict.List as Strict
+import qualified Data.Strict.Maybe as Strict
+import qualified Data.Strict.List as Strict
+import qualified Data.Strict.NeList as NeStrict
+import Data.Strict.NeList (NeList(..))
 import Data.Strict.Tuple as Strict
 import System.Mem.Weak.Exts as Weak
 import Data.Map.Strict (Map(..))
@@ -282,33 +284,31 @@ refInnerTxMWith (resolve :: TxResolve i (TxAdapton c) a) v = doBlockTx $ do
 {-# INLINE getInnerTxM #-}
 getInnerTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => TxM i c Inside (TxAdapton c) a -> Inside (TxAdapton c) a
 getInnerTxM = \t -> {-# SCC getInnerTxM #-} doBlockTx $ do
-	(!value,!status) <- readTxMValue t -- read from the buffer
+	(value :!: status) <- readTxMValue t -- read from the buffer
 	addTxDependency (metaTxM t) (checkTxM t $! value) status -- updates dependencies of callers
---	str <- displayK value
---	debugTx2 $ "getInnerTxM " ++ show (idTxNM $ metaTxM t) ++ " " ++ str
 	return value
 
 {-# INLINE getOuterTxM #-}	
 getOuterTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c) => TxM i c l (TxAdapton c) a -> Outside (TxAdapton c) a
-getOuterTxM = \t -> {-# SCC getOuterTxM #-} liftM Prelude.fst $ readTxMValue t
+getOuterTxM = \t -> {-# SCC getOuterTxM #-} doBlockTx $ liftM Strict.fst $ readTxMValue t
 
 {-# INLINE checkTxM #-}
 checkTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => TxM i c Inside (TxAdapton c) a -> a -> Inside (TxAdapton c) (Bool,TxStatus)
-checkTxM t oldv = do
-	(!value,!status) <- readTxMValue t
+checkTxM t oldv = doBlockTx $ do
+	(value :!: status) <- readTxMValue t
 	let !ok = oldv == value
 	return $! (ok,status)
 
 setInnerTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer Outside c,TxLayer Inside c) => TxM i c Inside (TxAdapton c) a -> a -> Outside (TxAdapton c) ()
 setInnerTxM t v' = doBlockTx $ do
-	(!v,_) <- readTxMValue t
+	(v :!: _) <- readTxMValue t
 	unless (v == v') $ do
 		writeTxMValue t v'
 		dirtyTx (metaTxM t)
 
 setOuterTxM :: (Typeable (TxResolve i (TxAdapton c) a),IsolationKind i,IncK (TxAdapton c) a,TxLayer Outside c) => TxM i c Outside (TxAdapton c) a -> a -> Outside (TxAdapton c) ()
 setOuterTxM t v' = doBlockTx $ do
-	(!v,_) <- readTxMValue t
+	(v :!: _) <- readTxMValue t
 	writeTxMValue t v'
 	return ()
 		
@@ -390,7 +390,7 @@ thunkTxU = thunkTxU' Proxy
 			let meta = TxNodeMeta
 				(   idU
 				:!: dependentsU
-				:!: (\isFuture rootThread thread txlog -> changeDirtyValueTx isFuture rootThread thread True (TxStatus (Write Nothing :!: False)) u txlog >> return ())
+				:!: (\isFuture rootThread thread txlog -> changeDirtyValueTx isFuture rootThread thread True (TxStatus (Write Strict.Nothing :!: False)) u txlog >> return ())
 				:!: (\isFuture rootThread thread txlog -> forgetTxU isFuture rootThread thread u txlog >> return ())
 				:!: (\isFuture rootThread thread txst txlogs -> bufferTxU isFuture rootThread thread u txst txlogs)
 				:!: Nothing
@@ -458,7 +458,7 @@ drawTxU (u :: TxU c l (TxAdapton c) a) = do
 {-# INLINE forceOuterTxU #-}
 forceOuterTxU :: (IncK (TxAdapton c) a,TxLayer Outside c) => TxU c Outside (TxAdapton c) a -> Outside (TxAdapton c) a
 forceOuterTxU = \t -> doBlockTx $ do
-	!(d,status') <- readTxUValue t $! TxStatus (Read Nothing :!: False)
+	(d :!: status') <- readTxUValue t $! TxStatus (Read Strict.Nothing :!: False)
 	v <- case d of
 		TxThunk force -> force
 		TxConst value -> return value
@@ -474,7 +474,7 @@ forceInnerTxU = \t -> {-# SCC forceInnerTxU #-} doBlockTx $ do
 
 hasDependenciesTxU :: (TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => TxU c Inside (TxAdapton c) a -> Inside (TxAdapton c) Bool
 hasDependenciesTxU t = doBlockTx $ do
-	(!d,_) <- readTxUValue t $! TxStatus (Read Nothing :!: False)
+	(d :!: _) <- readTxUValue t $! TxStatus (Read Strict.Nothing :!: False)
 	case d of
 		TxValue _ value force dependencies -> liftM (not . List.null) $ unsafeIOToInc $ readIORef' dependencies
 		TxThunk force -> error "cannot test dependencies of unevaluated thunk"
@@ -483,36 +483,36 @@ hasDependenciesTxU t = doBlockTx $ do
 -- in case we repair the thunks, we need to make sure that the cached value/dependencies match
 {-# INLINE forceNoDependentsTxU #-}
 forceNoDependentsTxU :: (IncK (TxAdapton c) a,TxLayer Inside c,TxLayer Outside c) => TxU c Inside (TxAdapton c) a -> Inside (TxAdapton c) (a,TxStatus)
-forceNoDependentsTxU = \t -> forceNoDependentsTxU' (Read Nothing) t
+forceNoDependentsTxU = \t -> doBlockTx $ forceNoDependentsTxU' (Read Strict.Nothing) t
   where
 	{-# INLINE forceNoDependentsTxU' #-}
 	forceNoDependentsTxU' :: (IncK (TxAdapton c) a,TxLayer Inside c,TxLayer Outside c) => TxStatusVar -> TxU c Inside (TxAdapton c) a -> Inside (TxAdapton c) (a,TxStatus)
 	forceNoDependentsTxU' status t = do
-		(!d,!status') <- readTxUValue t $! TxStatus (status :!: False)
+		(d :!: status') <- readTxUValue t $! TxStatus (status :!: False)
 		!r <- case d of
 			TxValue 0# value force dependencies -> return $! (value,status')
-			TxValue 1# value force dependencies -> if (status==Eval Nothing)
+			TxValue 1# value force dependencies -> if (not $ isRead status')
 				then repairInnerTxU t value force dependencies
-				else forceNoDependentsTxU' (Eval Nothing) t
+				else forceNoDependentsTxU' (Eval Strict.Nothing) t
 			TxThunk force -> unsafeIOToInc (newIORef' []) >>= \deps -> evaluateInnerTxU t force deps status'
 			TxConst value -> return $! (value,status')
 		return $! r
 
 -- in case we repair the thunks, we need to make sure that the cached value/dependencies match
 checkTxU :: (IncK (TxAdapton c) a,TxLayer Inside c,TxLayer Outside c) => TxU c Inside (TxAdapton c) a -> a -> Inside (TxAdapton c) (Bool,TxStatus)
-checkTxU t v = {-# SCC checkTxU #-} checkTxU' (Read Nothing) t v where
+checkTxU t v = {-# SCC checkTxU #-} doBlockTx $ checkTxU' (Read Strict.Nothing) t v where
 	{-# INLINE checkTxU' #-}
 	checkTxU' :: (IncK (TxAdapton c) a,TxLayer Inside c,TxLayer Outside c) => TxStatusVar -> TxU c Inside (TxAdapton c) a -> a -> Inside (TxAdapton c) (Bool,TxStatus)
 	checkTxU' status t oldv = do
-		(!d,!status') <- readTxUValue t $! TxStatus (status :!: False)
+		(d :!: status') <- readTxUValue t $! TxStatus (status :!: False)
 		!r <- case d of
 			TxValue 0# value force dependencies -> return (oldv==value,status') -- since the variable may have been dirtied and re-evaluated since the last time we looked at it
-			TxValue 1# value force dependencies -> if (status== Eval Nothing)
+			TxValue 1# value force dependencies -> if (not $ isRead status')
 				then do
 					!(v,status'') <- repairInnerTxU t value force dependencies
 					let !ok = oldv == v
 					return $! (ok,status'') 
-				else checkTxU' (Eval Nothing) t oldv
+				else checkTxU' (Eval Strict.Nothing) t oldv
 			TxThunk _ -> return $! (False,status')
 			TxConst value -> return $! (False,status')
 		return $! r
@@ -520,20 +520,18 @@ checkTxU t v = {-# SCC checkTxU #-} checkTxU' (Read Nothing) t v where
 repairInnerTxU :: (TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => TxU c Inside (TxAdapton c) a -> a -> Inside (TxAdapton c) a -> TxDependencies c -> Inside (TxAdapton c) (a,TxStatus)
 repairInnerTxU t value force txdependencies = do
 		!txid <- readTxIdRef
-		(isFuture,rootThread) <- readRootTx
+		(isFuture :!: rootThread) <- readRootTx
 		!thread <- unsafeIOToInc myThreadId
 		debugTx2 $ "repairing thunk "++ show (hashUnique $ idTxNM $ metaTxU t)
 		!tbl <- readTxLogs
 		(v,status') <- unsafeIOToInc (readIORef' txdependencies) >>= List.foldr (repair' isFuture rootThread thread t force tbl txdependencies) (norepair' isFuture rootThread thread t value tbl) . List.reverse --we need to reverse the dependency list to respect evaluation order
---		str <- displayK v
---		debugTx2 $ "repaired thunk "++ show (hashUnique $ idTxNM $ metaTxU t) ++ " " ++ str
 		return $! (v,status')
 	where
-	-- finishes by dirtying the node
+	-- finishes by undirtying the node
 	{-# INLINE norepair' #-}
 	norepair' :: (TxLayer Outside c,IncK (TxAdapton c) a,TxLayer Inside c) => Bool -> ThreadId -> ThreadId -> TxU c Inside (TxAdapton c) a -> a -> TxLogs c -> Inside (TxAdapton c) (a,TxStatus)
 	norepair' isFuture rootThread thread t value tbl = do
-		liftM (value,) $ unsafeIOToInc $! changeDirtyValueTx isFuture rootThread thread False (TxStatus (Eval Nothing :!: False)) t tbl
+		liftM (value,) $ unsafeIOToInc $! changeDirtyValueTx isFuture rootThread thread False (TxStatus (Eval Strict.Nothing :!: False)) t tbl
 	
 	-- repairs a dependency
 	{-# INLINE repair' #-}
@@ -542,23 +540,23 @@ repairInnerTxU t value force txdependencies = do
 		isDirty <- unsafeIOToInc $ readIORef' (dirtyTxW d)
 		if isDirty
 			then do
-				txdependents <- unsafeIOToInc $ getBufferedTxDependents isFuture rootThread thread tbl (srcMetaTxW d) (TxStatus (Read Nothing :!: True)) -- we only modify the dependents
+				txdependents <- unsafeIOToInc $ getBufferedTxDependents isFuture rootThread thread tbl (srcMetaTxW d) (TxStatus (Read Strict.Nothing :!: True)) -- we only modify the dependents
 				unsafeIOToInc $ changeTxDependency txdependencies txdependents d False
 				!(ok,src_status) <- checkTxW d
 				if ok
-					then liftM (\(v,s) -> (v,mappend src_status s)) m
+					then liftM (\(v,s) -> (v,mappend s (bitStatus src_status))) m
 					else unsafeIOToInc (newIORef' []) >>= \deps -> evaluateInnerTxU t force deps src_status
 			else m
 
 {-# INLINE evaluateInnerTxU #-}
 evaluateInnerTxU :: (IncK (TxAdapton c) a,TxLayer Inside c,TxLayer Outside c) => TxU c Inside (TxAdapton c) a -> Inside (TxAdapton c) a -> TxDependencies c -> TxStatus -> Inside (TxAdapton c) (a,TxStatus)
-evaluateInnerTxU t force txdependencies status = {-# SCC evaluateInnerTxU #-} do
-	txstatus <- unsafeIOToInc $ newIORef' (status `mappend` (TxStatus (Eval Nothing :!: False)))
-	pushTxStack (metaTxU t :!: SJust txdependencies :!: txstatus)
+evaluateInnerTxU t force txdependencies status = {-# SCC evaluateInnerTxU #-} doBlockTx $ do
+	txstatus <- unsafeIOToInc $ newIORef' (status `mappend` (TxStatus (Eval Strict.Nothing :!: False)))
+	pushTxStack (metaTxU t :!: Strict.Just txdependencies :!: txstatus)
 	value <- force
 	-- update the status of the thunk with the children statuses (a thunk with written dependents is written)
 	inner_status <- unsafeIOToInc $ readIORef' txstatus 
-	let newstatus = changeStatus inner_status
+	let newstatus = bitStatus inner_status
 	-- write the value
 	status' <- writeTxUValue t (TxValue 0# value force txdependencies) newstatus -- forgets the original dependencies
 	popTxStack
@@ -566,7 +564,7 @@ evaluateInnerTxU t force txdependencies status = {-# SCC evaluateInnerTxU #-} do
 
 isDirtyUnevaluatedTxU :: (IncK (TxAdapton c) a,TxLayer l1 c,TxLayer l c,TxLayer Outside c) => TxU c l1 (TxAdapton c) a -> l (TxAdapton c) (Maybe Bool)
 isDirtyUnevaluatedTxU t = doBlockTx $ do
-	(d,_) <- readTxUValue t $! (TxStatus (Read Nothing :!: False))
+	(d :!: _) <- readTxUValue t $! (TxStatus (Read Strict.Nothing :!: False))
 	case d of
 		TxThunk force -> return Nothing --unevaluated thunk
 		TxConst value -> return $ Just False -- constant value
@@ -575,14 +573,14 @@ isDirtyUnevaluatedTxU t = doBlockTx $ do
 
 isUnevaluatedTxU :: (IncK (TxAdapton c) a,TxLayer l1 c,TxLayer l c,TxLayer Outside c) => TxU c l1 (TxAdapton c) a -> l (TxAdapton c) Bool
 isUnevaluatedTxU t = doBlockTx $ do
-	(d,_) <- readTxUValue t $! (TxStatus (Read Nothing :!: False))
+	(d :!: _) <- readTxUValue t $! (TxStatus (Read Strict.Nothing :!: False))
 	case d of
 		TxThunk force -> return True --unevaluated thunk
 		otherwise -> return False
 
 oldvalueTxU :: (IncK (TxAdapton c) a,TxLayer l c,TxLayer l1 c,TxLayer Outside c) => TxU c l1 (TxAdapton c) a -> l (TxAdapton c) a
 oldvalueTxU t = doBlockTx $ do
-	(d,_) <- readTxUValue t $! (TxStatus (Read Nothing :!: False))
+	(d :!: _) <- readTxUValue t $! (TxStatus (Read Strict.Nothing :!: False))
 	case d of
 		TxValue dirty value force dependencies -> return value
 		TxThunk force -> error "no old value available"
@@ -596,21 +594,18 @@ changeDirtyValueTx isFuture rootThread thread dirty newstatus u txlog = do
 	tvar <- changeTxU isFuture rootThread thread u (Just chgDirty) newstatus txlog
 	readIORef' $ dynTxStatus tvar
   where
-	chgDirty (TxValue _ value force dependencies , ori) = return $! (TxValue (if dirty then 1# else 0#) value force dependencies , ori)
+	chgDirty (TxValue _ value force dependencies :!: oris) = return $! (TxValue (if dirty then 1# else 0#) value force dependencies :!: oris)
 	
 forgetTxU :: (IncK (TxAdapton c) a,TxLayer l c,TxLayer Outside c) => Bool -> ThreadId -> ThreadId -> TxU c l (TxAdapton c) a -> TxLogs c -> IO TxStatus
 forgetTxU isFuture rootThread thread u txlog = do
-	tvar <- changeTxU isFuture rootThread thread u (Just forget) (TxStatus (Write Nothing :!: False)) txlog
+	tvar <- changeTxU isFuture rootThread thread u (Just forget) (TxStatus (Write Strict.Nothing :!: False)) txlog
 	readIORef' $ dynTxStatus tvar
   where
-	forget (TxValue _ _ force dependencies , ori) = do
-		(unmemo_ori :!: unmemo_buffs) <- readMVar "forgetTxU" (unmemoTxNM $ metaTxU u)
+	forget (TxValue _ _ force dependencies :!: oris) = do
+		(unmemo_ori :!: unmemo_buffs) <- readMVar (unmemoTxNM $ metaTxU u)
 		unmemo_ori >> Foldable.mapM_ id unmemo_buffs
 		clearTxDependencies False dependencies
-		ori' <- case ori of
-			Left deps -> liftM Right $ mkWeakRefKey deps deps Nothing
-			Right wdeps -> return $ Right wdeps
-		return (TxThunk force , ori') -- forget original dependencies
+		return (TxThunk force :!: []) 
 	forget dta = return dta
 
 {-# INLINE mkRefCreatorTx #-}
@@ -618,7 +613,7 @@ mkRefCreatorTx :: (TxLayer l c) => Unique -> l (TxAdapton c) (Maybe (TxCreator c
 mkRefCreatorTx = \idU -> do
 	top <- topTxStack
 	case top of
-		Just (callermeta :!: SJust txcallerdependencies :!: _) -> do
+		Just (callermeta :!: Strict.Just txcallerdependencies :!: _) -> do
 			-- its ok to point to the buffered transaction dependencies reference, because the creator never changes
 			weak <- unsafeIOToInc $ mkWeakRefKey txcallerdependencies callermeta Nothing
 			return $ Just weak
@@ -630,22 +625,22 @@ addTxDependency :: (TxLayer Inside c) => TxNodeMeta c -> Inside (TxAdapton c) (B
 addTxDependency !calleemeta !check !calleestatus = {-# SCC addTxDependency #-} do
 	!txid <- readTxIdRef
 	!top <- topThunkTxStack
-	(isFuture,rootThread) <- readRootTx
+	(isFuture :!: rootThread) <- readRootTx
 	thread <- unsafeIOToInc myThreadId
 	case top of
-		Just (callermeta :!: SJust txcallerdependencies :!: callerstatus) -> do
+		Just (callermeta :!: Strict.Just txcallerdependencies :!: callerstatus) -> do
 			let !callerid = idTxNM callermeta
 			!tbl <- readTxLogs
 			unsafeIOToInc $! do
 				!dirtyW <- newIORef' False 
 				!originalW <- newIORef' False -- dependencies are created within a transaction
 				let !dependencyW = TxDependency (calleemeta :!: dirtyW :!: check :!: callermeta :!: originalW :!: MkWeak (mkWeakRefKey $! txcallerdependencies))
-				!txcalleedependents <- getBufferedTxDependents isFuture rootThread thread tbl calleemeta $! TxStatus (Read Nothing :!: True) -- only adding dependency
+				!txcalleedependents <- getBufferedTxDependents isFuture rootThread thread tbl calleemeta $! TxStatus (Read Strict.Nothing :!: True) -- only adding dependency
 				let !purge = WeakMap.deleteFinalized (dependentsTxNM calleemeta) callerid >> WeakMap.deleteFinalized txcalleedependents callerid
 				!weak <- mkWeakRefKey txcallerdependencies dependencyW $! Just purge
 				modifyIORef' txcallerdependencies ((dependencyW,weak):) 
 				WeakMap.insertWeak txcalleedependents (idTxNM callermeta) weak
-				atomicModifyIORef' callerstatus (\x -> (mappend calleestatus x,())) -- join the status of the callee with the calller thunk
+				atomicModifyIORef' callerstatus (\x -> (mappend x (bitStatus calleestatus),())) -- join the status of the callee with the calller thunk
 		otherwise -> return ()
 
 {-# INLINE changeTxDependency #-}
@@ -670,7 +665,7 @@ dirtyTx :: (TxLayer l c) => TxNodeMeta c -> l (TxAdapton c) ()
 dirtyTx !umeta = {-# SCC dirtyTx #-} do
 	!tbl <- readTxLogs
 	!txid <- readTxIdRef
-	(isFuture,rootThread) <- readRootTx
+	(isFuture :!: rootThread) <- readRootTx
 	thread <- unsafeIOToInc myThreadId
 	unsafeIOToInc $ dirtyCreatorTx isFuture rootThread thread tbl (creatorTxNM umeta)
 	unsafeIOToInc $ dirtyRecursivelyTx isFuture rootThread thread tbl umeta
@@ -695,14 +690,14 @@ dirtyCreatorTx !isFuture rootThread thread tbl (Just wcreator) = do
 dirtyRecursivelyTx :: Bool -> ThreadId -> ThreadId -> TxLogs c -> TxNodeMeta c -> IO ()
 dirtyRecursivelyTx isFuture rootThread thread tbl !meta = do
 	-- we need to get ALL the dependents (original + buffered) and dirty them
-	!(txdependents,dependents) <- getTxDependents isFuture rootThread thread tbl meta $! TxStatus (Write Nothing :!: True) -- marks the buffered dependents as a write, we will also dirty its dependencies
+	!(txdependents,dependents) <- getTxDependents isFuture rootThread thread tbl meta $! TxStatus (Write Strict.Nothing :!: True) -- marks the buffered dependents as a write, we will also dirty its dependencies
 	Foldable.mapM_ (dirtyTx' txdependents) dependents
   where
 	{-# INLINE dirtyTx' #-}
 	dirtyTx' txdependents = \d -> do
 		isDirty <- readIORef' (dirtyTxW d)
 		unless isDirty $ do -- stop if the dependency is already dirty
-			mb_txdependencies <- getTxDependencies isFuture rootThread thread tbl (tgtMetaTxW d) $! TxStatus (Write Nothing :!: False) -- marks the buffered dependencies as a write, since dirtying results from a change
+			mb_txdependencies <- getTxDependencies isFuture rootThread thread tbl (tgtMetaTxW d) $! TxStatus (Write Strict.Nothing :!: False) -- marks the buffered dependencies as a write, since dirtying results from a change
 			case mb_txdependencies of
 				Nothing -> return ()
 				Just txdependencies -> do
@@ -733,7 +728,7 @@ commitDynTxVar (DynTxU buff_dta txdeps u txstat :: DynTxVar c) doWrites doEvals 
 	let !proxy = Proxy :: Proxy c
 	stat <- readIORef' txstat
 	case stat of
-		TxStatus (Read Nothing :!: b) -> do
+		TxStatus (Read Strict.Nothing :!: b) -> do
 			let idu = (idTxNM $ metaTxU u)
 			-- add buffered dependents on top of persistent dependents
 			when (doEvals && b) $ -- we only commit dependents if we have an Eval lock
@@ -742,18 +737,18 @@ commitDynTxVar (DynTxU buff_dta txdeps u txstat :: DynTxVar c) doWrites doEvals 
 				then checkTxNotifies proxy False (metaTxU u) (notifiesTxNM $ metaTxU u)
 				else return mempty
 			return (checks,Map.empty)
-		TxStatus (Eval Nothing :!: b) -> do
+		TxStatus (Eval Strict.Nothing :!: b) -> do
 			-- commit the buffered data to the original thunk
 			-- for dependencies we change the reference itself
 			when (doEvals && b) $ -- we only commit dependents if we have an Eval lock
 				WeakMap.unionWithKey' (dependentsTxNM $ metaTxU u) txdeps
 			let idu = (idTxNM $ metaTxU u)
 			let commit = do
-				(dta,ori_dependencies) <- liftM (fromJustNote $ "commitDynTxVar " ++ show stat) $ readIORef' buff_dta
+				(dta :!: oris) <- liftM (fromJustNote $ "commitDynTxVar " ++ show stat) $ readIORef' buff_dta
 				case dta of
 					TxValue dirty value force txrdependencies -> do
-						markOriginalDependenciesTx txrdependencies
-						commitDependenciesTx txrdependencies ori_dependencies
+						markOriginalTxDependencies txrdependencies
+						linkTxDependencies txrdependencies oris
 					otherwise -> return ()
 				writeIORef (dataTxU u) $! dta
 				return ()
@@ -762,17 +757,17 @@ commitDynTxVar (DynTxU buff_dta txdeps u txstat :: DynTxVar c) doWrites doEvals 
 				then checkTxNotifies proxy False (metaTxU u) (notifiesTxNM $ metaTxU u)
 				else return mempty
 			return (checks,Map.empty)
-		TxStatus (Write Nothing :!: b) -> do
+		TxStatus (Write Strict.Nothing :!: b) -> do
 			when (doWrites && b) $ -- all buffered dependents of a write must be writes
 				WeakMap.unionWithKey' (dependentsTxNM $ metaTxU u) txdeps
 			-- commit the buffered data to the original thunk
 			-- for dependencies we change the reference itself
 			let commit = do
-				(dta,ori_dependencies) <- liftM (fromJustNote $ "commitDynTxVar " ++ show stat) $ readIORef' buff_dta
+				(dta :!: oris) <- liftM (fromJustNote $ "commitDynTxVar " ++ show stat) $ readIORef' buff_dta
 				case dta of
 					TxValue dirty value force txrdependencies -> do
-						markOriginalDependenciesTx txrdependencies
-						commitDependenciesTx txrdependencies ori_dependencies
+						markOriginalTxDependencies txrdependencies
+						linkTxDependencies txrdependencies oris
 					otherwise -> return ()
 				writeIORef (dataTxU u) $! dta
 				
@@ -787,7 +782,7 @@ commitDynTxVar (DynTxU buff_dta txdeps u txstat :: DynTxVar c) doWrites doEvals 
 		TxStatus (New isNewWrite :!: b) -> do
 			let idu = (idTxNM $ metaTxU u)
 			let mark = readIORef' (dataTxU u) >>= \dta -> case dta of
-				(TxValue _ _ force dependencies) -> markOriginalDependenciesTx dependencies
+				(TxValue _ _ force dependencies) -> markOriginalTxDependencies dependencies
 				otherwise -> return ()
 			-- no need to unmemoize, because we only commit buffered memo tables if evals and writes succeed
 			let forget = modifyIORefM_' (dataTxU u) $ \dta -> case dta of
@@ -814,7 +809,7 @@ commitDynTxVar (DynTxM value txdeps m txstat :: DynTxVar c) doWrites doEvals = d
 	let !proxy = Proxy :: Proxy c
 	stat <- readIORef' txstat
 	case stat of
-		TxStatus (Read Nothing :!: b) -> do
+		TxStatus (Read Strict.Nothing :!: b) -> do
 			-- add buffered dependents on top of persistent dependents
 			when (doEvals && b) $
 				WeakMap.unionWithKey' (dependentsTxNM $ metaTxM m) txdeps
@@ -823,7 +818,7 @@ commitDynTxVar (DynTxM value txdeps m txstat :: DynTxVar c) doWrites doEvals = d
 				then checkTxNotifies proxy False (metaTxM m) (notifiesTxNM $ metaTxM m)
 				else return mempty
 			return (checks,Map.empty)
-		TxStatus (Eval Nothing :!: b) -> do
+		TxStatus (Eval Strict.Nothing :!: b) -> do
 			when (doEvals && b) $ -- we only commit dependents if we have an Eval lock
 				WeakMap.unionWithKey' (dependentsTxNM $ metaTxM m) txdeps
 
@@ -834,7 +829,7 @@ commitDynTxVar (DynTxM value txdeps m txstat :: DynTxVar c) doWrites doEvals = d
 				then checkTxNotifies proxy False (metaTxM m) (notifiesTxNM $ metaTxM m)
 				else return mempty
 			return (checks,Map.empty)
-		TxStatus (Write Nothing :!: b) -> do
+		TxStatus (Write Strict.Nothing :!: b) -> do
 			when (doWrites && b) $ -- all buffered dependents of a write must be writes
 				WeakMap.unionWithKey' (dependentsTxNM $ metaTxM m) txdeps
 			let commit = readIORef' value >>= writeIORef' (dataTxM m) . fromJustNote ("commitDynTxVar " ++ show stat)
@@ -869,7 +864,7 @@ commitTxLog :: (TxLayer Outside c) => TxLog c -> TxId c -> Bool -> Bool -> IO ((
 commitTxLog (txlog :: TxLog c) txid doWrites doEvals = {-# SCC commitTxLog #-} do
 	let !proxy = Proxy :: Proxy c
 	!thread <- myThreadId
-	txblock <- flattenTxLogBlocks txlog
+	txblock <- flattenTxLogBlocks thread txlog
 	
 	-- commits buffered modifiable/thunk data
 	let add !xs !(uid,tvar) = do
@@ -877,8 +872,9 @@ commitTxLog (txlog :: TxLog c) txid doWrites doEvals = {-# SCC commitTxLog #-} d
 		unTxNotifies proxy thread uid $! dynTxNotifies tvar
 		-- commit changes
 		ys <- commitDynTxVar tvar doWrites doEvals
+--		debugTx' $ "comitting " ++ show (idTxNM $ dynTxMeta tvar)
 		-- remove buffered memotables from the variable's memo list
-		when (isDynTxU tvar) $ modifyMVarMasked_' "commitTxLog" (unmemoTxNM $! dynTxMeta tvar) $ \(ori :!: buffs) -> return (ori :!: Map.delete thread buffs)
+		when (isDynTxU tvar) $ modifyMVarMasked_' (unmemoTxNM $! dynTxMeta tvar) $ \(ori :!: buffs) -> return (ori :!: Map.delete thread buffs)
 		-- delete content cache for this thread
 		CMap.delete thread (contentTxNM $ dynTxMeta tvar)
 		return $! mappend xs ys
@@ -887,7 +883,7 @@ commitTxLog (txlog :: TxLog c) txid doWrites doEvals = {-# SCC commitTxLog #-} d
 	-- commits transaction-local memo tables
 	txunmemo <- commitTxLogMemoTables (doWrites && doEvals) thread txlog
 	-- finalize the whole buffered table
-	finalizeTxLog txlog
+	finalizeTxLog Nothing txlog
 	return ((txunmemo,writes),wakes)
 	
 -- | registers a thunk to be woken up by modifications on the variables that it reads
@@ -898,40 +894,39 @@ retryDynTxVar txlog lck uid tvar = do
 	stat <- readIORef' $ dynTxStatus tvar
 	when (not $ isNew stat) $ enqueueWait lck (dynTxMeta tvar)
 
-retryTxLog :: (TxLayer Outside c) => Lock -> TxLog c -> IO ()
-retryTxLog lck txlog = flattenTxLogBlocks txlog >>= MemoTable.mapM_ (\(uid,dyntxvar) -> retryDynTxVar txlog lck uid dyntxvar)
+retryTxLog :: (TxLayer Outside c) => ThreadId -> Lock -> TxLog c -> IO ()
+retryTxLog thread lck txlog = flattenTxLogBlocks thread txlog >>= MemoTable.mapM_ (\(uid,dyntxvar) -> retryDynTxVar txlog lck uid dyntxvar)
 
 -- lifts all writes to the innermost nested txlog
 liftTxLogsWrites :: (TxLayer l c,TxLayer Outside c) => ThreadId -> TxLogs c -> l (TxAdapton c) ()
-liftTxLogsWrites thread (SCons txlog txlogs) = do
+liftTxLogsWrites thread (NeWrap txlog) = return ()
+liftTxLogsWrites thread (NeCons txlog txlogs) = do
 	b <- isInside
 	unless b $ unsafeIOToInc $ do
-		txblock <- flattenTxLogBlocks txlog
+		txblock <- flattenTxLogBlocks thread txlog
 		liftTxLogsWrites' txblock txlogs
 		
   where
---	liftTxLogsWrites' :: MonadBlock c IO => TxLog c -> TxLogs c -> IO ()
-	liftTxLogsWrites' txblock SNil = return ()
-	liftTxLogsWrites' txblock (SCons txlog1 txlogs1) = do
-		xs <- readIORef (txLogBuff txlog1)
-		Foldable.mapM_ (MemoTable.mapM_ (liftWrite txblock)) xs
-		liftTxLogsWrites' txblock txlogs1
---	liftWrite :: MonadBlock c IO => TxLog c -> (Unique,DynTxVar c) -> IO ()
+	liftTxLogsWrites' txblock txlogs1 = Foldable.mapM_ (liftTxLogWrites' txblock) txlogs1
+	liftTxLogWrites' txblock txlog1 = do
+		blocks1 <- readIORef (txLogBuff txlog1)
+		Foldable.mapM_ (MemoTable.mapM_ (liftWrite txblock)) blocks1
 	liftWrite txblock (uid,tvar) = do
 		stat <- readIORef' $ dynTxStatus tvar
 		when (isWriteOrNewTrue stat) $ do
 		mb <- MemoTable.lookup txblock uid
 		case mb of
-			Nothing -> addTxLogEntryUp thread (SCons txlog SNil) uid tvar
+			Nothing -> addTxLogEntryUp thread (NeWrap txlog) uid tvar
 			-- don't overlap
 			Just _ -> return ()
 
 -- extends a base txlog with all its enclosing txlogs, ignoring writes in all of them
 {-# INLINE flattenTxLogs_ #-}
-flattenTxLogs_ txlogs = doBlockTx $ readRootTx >>= \(isFuture,rootThread) -> unsafeIOToInc myThreadId >>= \thread -> flattenTxLogs isFuture rootThread thread txlogs >> return ()
+flattenTxLogs_ txlogs = doBlockTx $ readRootTx >>= \(isFuture :!: rootThread) -> unsafeIOToInc myThreadId >>= \thread -> flattenTxLogs isFuture rootThread thread txlogs >> return ()
 flattenTxLogs :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => Bool -> ThreadId -> ThreadId -> TxLogs c -> l (TxAdapton c) (TxLog c)
-flattenTxLogs isFuture rootThread thread txlogs@(SCons toptxlog SNil) = {-# SCC flattenTxLogs #-} unbufferTopTxLog isFuture thread txlogs True >> return toptxlog
-flattenTxLogs isFuture rootThread thread (SCons txlog txlogs) = {-# SCC flattenTxLogs #-} do
+flattenTxLogs isFuture rootThread thread txlogs@(NeWrap toptxlog) = {-# SCC flattenTxLogs #-}
+	unbufferTopTxLog isFuture thread txlogs True >> return toptxlog
+flattenTxLogs isFuture rootThread thread (NeCons txlog txlogs) = {-# SCC flattenTxLogs #-} do
 	unsafeIOToInc $ commitNestedTx isFuture rootThread thread False txlog txlogs
 	flattenTxLogs isFuture rootThread thread txlogs
 
@@ -939,10 +934,10 @@ throwTx :: (TxLayer Outside c,Exception e) => e -> Outside (TxAdapton c) a
 throwTx = txLayer Proxy . Catch.throwM
 
 throwInvalidTx :: (TxLayer l c) => InvalidTxRepair c -> l (TxAdapton c) a
-throwInvalidTx = throwInvalidTxProxy Proxy
+throwInvalidTx = throwInvalidTx' Proxy
 	where
-	throwInvalidTxProxy :: (TxLayer l c) => Proxy c -> InvalidTxRepair c -> l (TxAdapton c) a
-	throwInvalidTxProxy (c :: Proxy c) repair = txLayer Proxy $ Catch.throwM $ (InvalidTx repair :: InvalidTx c)
+		throwInvalidTx' :: (TxLayer l c) => Proxy c -> InvalidTxRepair c -> l (TxAdapton c) a
+		throwInvalidTx' (Proxy::Proxy c) repair = txLayer Proxy $ Catch.throwM $ (InvalidTx repair :: InvalidTx c)
 
 -- kills all futures spawned by this thread
 killChildrenTx :: TxLayer l c => l (TxAdapton c) ()
@@ -950,7 +945,7 @@ killChildrenTx = do
 	fsref <- readFuturesTx
 	unsafeIOToInc $ do
 		fs <- readIORef' fsref
-		Map.foldrWithKey (\k v m -> killThread k >> m) (return ()) fs
+		Map.foldrWithKey (\k v m -> throwTo k ThreadKilledTx >> m) (return ()) fs
 		writeIORef' fsref Map.empty
 
 waitForChildrenTx :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => l (TxAdapton c) ()
@@ -963,9 +958,11 @@ waitForChildrenTx = do
 	waitForChild (DynTxFuture f) = joinTx f >> return ()
 
 catchTx :: (TxLayer Inside c,TxLayer Outside c,Exception e) => Outside (TxAdapton c) a -> (e -> Outside (TxAdapton c) a) -> Outside (TxAdapton c) a
-catchTx (stm :: Outside (TxAdapton c) a) (h :: e -> Outside (TxAdapton c) a) = txLayer proxyOutside $ (unTxLayer proxyOutside stm) `Catch.catches` [unmaskedHandler catchInvalid,unmaskedHandler catchRetry,unmaskedHandler catchExcpt] where
+catchTx (stm :: Outside (TxAdapton c) a) (h :: e -> Outside (TxAdapton c) a) = txLayer proxyOutside $ (unTxLayer proxyOutside stm) `Catch.catches` [Catch.Handler catchAsyncInvalid,Catch.Handler catchInvalid,Catch.Handler catchRetry,Catch.Handler catchKilled,Catch.Handler catchExcpt] where
+	catchAsyncInvalid (e::AsyncInvalidTx c) = Catch.throwM e
 	catchInvalid (e::InvalidTx c) = Catch.throwM e
 	catchRetry (e::BlockedOnTxRetry) = Catch.throwM e
+	catchKilled (e::ThreadKilledTx) = Catch.throwM e
 	catchExcpt (e::e) = unTxLayer proxyOutside $ do
 		validateCatchTx "catchTx"
 		h e
@@ -974,10 +971,14 @@ unmaskedHandler :: (Exception e,MonadIO m) => (e -> m a) -> Catch.Handler m a
 unmaskedHandler f = Catch.Handler $ \e -> liftIO allowInterrupt >> f e
 {-# INLINE unmaskedHandler #-}
 
+interruptible :: TxLayer l c => l (TxAdapton c) a -> l (TxAdapton c) a
+interruptible m = unsafeIOToInc allowInterrupt >> m
+
+-- no unmasked handlers to protect the repair sections
 atomicallyTx :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => IncParams (TxAdapton c) -> String -> l (TxAdapton c) a -> IO a
 atomicallyTx (params :: IncParams (TxAdapton c)) msg (stm :: l (TxAdapton c) a) = initializeTx params try where
 	l = Proxy :: Proxy l
-	try = txLayer l $ flip Catch.catches [unmaskedHandler catchInvalid,unmaskedHandler catchRetry,unmaskedHandler catchSome] $ unTxLayer l $ do
+	try = txLayer l $ flip Catch.catches [Catch.Handler catchAsyncInvalid,Catch.Handler catchInvalid,Catch.Handler catchRetry,Catch.Handler catchSome] $ unTxLayer l $ do
 		debugTx $ "started tx " ++ msg
 		-- run the tx
 		x <- stm
@@ -985,17 +986,24 @@ atomicallyTx (params :: IncParams (TxAdapton c)) msg (stm :: l (TxAdapton c) a) 
 		!mbsuccess <- validateAndCommitTopTx msg True
 		case mbsuccess of
 			Nothing -> do
-				debugTx $ "finished tx " ++ msg
 				exitTx -- prepares to leave the tx's environment (no exceptions are caught outside @atomicallyTx@)
+				debugTx $ "finished tx " ++ msg
 				return x
-			Just repair -> throwInvalidTx repair
-	catchInvalid (InvalidTx repair :: InvalidTx c) = flip Catch.catches [unmaskedHandler catchInvalid] $ unTxLayer l $ do -- concurrent invalidation exceptions
+			Just ex -> unsafeIOToInc $ throwIO ex
+	catchAsyncInvalid (AsyncInvalidTx repair) = flip Catch.catches [Catch.Handler catchAsyncInvalid] $ unTxLayer l $ do -- concurrent invalidation exceptions
+		killChildrenTx
+		starttime <- readTxId
+		readTxLogs >>= flattenTxLogs_
+		let withRepair = if (txAdaptonRepair params) then Just repair else Nothing
+		let msg = "caught AsyncInvalidTx: retrying tx previously known as " ++ show starttime
+		restartTxWithRepair withRepair msg starttime $ interruptible try
+	catchInvalid (InvalidTx repair) = flip Catch.catches [Catch.Handler catchAsyncInvalid] $ unTxLayer l $ do -- concurrent invalidation exceptions
 		killChildrenTx
 		starttime <- readTxId
 		let withRepair = if (txAdaptonRepair params) then Just repair else Nothing
 		let msg = "caught InvalidTx: retrying tx previously known as " ++ show starttime
-		restartTxWithRepair withRepair msg starttime try
-	catchRetry BlockedOnTxRetry = flip Catch.catches [unmaskedHandler catchInvalid] $ unTxLayer l $ do -- concurrent invalidation exceptions
+		restartTxWithRepair withRepair msg starttime $ interruptible try
+	catchRetry BlockedOnTxRetry = flip Catch.catches [Catch.Handler catchAsyncInvalid] $ unTxLayer l $ do -- concurrent invalidation exceptions
 		killChildrenTx
 		debugTx "caught BlockedOnTxRetry"
 		-- if the retry was invoked on an inconsistent state, we incrementally repair and run again, otherwise we place the tx in the waiting queue
@@ -1005,33 +1013,29 @@ atomicallyTx (params :: IncParams (TxAdapton c)) msg (stm :: l (TxAdapton c) a) 
 				debugTx "put tx to sleep"
 				-- wait for the lock to be released (whenever some variables that it depends on are changed)
 				-- we don't consume the contents of the mvar to avoid further puts to succeeed; a new MVar is created for each retry
-				unsafeIOToInc $ Lock.acquire "catchRetry" lck
+				unsafeIOToInc $ Lock.acquire lck
 				debugTx $ "woke up tx"
 				starttime <- readTxId
-				restartTxWithRepair Nothing ("try: BlockedOnTxRetry retrying invalid tx previously known as " ++ show starttime) starttime try
-			Right repair -> do
+				restartTxWithRepair Nothing ("try: BlockedOnTxRetry retrying invalid tx previously known as " ++ show starttime) starttime $ interruptible try
+			Right (InvalidTx repair) -> do
 				starttime <- readTxId
 				let withRepair = if (txAdaptonRepair params) then Just repair else Nothing
 				let msg = "caughtRetry InvalidTx: retrying tx previously known as " ++ show starttime
-				restartTxWithRepair withRepair msg starttime try
-	catchSome (e::SomeException) = flip Catch.catches [unmaskedHandler catchInvalid] $ unTxLayer l $ do -- concurrent invalidation exceptions
-		killChildrenTx
-		-- handle ThreadKilled differently
-		case fromException e :: Maybe AsyncException of
-			Just ThreadKilled -> txLayer l $ Catch.throwM e -- just die, no validation
-			otherwise -> do
-				debugTx $ "caught SomeException " ++ show e
-				-- we still need to validate on exceptions, otherwise repair incrementally; transaction-local allocations still get committed
-				mbsuccess <- validateAndCommitTopTx msg False
-				case mbsuccess of
-					Nothing -> do
-						debugTx $ "finished exceptional tx " ++ msg
-						txLayer Proxy $ Catch.throwM e
-					Just repair -> do
-						starttime <- readTxId
-						let withRepair = if (txAdaptonRepair params) then Just repair else Nothing
-						let msg = "try: SomeException retrying invalid tx previously known as " ++ show starttime
-						restartTxWithRepair withRepair msg starttime try
+				restartTxWithRepair withRepair msg starttime $ interruptible try
+	catchSome (e::SomeException) = flip Catch.catches [Catch.Handler catchAsyncInvalid] $ unTxLayer l $ do -- concurrent invalidation exceptions
+		debugTx $ "caught SomeException " ++ show e
+		-- we still need to validate on exceptions, otherwise repair incrementally; transaction-local allocations still get committed
+		mbsuccess <- validateAndCommitTopTx msg False
+		case mbsuccess of
+			Nothing -> do
+				exitTx -- prepares to leave the tx's environment (no exceptions are caught outside @atomicallyTx@)
+				debugTx $ "finished exceptional tx " ++ msg
+				txLayer Proxy $ Catch.throwM e
+			Just (InvalidTx repair) -> do
+				starttime <- readTxId
+				let withRepair = if (txAdaptonRepair params) then Just repair else Nothing
+				let msg = "try: SomeException retrying invalid tx previously known as " ++ show starttime
+				restartTxWithRepair withRepair msg starttime $ interruptible try
 
 retryTx :: TxLayer Outside c => Outside (TxAdapton c) a
 retryTx = unsafeIOToInc $ throwIO BlockedOnTxRetry
@@ -1042,25 +1046,44 @@ orElseTx :: (TxLayer Outside c,TxLayer Inside c) => Outside (TxAdapton c) a -> O
 orElseTx (stm1 :: Outside (TxAdapton c) a) stm2 = do1 where
 	try1 = do { x <- stm1; validateAndCommitNestedTx "orElse1" Nothing; return x }
 	try2 = do { x <- stm2; validateAndCommitNestedTx "orElse2" Nothing; return x }
-	do1 = startNestedTx $ txLayer proxyOutside $ (unTxLayer proxyOutside try1) `Catch.catches` [unmaskedHandler catchRetry1,unmaskedHandler catchInvalid,unmaskedHandler catchSome]
-	do2 = startNestedTx $ txLayer proxyOutside $ (unTxLayer proxyOutside try2) `Catch.catches` [unmaskedHandler catchRetry2,unmaskedHandler catchInvalid,unmaskedHandler catchSome]
+	do1 = startNestedTx1 $ txLayer proxyOutside $ (unTxLayer proxyOutside try1) `Catch.catches` [Catch.Handler catchRetry1,Catch.Handler catchAsyncInvalid,Catch.Handler catchInvalid,Catch.Handler catchKilled,Catch.Handler catchSome]
+	do2 = startNestedTx2 $ txLayer proxyOutside $ (unTxLayer proxyOutside try2) `Catch.catches` [Catch.Handler catchRetry2,Catch.Handler catchAsyncInvalid,Catch.Handler catchInvalid,Catch.Handler catchKilled,Catch.Handler catchSome]
 	catchRetry1 BlockedOnTxRetry = unTxLayer proxyOutside $ validateAndRetryNestedTx "orElseRetry1" >> do2
 	catchRetry2 BlockedOnTxRetry = unTxLayer proxyOutside (validateAndRetryNestedTx "orElseRetry2") >> Catch.throwM BlockedOnTxRetry
+	catchAsyncInvalid (AsyncInvalidTx repair :: AsyncInvalidTx c) = do
+		txlogs <- readTxLogs' -- purge the current txlog stack before retrying
+		debugTx' $ "nested caught AsyncInvalidTx at " ++ show (txLogId $ NeStrict.head txlogs)
+		unTxLayer proxyOutside $ flattenTxLogs_ txlogs
+		let e' = InvalidTx repair :: InvalidTx c
+		Catch.throwM e'
 	catchInvalid (e::InvalidTx c) = Catch.throwM e
+	catchKilled ThreadKilledTx = do
+		txlogs@(NeStrict.head -> txlog) <- readTxLogs'
+		thread <- lift myThreadId
+		lift $ finalizeTxLog (Just thread) txlog -- finalize the child log
+		Catch.throwM ThreadKilledTx -- kill parent
 	catchSome (e::SomeException) = unTxLayer proxyOutside (validateAndCommitNestedTx "orElseSome" (Just e)) >> Catch.throwM e
 
 -- appends a freshly created txlog for the inner tx
-startNestedTx :: TxLayer Outside c => Outside (TxAdapton c) a -> Outside (TxAdapton c) a
-startNestedTx m = do
+startNestedTx1 :: TxLayer Outside c => Outside (TxAdapton c) a -> Outside (TxAdapton c) a
+startNestedTx1 m = do
 	(params :!: root :!: fs :!: starttime :!: stack :!: txlogs) <- (txLayer Proxy Reader.ask)
 	unsafeIOToInc $ do
-		txlog <- emptyTxLog starttime $ txAdaptonMemoSize params
-		Reader.runReaderT (runTxOuter m) (params :!: root :!: fs :!: starttime :!: stack :!: SCons txlog txlogs)
+		txlog1 <- emptyTxLog (succ $ NeStrict.length txlogs) starttime $ txAdaptonMemoSize params
+		Reader.runReaderT (runTxOuter m) (params :!: root :!: fs :!: starttime :!: stack :!: NeCons txlog1 txlogs)
+
+-- deletes the old inner log and appends a freshly created txlog for the inner tx
+startNestedTx2 :: TxLayer Outside c => Outside (TxAdapton c) a -> Outside (TxAdapton c) a
+startNestedTx2 m = do
+	(params :!: root :!: fs :!: starttime :!: stack :!: NeCons txlog1 txlogs) <- (txLayer Proxy Reader.ask)
+	unsafeIOToInc $ do
+		txlog2 <- emptyTxLog (txLogId txlog1) starttime $ txAdaptonMemoSize params
+		Reader.runReaderT (runTxOuter m) (params :!: root :!: fs :!: starttime :!: stack :!: NeCons txlog2 txlogs)
 
 -- spawns a nested transaction in a different thread
 futureTx :: (TxLayer Inside c,TxLayer Outside c) => Outside (TxAdapton c) a -> Outside (TxAdapton c) (TxFuture c a)
 futureTx stm = do
-	(_,rootThread) <- readRootTx
+	(_ :!: rootThread) <- readRootTx
 	result <- unsafeIOToInc newEmptyMVar
 	let !f = TxFuture result
 	forkNestedTx rootThread f (try result)
@@ -1072,18 +1095,18 @@ futureTx stm = do
 		txenv <- (txLayer Proxy Reader.ask)
 		thread <- unsafeIOToInc myThreadId
 		case mb of
-			Nothing -> unsafeIOToInc $ putMVar "futureTx" result (Right x :!: thread :!: txenv)
-			Just repair -> unsafeIOToInc $ putMVar "futureTx" result (Left (toException $ InvalidTx repair) :!: thread :!: txenv)
+			Nothing -> unsafeIOToInc $ putMVar result (Right x :!: thread :!: txenv)
+			Just ex -> unsafeIOToInc $ putMVar result (Left (toException ex) :!: thread :!: txenv)
 
 joinTx :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => TxFuture c a -> l (TxAdapton c) a
 joinTx f@(TxFuture result) = do
-	e <- unsafeIOToInc $ readMVar "joinTx" result
+	e <- unsafeIOToInc $ readMVar result
 	case e of
 		(Left ex :!: child_thread :!: child_env) -> do
 			case fromException ex :: Maybe TxException of
 				Just _ -> return ()
 				otherwise -> commitFutureTx "joinTx" False child_thread child_env
-			unsafeIOToInc $ Control.Exception.throw ex
+			unsafeIOToInc $ throwIO ex
 		(Right v :!: child_thread :!: child_env) -> do
 			commitFutureTx "joinTx" True child_thread child_env
 			return v
@@ -1095,33 +1118,49 @@ forkNestedTx rootThread (f :: TxFuture c a) m = do
 	parent_thread <- unsafeIOToInc myThreadId
 	(params :!: root :!: fs :!: starttime :!: stack :!: txlogs) <- (txLayer Proxy Reader.ask)
 	
-	let child = (runTxOuter m) `Catch.catches` [unmaskedHandler catchRetry,unmaskedHandler catchInvalid,unmaskedHandler catchSome]
+	let child = (runTxOuter m) `Catch.catches` [Catch.Handler catchRetry,Catch.Handler catchAsyncInvalid,Catch.Handler catchInvalid,Catch.Handler catchSome]
 	
 	unsafeIOToInc $ do
+		-- duplicates the parent and adds a new block to the parent (so that the current state if frozen)
 		mkSnap <- snapshotTxLogs (txAdaptonMemoSize params) parent_thread txlogs
 		forkIO $ do
 			thread <- myThreadId
 			snap <- mkSnap thread
 			fs' <- newIORef' Map.empty
-			txlog <- emptyTxLog starttime $ txAdaptonMemoSize params
-			Reader.runReaderT child (params :!: Just rootThread :!: fs' :!: starttime :!: stack :!: SCons txlog snap)
+			txlog <- emptyTxLog (succ $ NeStrict.length txlogs) starttime $ txAdaptonMemoSize params
+			Reader.runReaderT child (params :!: Just rootThread :!: fs' :!: starttime :!: stack :!: NeCons txlog snap)
 		return ()
   where
 	catchRetry BlockedOnTxRetry = do
 		thread <- lift myThreadId
-		unTxLayer proxyOutside (validateFutureTx "futureRetry" Nothing)
-		exceptionalFutureTx rootThread thread f BlockedOnTxRetry
+		mb_success <- unTxLayer proxyOutside (validateFutureTx "futureRetry" Nothing)
+		case mb_success of
+			Nothing -> exceptionalFutureTx rootThread thread f BlockedOnTxRetry
+			Just ex -> exceptionalFutureTx rootThread thread f ex
+			
+	catchAsyncInvalid (AsyncInvalidTx repair::AsyncInvalidTx c) = do
+		thread <- lift myThreadId
+		txlogs <- readTxLogs'
+		unTxLayer proxyOutside $ flattenTxLogs_ txlogs
+		let e' = InvalidTx repair :: InvalidTx c
+		exceptionalFutureTx rootThread thread f e'
 	catchInvalid (e::InvalidTx c) = do
 		thread <- lift myThreadId
 		exceptionalFutureTx rootThread thread f e
-	catchSome (e::SomeException) = do
-		case fromException e :: Maybe AsyncException of
-			Just ThreadKilled -> return () -- die gracefully if killed by parent
-			otherwise -> do -- don't throw the exception to the parent yet because it requires committing
-				thread <- lift myThreadId
-				unTxLayer proxyOutside (validateFutureTx "futureSome" (Just e))
+	catchKilled ThreadKilled = do -- die gracefully if killed by parent
+		unTxLayer proxyOutside $ killChildrenTx -- kill its children
+		txlogs@(NeStrict.head -> txlog) <- readTxLogs'
+		thread <- lift myThreadId
+		lift $ finalizeTxLog (Just thread) txlog -- purge the local txlog
+	catchSome (e::SomeException) = do -- don't throw the exception to the parent yet because it requires committing
+		thread <- lift myThreadId
+		mb_success <- unTxLayer proxyOutside (validateFutureTx "futureSome" (Just e))
+		case mb_success of
+			Nothing -> do
 				txenv <- Reader.ask
-				lift $ putMVar "forkNestedTx" (unTxFuture f) (Left e :!: thread :!: txenv)
+				lift $ putMVar (unTxFuture f) (Left e :!: thread :!: txenv)
+			Just ex -> exceptionalFutureTx rootThread thread f ex
+						
 
 -- validates a nested tx and its enclosing txs up the tx tree
 -- the repairing action unmemoizes possible conflicting buffered memo entries and repairs variables that were conflicting
@@ -1129,13 +1168,13 @@ validateTxsCommit :: Bool -> TxId CommitConflict -> TxLogs CommitConflict -> IO 
 validateTxsCommit isFuture starttime txlogs = do
 	!thread <- myThreadId
 	-- gets the transactions that committed after the current transaction's start time
-	txs <- readMVar "validateTxsCommit" doneTxs
+	txs <- readMVar doneTxs
 	let finished = Map.toAscList $ Map.filterWithKey (\k v -> k > starttime) txs
 	let finishtime = if List.null finished then starttime else Prelude.fst (List.last finished)
 	mbrepairs <- validateTxsCommit' isFuture thread starttime txlogs finished
 	case mbrepairs of
 		Nothing -> return Nothing
-		Just repairs -> return $ Just (finishtime :!: repairs)
+		Just repairs -> return $ Just (finishtime :!: thread :!: repairs)
 
 validateTxsCommit' :: Bool -> ThreadId -> UTCTime -> TxLogs CommitConflict -> [(UTCTime,(TxUnmemo CommitConflict,RepairDynTxVar CommitConflict))] -> IO (Maybe (TxRepair CommitConflict))
 validateTxsCommit' isFuture thread starttime txlogs finished = do
@@ -1163,47 +1202,48 @@ commitNestedTx :: (TxLayer Inside c,TxLayer Outside c) => Bool -> ThreadId -> Th
 commitNestedTx isFuture rootThread thread doWrites txlog_child txlogs_parent = {-# SCC flattenTxLogs #-} do
 	
 	-- delayed child finalization (since we re-used the weak pointers on merge, and finalizing the child txlog now would kill them as well)
-	let !txlog_parent = Strict.head txlogs_parent
-	mkWeakKey txlog_parent txlog_parent $! Just $! finalizeTxLog txlog_child
+	let !txlog_parent = NeStrict.head txlogs_parent
+	mkWeakKey txlog_parent txlog_parent $! Just $! finalizeTxLog Nothing txlog_child
 	
 	-- merge the modifications with the parent log
 	mergeTxLog doWrites isFuture thread txlog_child txlogs_parent
 	-- merges the buffered memo table entries for a txlog with its parent
-	mergeTxLogMemos thread txlog_child txlogs_parent
+	when doWrites $ mergeTxLogMemos thread txlog_child txlogs_parent
 	return ()
 
 commitFutureTx :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => String -> Bool -> ThreadId -> TxEnv c -> l (TxAdapton c) ()
-commitFutureTx msg doWrites child_thread child_env@(txEnvLogs -> SCons child_txlog _) = do
+commitFutureTx msg doWrites child_thread child_env@(txEnvLogs -> NeStrict.head -> child_txlog) = do
 	waitForChildrenTx
 	parent_txlogs <- readTxLogs
 	parent_thread <- unsafeIOToInc myThreadId
-	(parent_isFuture,_) <- readRootTx
+	(parent_isFuture :!: _) <- readRootTx
 	-- commit child txlog
 	dirties <- unsafeIOToInc $ mergeFutureTxLog doWrites parent_isFuture parent_thread child_thread parent_txlogs child_env
 	
 	-- merge memos
-	unsafeIOToInc $ mergeFutureTxLogMemos child_thread parent_thread child_txlog parent_txlogs
+	when doWrites $ unsafeIOToInc $ mergeFutureTxLogMemos child_thread parent_thread child_txlog parent_txlogs
 
 -- returns a bool stating whether the transaction was committed or needs to be incrementally repaired
 -- no exceptions should be raised inside this block
-validateAndCommitTopTx :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => String -> Bool -> l (TxAdapton c) (Maybe (InvalidTxRepair c))
+validateAndCommitTopTx :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => String -> Bool -> l (TxAdapton c) (Maybe (InvalidTx c))
 validateAndCommitTopTx msg doWrites = waitForChildrenTx >> atomicTx ("validateAndCommitTopTx "++msg) (\doEvals -> do
-	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog SNil)) <- (txLayer Proxy Reader.ask)
+	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(NeWrap txlog)) <- (txLayer Proxy Reader.ask)
 	starttime <- unsafeIOToInc $ readIORef' timeref
-	(isFuture,_) <- readRootTx
+	(isFuture :!: _) <- readRootTx
 	mbsuccess <- unsafeIOToInc $ validateTxs isFuture starttime txlogs
 	case mbsuccess of
 		Nothing -> do
 			unsafeIOToInc $ commitTopTx txlog starttime doWrites doEvals
 			return Nothing
-		Just conflicts -> 
-			return $! Just $ TxRepair (flattenTxLogs_ txlogs) `appendInvalidTxRepair` conflicts)
+		Just conflicts -> do
+			flattenTxLogs_ txlogs
+			return $! Just $ InvalidTx conflicts)
 
 validateAndCommitNestedTx :: (TxLayer Inside c,TxLayer Outside c) => String -> Maybe SomeException -> Outside (TxAdapton c) ()
 validateAndCommitNestedTx msg mbException = do
-	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog1 txlogs1)) <- (txLayer Proxy Reader.ask)
+	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(NeCons txlog1 txlogs1)) <- (txLayer Proxy Reader.ask)
 	starttime <- unsafeIOToInc $ readIORef' timeref
-	(isFuture,rootThread) <- readRootTx
+	(isFuture :!: rootThread) <- readRootTx
 	case mbException of
 		Just e -> do -- throwing an exception exits the chain of txs one by one
 			doBlockTx $ unsafeIOToInc $ myThreadId >>= \thread -> commitNestedTx isFuture rootThread thread False txlog1 txlogs1 -- does not perform @Write@s
@@ -1212,27 +1252,33 @@ validateAndCommitNestedTx msg mbException = do
 			mbsuccess <- unsafeIOToInc $ validateTxs isFuture starttime txlogs
 			case mbsuccess of
 				Nothing -> doBlockTx $ unsafeIOToInc $ myThreadId >>= \thread -> commitNestedTx isFuture rootThread thread True txlog1 txlogs1 -- performs @Write@s
-				Just conflicts -> 
+				Just conflicts -> do
+					flattenTxLogs_ txlogs
 					-- re-start from the top
-					throwInvalidTx $ TxRepair (flattenTxLogs_ txlogs) `appendInvalidTxRepair` conflicts
+					throwInvalidTx conflicts
 
-validateFutureTx :: (TxLayer Inside c,TxLayer Outside c) => String -> Maybe SomeException -> Outside (TxAdapton c) (Maybe (InvalidTxRepair c))
+validateFutureTx :: (TxLayer Inside c,TxLayer Outside c) => String -> Maybe SomeException -> Outside (TxAdapton c) (Maybe (InvalidTx c))
 validateFutureTx msg mbException = do
-	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog1 txlogs1)) <- (txLayer Proxy Reader.ask)
+	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(NeStrict.head -> txlog1)) <- (txLayer Proxy Reader.ask)
 	starttime <- unsafeIOToInc $ readIORef' timeref
-	(isFuture,rootThread) <- readRootTx
+	(isFuture :!: rootThread) <- readRootTx
 	case mbException of
 		Just e -> do -- throwing an exception exits the chain of txs one by one
 			return Nothing
 		Nothing -> do
 			-- validates the current and enclosing txs up the tx tree
-			unsafeIOToInc $ validateTxs isFuture starttime txlogs
+			mb <- unsafeIOToInc $ validateTxs isFuture starttime txlogs
+			case mb of
+				Nothing -> return Nothing
+				Just repair -> do
+					flattenTxLogs_ txlogs
+					return $ Just $ InvalidTx repair
 
 validateCatchTx :: (TxLayer Inside c,TxLayer Outside c) => String -> Outside (TxAdapton c) ()
 validateCatchTx msg = do
 	txlogs <- readTxLogs
 	starttime <- readTxId
-	(isFuture,_) <- readRootTx
+	(isFuture :!: _) <- readRootTx
 	mbsuccess <- unsafeIOToInc $ validateTxs isFuture starttime txlogs
 	case mbsuccess of
 		Nothing -> do
@@ -1240,40 +1286,44 @@ validateCatchTx msg = do
 			-- unbuffer all writes at the innermost log
 			thread <- unsafeIOToInc myThreadId
 			doBlockTx $ liftTxLogsWrites thread txlogs >> unbufferTopTxLog isFuture thread txlogs True
-		Just conflicts -> 
-			throwInvalidTx $ TxRepair (flattenTxLogs_ txlogs) `appendInvalidTxRepair` conflicts
+		Just conflicts -> do
+			flattenTxLogs_ txlogs
+			throwInvalidTx conflicts
 
 -- validates a transaction and places it into the waiting queue for retrying
-validateAndRetryTopTx :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => String -> l (TxAdapton c) (Either Lock (InvalidTxRepair c))
+validateAndRetryTopTx :: (TxLayer Inside c,TxLayer Outside c,TxLayer l c) => String -> l (TxAdapton c) (Either Lock (InvalidTx c))
 validateAndRetryTopTx msg = atomicTx ("validateAndRetryTopTx "++msg) $ \doEvals -> do
-	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog SNil)) <- (txLayer Proxy Reader.ask)
+	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(NeWrap txlog)) <- (txLayer Proxy Reader.ask)
 	starttime <- unsafeIOToInc $ readIORef' timeref
-	(isFuture,_) <- readRootTx
+	(isFuture :!: _) <- readRootTx
 	-- validates the current and enclosing txs up the tx tree
 	mbsuccess <- unsafeIOToInc $ validateTxs isFuture starttime txlogs
 	case mbsuccess of
 		Nothing -> do
 			lck <- unsafeIOToInc $ Lock.newAcquired -- sets the tx lock as acquired; the tx will be resumed when the lock is released
+			thread <- unsafeIOToInc myThreadId
 			unsafeIOToInc $ commitTopTx txlog starttime False doEvals -- commit @Eval@ and @New@ computations
-			unsafeIOToInc $ retryTxLog lck txlog -- wait on changes to retry (only registers waits, does not actually wait)
+			unsafeIOToInc $ retryTxLog thread lck txlog -- wait on changes to retry (only registers waits, does not actually wait)
+			flattenTxLogs_ txlogs
 			return $ Left lck
-		Just conflicts -> 
-			return $ Right $ TxRepair (flattenTxLogs_ txlogs) `appendInvalidTxRepair` conflicts
+		Just conflicts -> do
+			flattenTxLogs_ txlogs
+			return $ Right $ InvalidTx conflicts
 
 -- validates a nested transaction and merges its log with its parent
 -- note that retrying discards the tx's writes
 validateAndRetryNestedTx :: (TxLayer Inside c,TxLayer Outside c) => String -> Outside (TxAdapton c) ()
 validateAndRetryNestedTx msg = do
-	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(SCons txlog1 txlogs1)) <- (txLayer Proxy Reader.ask)
+	!txenv@(_ :!: timeref :!: callstack :!: txlogs@(NeCons txlog1 txlogs1)) <- (txLayer Proxy Reader.ask)
 	starttime <- unsafeIOToInc $ readIORef' timeref
-	(isFuture,_) <- readRootTx
+	(isFuture :!: rootThread) <- readRootTx
 	mbsuccess <- unsafeIOToInc $ validateTxs isFuture starttime txlogs
-	(isFuture,rootThread) <- readRootTx
 	case mbsuccess of
 		Nothing -> doBlockTx $ unsafeIOToInc $ myThreadId >>= \thread -> commitNestedTx isFuture rootThread thread False txlog1 txlogs1 -- does not perform @Write@s on @retry@
-		Just conflicts ->
+		Just conflicts -> do
+			flattenTxLogs_ txlogs
 			-- discards writes and applies the conflicting changes to locally repair the current tx
-			throwInvalidTx $ TxRepair (flattenTxLogs_ txlogs) `appendInvalidTxRepair` conflicts 
+			throwInvalidTx conflicts 
 
 -- like STM, our txs are:
 -- same as transaction repair: within transactions, we use no locks; we use locks for commit
@@ -1289,25 +1339,15 @@ atomicTx msg m = do
 		x <- m doEvals
 		debugTx $ "unlocked " ++ show doEvals ++ " " ++ msg
 		return x
-	
---	SCons txlog SNil <- readTxLogs
---	(read_lcks,eval_lcks,write_lcks) <- unsafeIOToInc $ txLocks txlog
---	
---	debugTx $ "waiting " ++ msg ++ " " -- ++ show reads ++ " " ++ show evals ++ " " ++ show writes
---	withLocksTx read_lcks eval_lcks write_lcks $ \doEval -> do
---		debugTx $ "locked " ++ show doEval ++ " " -- ++ msg ++ if doEval then show evals else "" ++ " " ++ show writes
---		x <- m doEval
---		debugTx $ "unlocked " ++ msg -- ++ if doEval then show evals else "" ++ " " ++ show writes
---		return x
 
 {-# INLINE initializeTx #-}
 initializeTx :: TxLayer l c => IncParams (TxAdapton c) -> l (TxAdapton c) a -> IO a
 initializeTx (params :: IncParams (TxAdapton c)) m = do
 	starttime <- startTx (Proxy :: Proxy c) >>= newIORef'
-	stack <- newIORef' SNil
+	stack <- newIORef' Strict.Nil
 	fs <- newIORef' Map.empty
-	tbl <- emptyTxLog starttime $ txAdaptonMemoSize params
-	Reader.runReaderT (runTxOuter $ outside m) (params :!: Nothing :!: fs :!: starttime :!: stack :!: SCons tbl SNil)
+	tbl <- emptyTxLog 1 starttime $ txAdaptonMemoSize params
+	Reader.runReaderT (runTxOuter $ outside m) (params :!: Nothing :!: fs :!: starttime :!: stack :!: NeWrap tbl)
 
 -- checks if the current txlog is consistent with a sequence of concurrent modifications
 -- Nothing = success
@@ -1325,33 +1365,33 @@ checkTxsCommit isFuture thread txlogs (unmemo,RepairDynTxVarC writtenIDs) = do
 	checkDynTxVar txlogs meta True = do -- concurrent write
 		mb <- findTxContentEntry isFuture thread txlogs meta
 		case mb of
-			Nothing -> return Nothing
-			Just (!tvar,!isTop) -> do
+			Strict.Nothing -> return Nothing
+			Strict.Just (tvar :!: isTop :!: _) -> do
 				-- Write-XXX are always conflicts
 				-- if there was a previous @Eval@ or @Write@ on a buffered variable we discard buffered content but keep buffered dependents
 				debugTx2' $ "write conflict " ++ show (idTxNM meta)
-				return $ Just $ TxRepair $ readTxLogs >>= \txlogs -> readRootTx >>= \(isFuture,_) -> unsafeIOToInc $ myThreadId >>= \thread -> unbufferTxVar isFuture thread False txlogs (dynTxMeta tvar) -- a conflict, unbuffer only later when tx is retried with dirtying
+				return $ Just $ TxRepair $ readTxLogs >>= \txlogs -> readRootTx >>= \(isFuture :!: _) -> unsafeIOToInc $ myThreadId >>= \thread -> unbufferTxVar isFuture thread False txlogs (dynTxMeta tvar) -- a conflict, unbuffer only later when tx is retried with dirtying
 	checkDynTxVar txlogs meta False = do -- concurrent dependent write
 		mb <- findTxContentEntry isFuture thread txlogs meta
 		case mb of
-			Nothing -> return Nothing
-			Just (!tvar,!isTop) -> do
+			Strict.Nothing -> return Nothing
+			Strict.Just (tvar :!: isTop :!: _) -> do
 				stat <- readIORef' $ dynTxStatus tvar
 				if isWriteOrNewTrue stat
 					then do
 						-- if a dependent was added concurrently while this tx dirtied a variable
 						debugTx2' $ "write dependents conflict " ++ show (idTxNM meta)
-						return $ Just $ TxRepair $ readTxLogs >>= \txlogs -> readRootTx >>= \(isFuture,_) -> unsafeIOToInc $ myThreadId >>= \thread -> unbufferTxVar isFuture thread False txlogs (dynTxMeta tvar) -- a conflict, unbuffer only later when tx is retried with dirtying
+						return $ Just $ TxRepair $ readTxLogs >>= \txlogs -> readRootTx >>= \(isFuture :!: _) -> unsafeIOToInc $ myThreadId >>= \thread -> unbufferTxVar isFuture thread False txlogs (dynTxMeta tvar) -- a conflict, unbuffer only later when tx is retried with dirtying
 					else return Nothing
 
 -- True = write, False = dependent write
 checkTxNotifiesE :: (TxLayer Outside EarlyConflict) => Bool -> TxNodeMeta EarlyConflict -> TxNotifies EarlyConflict -> IO (RepairDynTxVar EarlyConflict)
-checkTxNotifiesE True meta xs = readMVar "checkTxNotifiesE" xs >>= Map.foldrWithKey checkThread (return mempty) where -- concurrent writes
-	checkThread thread _ m = liftM (RepairDynTxVarE . Map.insert thread (TxRepair $ readTxLogs >>= \txlogs -> readRootTx >>= \(isFuture,_) -> unsafeIOToInc $ unbufferTxVar isFuture thread False txlogs meta) . unRepairDynTxVarE) m
-checkTxNotifiesE False meta xs = readMVar "checkTxNotifiesE" xs >>= Map.foldrWithKey checkThread (return mempty) where -- concurrent dependent writes (new dependents added to this node)
+checkTxNotifiesE True meta xs = readMVar xs >>= Map.foldrWithKey checkThread (return mempty) where -- concurrent writes
+	checkThread thread _ m = liftM (RepairDynTxVarE . Map.insertWith mappend thread (TxRepair $ readTxLogs >>= \txlogs -> readRootTx >>= \(isFuture :!: _) -> unsafeIOToInc $ unbufferTxVar isFuture thread False txlogs meta) . unRepairDynTxVarE) m
+checkTxNotifiesE False meta xs = readMVar xs >>= Map.foldrWithKey checkThread (return mempty) where -- concurrent dependent writes (new dependents added to this node)
 	checkThread thread isWriteOrNewTrue m = do
 		if isWriteOrNewTrue -- unbuffer only if the current thread wrote to the dependents
-			then liftM (RepairDynTxVarE . Map.insert thread (TxRepair $ readTxLogs >>= \txlogs -> readRootTx >>= \(isFuture,_) -> unsafeIOToInc $ unbufferTxVar isFuture thread False txlogs meta) . unRepairDynTxVarE) m
+			then liftM (RepairDynTxVarE . Map.insertWith mappend thread (TxRepair $ readTxLogs >>= \txlogs -> readRootTx >>= \(isFuture :!: _) -> unsafeIOToInc $ unbufferTxVar isFuture thread False txlogs meta) . unRepairDynTxVarE) m
 			else m	
 
 -- restarts a tx with a new starting time
@@ -1370,14 +1410,15 @@ resetTx (m :: l (TxAdapton c) a) = do
 	!thread <- unsafeIOToInc myThreadId
 	-- unmemoize all old buffered memotables
 	txlogs <- readTxLogs
-	unsafeIOToInc $ Foldable.mapM_ finalizeTxLog txlogs
-	unsafeIOToInc $ unbufferTxLogMemos thread txlogs
+	doBlockTx $ unsafeIOToInc $ do	
+		Foldable.mapM_ (finalizeTxLog (Just thread)) txlogs
+		unbufferTxLogMemos thread txlogs
 	!now <- unsafeIOToInc $! startTx (Proxy :: Proxy c) >>= newIORef'
-	!stack <- unsafeIOToInc $! newIORef' SNil
+	!stack <- unsafeIOToInc $! newIORef' Strict.Nil
 	!params <- readTxParams
 	!fs <- unsafeIOToInc $ newIORef' Map.empty
-	!tbl <- unsafeIOToInc $ emptyTxLog now $ txAdaptonMemoSize params
-	txLayer l $ Reader.local (\_ -> (params :!: Nothing :!: fs :!: now :!: stack :!: SCons tbl SNil)) $ unTxLayer l m
+	!tbl <- unsafeIOToInc $ emptyTxLog 1 now $ txAdaptonMemoSize params
+	txLayer l $ Reader.local (\_ -> (params :!: Nothing :!: fs :!: now :!: stack :!: NeWrap tbl)) $ unTxLayer l m
 
 instance TxConflictClass EarlyConflict where
 	
@@ -1403,23 +1444,27 @@ instance TxConflictClass EarlyConflict where
 		let invalidate thread (TxRepair repair) m = do
 			mb <- findLiveTx thread
 			case mb of
-				Nothing -> do
-					debugTx' $ "can't throw InvalidTx to non-transactional" ++ show thread
-					return ()
+				Nothing -> debugTx' $ "can't throw AsyncInvalidTx to " ++ show thread
 				Just lck -> do
-					Lock.with "finishTx" lck $ do
-						debugTx' $ "throwing InvalidTx to " ++ show thread
-						throwTo thread $ ((InvalidTx (txid :!: (TxRepair $ readTxLogs >>= flattenTxLogs_ >> repair >> txunmemo))) :: InvalidTx EarlyConflict)
+					modifyMVarMasked_' lck $ \b -> if b
+						then do -- live tx
+							debugTx' $ "throwing InvalidTx to " ++ show thread
+							throwTo thread $ ((AsyncInvalidTx (txid :!: thread :!: (TxRepair $ repair >> txunmemo))) :: AsyncInvalidTx EarlyConflict)
+							return b
+						else do -- no live tx
+							debugTx' $ "can't throw AsyncInvalidTx to non-transactional " ++ show thread
+							return b
+						
 			m
 		Map.foldrWithKey invalidate (return ()) notifies
 		debugTx' $ "thrown all"
 	{-# INLINE finishTx #-}
 		
-	exitTx = readTxId >>= unsafeIOToInc . deleteLiveTx -- wait until it is safe to exit the current transaction (i.e., when others transactions will no longer throw asynchronous exceptions to the current thread)
+	exitTx = readTxId >>= unsafeIOToInc . deleteLiveTx
 	{-# INLINE exitTx #-}
 		
-	restartTxWithRepair (Just (from :!: TxRepair repair)) msg threadid m = restartTx threadid $ debugTx ("restarting "++msg) >> repair >> m
-	restartTxWithRepair Nothing msg threadid m = resetTx $ debugTx ("reseting "++msg) >> m
+	restartTxWithRepair (Just (from :!: TxRepair repair)) msg threadid m = restartTx threadid $ debugTx ("restarting "++msg) >> doBlockTx (repair) >> m
+	restartTxWithRepair Nothing msg threadid m = resetTx $ debugTx ("reseting "++msg) >>  m
 	{-# INLINE restartTxWithRepair #-}
 
 	validateTxs _ _ _ = return Nothing -- no intermediate validation, only when invalidation exceptions are received
@@ -1431,6 +1476,7 @@ instance TxConflictClass EarlyConflict where
 	{-# INLINE extendInvalidTxRepair #-}
 
 	exceptionalFutureTx rootThread thread (TxFuture result) e = lift $ throwTo rootThread e
+	withTxLocks = withTxLocksE
 
 {-# INLINE addTxNotifiesE #-}
 -- always receives a root thread
@@ -1438,7 +1484,7 @@ addTxNotifiesE :: ThreadId -> Maybe TxStatus -> TxStatus -> TxLogs EarlyConflict
 addTxNotifiesE rootThread old new txlogs uid notifies = {-# SCC addTxNotifiesE #-} do
 	case diffTxStatus old new of
 		Nothing -> return ()
-		Just isWriteOrNewTrue -> modifyMVarMasked_' "addTxNotifiesE" notifies (return . Map.insertWith (||) rootThread isWriteOrNewTrue)
+		Just isWriteOrNewTrue -> modifyMVarMasked_' notifies (return . Map.insertWith (||) rootThread isWriteOrNewTrue)
   where
 	{-# INLINE diffTxStatus #-}
 	diffTxStatus Nothing st2 = Just (isWriteOrNewTrue st2)
@@ -1446,7 +1492,7 @@ addTxNotifiesE rootThread old new txlogs uid notifies = {-# SCC addTxNotifiesE #
 	
 {-# INLINE unTxNotifiesE #-}
 unTxNotifiesE :: TxId EarlyConflict -> Unique -> TxNotifies EarlyConflict -> IO ()
-unTxNotifiesE tid uid notifies = modifyMVarMasked_' "unTxNotifiesE" notifies (return . Map.delete tid)
+unTxNotifiesE tid uid notifies = modifyMVarMasked_' notifies (return . Map.delete tid)
 	
 instance TxConflictClass CommitConflict where
 	
@@ -1467,20 +1513,20 @@ instance TxConflictClass CommitConflict where
 	{-# INLINE startTx #-}
 	
 	finishTx starttime writes@(txunmemo,RepairDynTxVarC txwrites) = do
-		mbearliestTx <- modifyMVarMasked' "finishTx" runningTxs (\xs -> let xs' = List.delete starttime xs in return (xs',lastMay xs'))
+		mbearliestTx <- modifyMVarMasked' runningTxs (\xs -> let xs' = List.delete starttime xs in return (xs',lastMay xs'))
 		let addDone time m = if Map.null txwrites then m else Map.insert time writes m
 		now <- case mbearliestTx of
-			Just earliestTx -> modifyMVarMasked' "finishTx" doneTxs (\m -> getCurrentTime >>= \now -> let m' = Map.filterWithKey (\t _ -> t > earliestTx) (addDone now m) in m' `seq` return (m',now))
-			Nothing -> modifyMVarMasked' "finishTx" doneTxs (\m -> getCurrentTime >>= \now -> let m' = addDone now m in m' `seq` return (m',now))
+			Just earliestTx -> modifyMVarMasked' doneTxs (\m -> getCurrentTime >>= \now -> let m' = Map.filterWithKey (\t _ -> t > earliestTx) (addDone now m) in m' `seq` return (m',now))
+			Nothing -> modifyMVarMasked' doneTxs (\m -> getCurrentTime >>= \now -> let m' = addDone now m in m' `seq` return (m',now))
 		debugTx' $ "["++show starttime ++ "] FINISHED as " ++ show now ++ " in " ++ show (diffUTCTime now starttime)  {- ++ show txvars -}
 	{-# INLINE finishTx #-}
 		
 	exitTx = return () -- nothing to be done
 	{-# INLINE exitTx #-}
 		
-	restartTxWithRepair (Just (newtime :!: TxRepair repair)) msg starttime m = do
+	restartTxWithRepair (Just (newtime :!: to :!: TxRepair repair)) msg starttime m = do
 		unsafeIOToInc $ updateRunningTx starttime newtime
-		restartTx newtime $ debugTx ("restarting "++msg) >> repair >> m
+		restartTx newtime $ debugTx ("restarting "++msg) >> doBlockTx (repair) >> m
 	restartTxWithRepair Nothing msg starttime m = do
 		unsafeIOToInc $ deleteRunningTx starttime
 		resetTx $ debugTx ("reseting "++msg) >> m
@@ -1496,7 +1542,8 @@ instance TxConflictClass CommitConflict where
 	
 	exceptionalFutureTx rootThread thread (TxFuture result) e = do
 		txenv <- Reader.ask
-		lift $ putMVar "exceptionalFutureTx" result (Left (toException e) :!: thread :!: txenv)
+		lift $ putMVar result (Left (toException e) :!: thread :!: txenv)
+	withTxLocks = withTxLocksC
 	
 
 instance (TxLayer Inside c,TxLayer Outside c,Incremental (TxAdapton c)) => Transactional (TxAdapton c) where

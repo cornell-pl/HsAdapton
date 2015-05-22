@@ -19,6 +19,10 @@ benchprof:
 	ghc -O3 --make bench.hs -fforce-recomp -rtsopts -isrc -threaded
 	ghc -O3 --make bench.hs -osuf p_o -prof -auto -fforce-recomp -rtsopts -isrc -threaded
 	./bench +RTS -pa -s
+benchproffast:
+	ghc --make bench.hs -fforce-recomp -rtsopts -isrc -threaded
+	ghc --make bench.hs -osuf p_o -prof -auto -fforce-recomp -rtsopts -isrc -threaded
+	./bench +RTS -pa -s
 benchprofspace:
 	ghc --make -O3 bench.hs -fforce-recomp -isrc
 	ghc --make -O3 bench.hs -osuf p_o -prof -auto -fforce-recomp -isrc
@@ -56,7 +60,7 @@ testprofspace2fast:
 	hp2ps -e8in -c test.hp
 	ps2pdf test.ps > test.pdf
 benx:
-	ghc --make -O3 -threaded bench.hs -fforce-recomp
+	ghc --make -O3 -threaded bench.hs -fforce-recomp -isrc
 	./bench --output bench.html
 benxfast:
 	ghc --make -threaded bench.hs -fforce-recomp -isrc

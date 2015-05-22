@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, ConstraintKinds, UndecidableInstances, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE ViewPatterns, TemplateHaskell, ConstraintKinds, UndecidableInstances, Rank2Types, BangPatterns, FunctionalDependencies, MultiParamTypeClasses, MagicHash, ScopedTypeVariables, GADTs, FlexibleContexts, TypeFamilies, TypeSynonymInstances, FlexibleInstances #-}
 
 module Control.Concurrent.Transactional.Internal.TxAdapton.Memo where
 
@@ -25,7 +25,9 @@ import System.IO.Unsafe
 import Data.Typeable
 import Data.WithClass.MData
 import Control.Monad
-import Data.Strict.List as Strict
+import qualified Data.Strict.List as Strict
+import Data.Strict.NeList (NeList(..))
+import qualified Data.Strict.NeList as NeStrict
 import Data.Maybe
 import Data.Dynamic
 import Control.Concurrent.Map.Exts as CMap
@@ -82,8 +84,15 @@ lookupMemoTx tbls@(ori_tbl :!: buff_tbls) k = do
 		!buffs <- maybe (return Map.empty) readIORef' mb_buffs
 		lookupMemoTx' ori_tbl buffs k txlogs
   where
-	lookupMemoTx' ori_tbl buffs k SNil = MemoTable.lookup ori_tbl k
-	lookupMemoTx' ori_tbl buffs k (SCons txlog txlogs) = do
+	lookupMemoTx' ori_tbl buffs k (NeWrap txlog) = do
+		case Map.lookup (txLogId txlog) buffs of
+			Just buff_tbl -> do
+				mb <- lookupMemoTx'' buff_tbl k
+				case mb of
+					Just thunk -> return mb
+					Nothing -> MemoTable.lookup ori_tbl k
+			Nothing -> MemoTable.lookup ori_tbl k
+	lookupMemoTx' ori_tbl buffs k (NeCons txlog txlogs) = do
 		case Map.lookup (txLogId txlog) buffs of
 			Just buff_tbl -> do
 				mb <- lookupMemoTx'' buff_tbl k
@@ -100,9 +109,9 @@ lookupMemoTx tbls@(ori_tbl :!: buff_tbls) k = do
 
 insertMemoTx :: (Eq k,Hashable k,TxLayer Inside c) => Int -> TxMemoTable c k b -> MkWeak -> k -> TxU c Inside (TxAdapton c) b -> Inside (TxAdapton c) ()
 insertMemoTx memosize tbls@(ori_tbl :!: buff_tbls) thunkWeak k thunk = doBlockTx $ do
-	txlogs@(SCons txlog _) <- readTxLogs
+	txlogs@(NeStrict.head -> txlog) <- readTxLogs
 	-- add the thunk to the buffered memotable
-	(_,rootThread) <- readRootTx
+	(_ :!: rootThread) <- readRootTx
 	unsafeIOToInc $ do
 		!thread <- myThreadId
 		-- find an entry for this thread or create a new one
@@ -115,13 +124,13 @@ insertMemoTx memosize tbls@(ori_tbl :!: buff_tbls) thunkWeak k thunk = doBlockTx
 				-- the buffered memo table lives as long as the original memo table lives ( it does not depend on the txlog itself because it may be reuased across txlogs)
 				let !memoMkWeak = MkWeak $ mkWeakKey ori_tbl
 				buff_tbl <- MemoTable.newSizedWithMkWeak memosize memoMkWeak
-				writeIORef' buffsr $ Map.insert (txLogId txlog) [buff_tbl] buffs
+				writeIORef' buffsr $ Map.insertWith (++) (txLogId txlog) [buff_tbl] buffs
 				-- add the buffered memotable to the txlog's list
 				modifyIORef' (txLogMemo txlog) (DynTxMemoTable tbls :)
 				return buff_tbl
 		weak <- unMkWeak thunkWeak (thunkWeak :!: thunk) Nothing
 		MemoTable.insertWeak buff_tbl k weak
-		modifyMVarMasked_' "insertMemoTx" (unmemoTxNM $ metaTxU thunk) (\(ori :!: buff) -> return (ori :!: Map.insertWith (>>) rootThread (Weak.finalize weak) buff))
+		modifyMVarMasked_' (unmemoTxNM $ metaTxU thunk) (\(ori :!: buff) -> return (ori :!: Map.insertWith (>>) rootThread (Weak.finalize weak) buff))
 
 -- commits the buffered memotable entries for a given txlog to the persistent memotable
 -- returns a function that can be used to remove the newly commited entries from other concurrent buffered memo tables
@@ -143,17 +152,18 @@ commitTxMemoTable doCommit thread (ori_tbl :!: buff_tbls) txlog = do
 			buffs <- readIORef' buffsr
 			unmemos <- case Map.lookup (txLogId txlog) buffs of
 				Nothing -> return mempty
+				Just [] -> return mempty
 				Just buff_tbl' -> do
 					buff_tbl <- flattenMemoTables buff_tbl'
 					-- commit the buffered entries over the original memotable
 					let addEntry xs (k,(mkWeak :!: u)) = do
 						weak <- unMkWeak mkWeak u Nothing
 						MemoTable.insertWeak ori_tbl k weak
-						modifyMVarMasked_' "commitTxMemoTable" (unmemoTxNM $ metaTxU u) (\(ori :!: buff) -> return ((ori >> Weak.finalize weak) :!: buff))
-						return (SCons k xs)
+						modifyMVarMasked_' (unmemoTxNM $ metaTxU u) (\(ori :!: buff) -> return ((ori >> Weak.finalize weak) :!: buff))
+						return (Strict.Cons k xs)
 					!entries <- if doCommit
-						then MemoTable.foldM addEntry SNil buff_tbl -- strict list
-						else return SNil
+						then MemoTable.foldM addEntry Strict.Nil buff_tbl -- strict list
+						else return Strict.Nil
 					-- finalize the thread-local memotable
 					MemoTable.finalize buff_tbl
 					-- function that unmemoizes buffered memo entries from another concurrent thread
@@ -173,7 +183,7 @@ commitTxMemoTable doCommit thread (ori_tbl :!: buff_tbls) txlog = do
 
 -- merges the memo entries for a nested txlog into the memotables of its parent txlog, by overriding parent entries
 mergeTxLogMemos :: ThreadId -> TxLog c -> TxLogs c -> IO ()
-mergeTxLogMemos thread txlog_child txlogs_parent@(SCons txlog_parent _) = do
+mergeTxLogMemos thread txlog_child txlogs_parent@(NeStrict.head -> txlog_parent) = do
 	
 	txmemos <- readIORef' (txLogMemo txlog_child)
 	let mergeMemo tbls@(DynTxMemoTable (_ :!: buff_tbls)) = do
@@ -192,7 +202,7 @@ mergeTxLogMemos thread txlog_child txlogs_parent@(SCons txlog_parent _) = do
 	Control.Monad.mapM_ mergeMemo txmemos
 
 mergeFutureTxLogMemos :: ThreadId -> ThreadId -> TxLog c -> TxLogs c -> IO ()
-mergeFutureTxLogMemos child_thread parent_thread txlog_child txlogs_parent@(SCons txlog_parent _) = do
+mergeFutureTxLogMemos child_thread parent_thread txlog_child txlogs_parent@(NeStrict.head -> txlog_parent) = do
 	
 	child_txmemos <- readIORef' (txLogMemo txlog_child)
 	let mergeMemo tbls@(DynTxMemoTable (_ :!: buff_tbls)) = do
@@ -214,13 +224,14 @@ mergeFutureTxLogMemos child_thread parent_thread txlog_child txlogs_parent@(SCon
 	Control.Monad.mapM_ mergeMemo child_txmemos
 
 unbufferTxLogMemos :: ThreadId -> TxLogs c -> IO ()
-unbufferTxLogMemos thread SNil = return ()
-unbufferTxLogMemos thread (SCons txlog txlogs) = do
-	readIORef (txLogMemo txlog) >>= Control.Monad.mapM_ (unbufferDynTxMemoTable thread)
-	unbufferTxLogMemos thread txlogs
-
-unbufferDynTxMemoTable :: ThreadId -> DynTxMemoTable c -> IO ()
-unbufferDynTxMemoTable thread (DynTxMemoTable (ori_tbl :!: buff_tbls)) = CMap.delete thread buff_tbls
+unbufferTxLogMemos thread = Foldable.mapM_ unbufferTxLogMemo
+  where
+	unbufferTxLogMemo txlog = do
+		blocks <- readIORef (txLogMemo txlog)
+		Control.Monad.mapM_ unbufferDynTxMemoTable blocks
+		writeIORef' (txLogMemo txlog) []
+	
+	unbufferDynTxMemoTable (DynTxMemoTable (ori_tbl :!: buff_tbls)) = CMap.delete thread buff_tbls
 
 instance (Typeable i,Typeable c,Typeable l,Typeable inc,Typeable a) => Memo (TxM i c l inc a) where
 	type Key (TxM i c l inc a) = Unique
@@ -247,3 +258,16 @@ instance Hashable (TxM i c l inc a) where
 	hashWithSalt i m = hashWithSalt i (idTxNM $ metaTxM m)
 --instance Hashable (TxL l inc a) where
 --	hashWithSalt i l = hashWithSalt i (idNM $ metaL l)
+
+
+flattenMemoTables :: (Eq k,Hashable k) => [MemoTable k v] -> IO (MemoTable k v)
+flattenMemoTables [b] = return b
+flattenMemoTables (b1:bs@(b2:_)) = do
+	let add (uid,wentry) = do
+		mb <- Weak.deRefWeak wentry
+		case mb of
+			Nothing -> return ()
+			Just entry -> MemoTable.insertWeak b2 uid wentry
+	MemoTable.mapWeakM_ add b1
+	mkWeakKey b2 b2 $! Just $! MemoTable.finalize b1
+	flattenMemoTables bs

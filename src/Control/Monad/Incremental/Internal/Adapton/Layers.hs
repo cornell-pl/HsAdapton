@@ -27,14 +27,14 @@ import Data.Typeable
 
 import Control.Monad.Trans
 import Data.Strict.Tuple
-import Data.Strict.List as Strict
+import qualified Data.Strict.List as Strict
 import Control.Monad
 
 import Data.DeriveTH               
 import Data.DeepTypeable
 import Data.WithClass.Derive.DeepTypeable
 import Language.Haskell.TH.Syntax hiding (lift,Infix,Fixity)
-import Data.Strict.Maybe as Strict
+import qualified Data.Strict.Maybe as Strict
 import Control.Applicative
 import Data.Hashable
 import Data.Derive.Memo
@@ -51,47 +51,46 @@ type Outer = Outside Adapton
 
 -- * Callstack used by the @Inner@ and @Outer@ monads
 
-topStackThunkElement :: CallStack -> Maybe (StackElement)
-topStackThunkElement (SCons x xs) = if isThunkStackElement x then Just x else topStackThunkElement xs
-topStackThunkElement SNil = Nothing
+topStackThunkElement :: CallStack inc -> Maybe (StackElement inc)
+topStackThunkElement (Strict.Cons x xs) = if isThunkStackElement x then Just x else topStackThunkElement xs
+topStackThunkElement Strict.Nil = Nothing
 
--- make sure that the stack is strict, to fix a memory leak with lazy stacks
-type CallStack = SList (StackElement)
-type StackElement = (NodeMeta :!: SMaybe (IORef (Dependencies))) -- the @Bool@ denotes the kind of the element: true=thunk, false=ref
-
-showCallStack :: CallStack -> String
+showCallStack :: CallStack inc -> String
 showCallStack = show . Strict.map (\(x :!: _) -> x)
 
 {-# INLINE isThunkStackElement #-}
-isThunkStackElement :: StackElement -> Bool
-isThunkStackElement (_ :!: (SJust _)) = True
-isThunkStackElement (_ :!: SNothing) = False
+isThunkStackElement :: StackElement inc -> Bool
+isThunkStackElement (_ :!: (Strict.Just _)) = True
+isThunkStackElement (_ :!: Strict.Nothing) = False
 
-TH.declareIORef "callstack"  [t| CallStack |] [e| SNil |]
+TH.declareIORef "callstackAdapton"  [t| CallStack Adapton |] [e| Strict.Nil |]
+
+instance AdaptonImpl Adapton where
+	callstack = callstackAdapton
 
 {-# INLINE topStack #-}
-topStack :: IO (Maybe (StackElement))
+topStack :: AdaptonImpl inc => IO (Maybe (StackElement inc))
 topStack = readIORef callstack >>= \s -> case s of
-	SCons x xs -> return $ Just x
-	SNil -> return Nothing
+	Strict.Cons x xs -> return $ Just x
+	Strict.Nil -> return Nothing
 
 -- puts a new value to the stack
 {-# INLINE pushStack #-}
-pushStack :: StackElement -> IO ()
-pushStack = \x -> modifyIORef' callstack (\xs -> {-debug ("pushStack: " ++ showCallStack (SCons x xs)) $-} SCons x xs)
+pushStack :: AdaptonImpl inc => StackElement inc -> IO ()
+pushStack = \x -> modifyIORef' callstack (\xs -> {-debug ("pushStack: " ++ showCallStack (Strict.Cons x xs)) $-} Strict.Cons x xs)
 
 -- removes the value from the stack
 {-# INLINE popStack #-}
-popStack :: IO (StackElement)
-popStack = atomicModifyIORef' callstack (\(SCons x xs) -> {-debug ("popStack: " ++ showCallStack xs) $-} (xs,x))
+popStack :: AdaptonImpl inc => IO (StackElement inc)
+popStack = atomicModifyIORef' callstack (\(Strict.Cons x xs) -> {-debug ("popStack: " ++ showCallStack xs) $-} (xs,x))
 
 {-# INLINE popStack' #-}
-popStack' :: (Layer l inc) => l inc (StackElement)
+popStack' :: (AdaptonImpl inc,Layer l inc) => l inc (StackElement inc)
 popStack' = unsafeIOToInc $ popStack
 
 -- return the top-most thunk in the stack
 {-# INLINE topThunkStack #-}
-topThunkStack :: IO (Maybe (StackElement))
+topThunkStack :: AdaptonImpl inc => IO (Maybe (StackElement inc))
 topThunkStack = liftM topStackThunkElement $ readIORef callstack
 
 -- * Adapton layers

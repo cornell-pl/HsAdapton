@@ -7,48 +7,48 @@ import Data.Typeable
 import Data.Foldable as Foldable
 
 -- | A strict list datatype
-data SList a = SCons !a !(SList a) | SNil deriving (Show,Eq,Ord,Typeable)
+data List a = Cons !a !(List a) | Nil deriving (Show,Eq,Ord,Typeable)
 
-instance Foldable SList where
+instance Foldable List where
 	{-# INLINE [0] foldr #-}
 	foldr k z = go
 	          where
-	            go SNil     = z
-	            go (SCons y ys) = y `k` go ys
+	            go Nil     = z
+	            go (Cons y ys) = y `k` go ys
 
-last :: SList a -> a
-last (SCons x SNil) = x
-last (SCons x xs) = Data.Strict.List.last xs
+last :: List a -> a
+last (Cons x Nil) = x
+last (Cons x xs) = Data.Strict.List.last xs
 
-head :: SList a -> a
-head (SCons x _) = x
+head :: List a -> a
+head (Cons x _) = x
 
-map :: (a -> b) -> SList a -> SList b
-map f SNil = SNil
-map f (SCons x xs) = SCons (f x) (map f xs)
+map :: (a -> b) -> List a -> List b
+map f Nil = Nil
+map f (Cons x xs) = Cons (f x) (map f xs)
 
-mapM :: Monad m => (a -> m b) -> SList a -> m (SList b)
-mapM f SNil = return SNil
-mapM f (SCons a as) = do
+mapM :: Monad m => (a -> m b) -> List a -> m (List b)
+mapM f Nil = return Nil
+mapM f (Cons a as) = do
 	b <- f a
 	bs <- mapM f as
-	return $ SCons b bs
+	return $ Cons b bs
 
-sequence :: Monad m => SList (m a) -> m (SList a)
-sequence SNil = return SNil
-sequence (SCons m ms) = do
+sequence :: Monad m => List (m a) -> m (List a)
+sequence Nil = return Nil
+sequence (Cons m ms) = do
 	x <- m
 	xs <- sequence ms
-	return $ SCons x xs
+	return $ Cons x xs
 
-reverse :: SList a -> SList a
-reverse = Foldable.foldl' (flip SCons) SNil
+reverse :: List a -> List a
+reverse = Foldable.foldl' (flip Cons) Nil
 
-null :: SList a -> Bool
-null SNil = True
-null (SCons _ _) = False
+null :: List a -> Bool
+null Nil = True
+null (Cons _ _) = False
 
-length :: SList a -> Int
-length SNil = 0
-length (SCons _ xs) = succ (length xs)
+length :: List a -> Int
+length Nil = 0
+length (Cons _ xs) = succ (length xs)
 

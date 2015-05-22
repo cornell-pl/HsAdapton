@@ -160,9 +160,9 @@ mainBench = do
 --	runIncBenchmark mapLazyLazyNonIncBench defaultIncParams (10^6) 0
 --	runIncBenchmark mapLazyAdaptonBench (defaultIncParams { adaptonMemoSize = 10^6 }) (10^6) 250
 --	runIncBenchmark quicksortLazyLazyNonIncBench defaultIncParams (10^5) 0
-	runIncBenchmark2 quicksortLazyAdaptonBench (defaultIncParams { adaptonMemoSize = 10^5 }) (10^5) 20
---	runIncBenchmark mergesortLazyLazyNonIncBench defaultIncParams (10^5) 0
---	runIncBenchmark mergesortLazyAdaptonBench (defaultIncParams { adaptonMemoSize = 10^5 }) (10^5) 250
+--	runIncBenchmark2 quicksortLazyAdaptonBench (defaultIncParams { adaptonMemoSize = 10^5 }) (10^5) 20
+--	runIncBenchmark mergesortLazyLazyNonIncBench defaultIncParams (10^5) 20
+	runIncBenchmark mergesortLazyAdaptonBench (defaultIncParams { adaptonMemoSize = 10^4 }) (10^4) 250
 	-- batch pattern
 --	runIncBenchmark filterBatchLazyNonIncBench defaultIncParams (10^6) 0
 --	runIncBenchmark filterBatchAdaptonBench (defaultIncParams { adaptonMemoSize = 10^6 }) (10^6) 250
@@ -173,7 +173,9 @@ mainBench = do
 --	runIncBenchmark foldSumBatchLazyNonIncBench defaultIncParams (10^6) 0
 --	runIncBenchmark foldSumBatchAdaptonBench (defaultIncParams { adaptonMemoSize = 10^6 }) (10^6) 250
 
-main = Customer.main
+--main = Customer.main
+
+main = mainBench
 
 
 
