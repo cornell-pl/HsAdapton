@@ -1,4 +1,4 @@
-{-# LANGUAGE Rank2Types, GADTs, ConstraintKinds, BangPatterns, TupleSections, TypeFamilies, ScopedTypeVariables, TemplateHaskell, StandaloneDeriving, KindSignatures, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts, UndecidableInstances, DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric, Rank2Types, GADTs, ConstraintKinds, BangPatterns, TupleSections, TypeFamilies, ScopedTypeVariables, TemplateHaskell, StandaloneDeriving, KindSignatures, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts, UndecidableInstances, DeriveDataTypeable #-}
 
 module Control.Monad.Incremental.List where
 
@@ -30,6 +30,7 @@ import System.Mem.Weak.Exts as Weak
 
 import Data.Memo
 import Data.Derive.Memo
+import GHC.Generics
 
 -- * standard lists
 
@@ -38,13 +39,12 @@ data ListMod'
 	(l :: * -> * -> *)
 	inc
 	a
-	= NilMod | ConsMod a (ListMod mod l inc a)
+	= NilMod | ConsMod a (ListMod mod l inc a) deriving (Generic,Typeable)
 	
 deriving instance (Show a,Show (ListMod mod l inc a)) => Show (ListMod' mod l inc a)
 
 type ListMod mod l inc a = mod l inc (ListMod' mod l inc a)
 
-deriving instance Typeable ListMod'
 deriving instance (Eq a,Eq (ListMod mod l inc a)) => Eq (ListMod' mod l inc a)
 
 instance (DeepTypeable mod,DeepTypeable l,DeepTypeable inc,DeepTypeable a,DeepTypeable (ListMod mod l inc a)) => DeepTypeable (ListMod' mod l inc a) where
@@ -100,7 +100,7 @@ instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable l,Sat (ctx (ListMod' mo
       toConstr ctx x@NilMod = ((dataTypeOf ctx x) >>= (return . (flip indexConstr 1)))
       toConstr ctx x@(ConsMod x1 x2) = ((dataTypeOf ctx x) >>= (return . (flip indexConstr 2)))
       dataTypeOf ctx x = return ty where
-            ty = mkDataType "Todo.ListMod'" [mkConstr ty "NilMod" [] Prefix,mkConstr ty "ConsMod" [] Prefix]
+            ty = mkDataType "Todo.ListMod'" [mkConstr ty "NilMod" [] Data.WithClass.MData.Prefix,mkConstr ty "ConsMod" [] Data.WithClass.MData.Prefix]
 
 headMayInc :: (IncK inc (ListMod' mod l inc a),Thunk mod l inc) => ListMod mod l inc a -> l inc (Maybe a)
 headMayInc mxs = read mxs >>= \xs -> case xs of
@@ -553,7 +553,7 @@ instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable l,Sat (ctx (JoinListMod
       toConstr ctx x@(SingleMod x1) = ((dataTypeOf ctx x) >>= (return . (flip indexConstr 2)))
       toConstr ctx x@(JoinMod x1 x2) = ((dataTypeOf ctx x) >>= (return . (flip indexConstr 3)))
       dataTypeOf ctx x = return ty where
-            ty = mkDataType "Todo.JoinListMod'" [mkConstr ty "EmptyMod" [] Prefix,mkConstr ty "SingleMod" [] Prefix,mkConstr ty "JoinMod" [] Prefix]
+            ty = mkDataType "Todo.JoinListMod'" [mkConstr ty "EmptyMod" [] Data.WithClass.MData.Prefix,mkConstr ty "SingleMod" [] Data.WithClass.MData.Prefix,mkConstr ty "JoinMod" [] Data.WithClass.MData.Prefix]
 
 joinListInc :: (IncK inc (JoinListMod' mod l inc a),Output mod l inc) => JoinListMod mod l inc a -> JoinListMod mod l inc a -> l inc (JoinListMod mod l inc a)
 joinListInc mxs mys = thunk $ return $ JoinMod mxs mys

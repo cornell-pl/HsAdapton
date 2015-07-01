@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, ConstraintKinds, TypeFamilies, ScopedTypeVariables, StandaloneDeriving, KindSignatures, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts, UndecidableInstances, DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric, TemplateHaskell, ConstraintKinds, TypeFamilies, ScopedTypeVariables, StandaloneDeriving, KindSignatures, FlexibleInstances, MultiParamTypeClasses, FlexibleContexts, UndecidableInstances, DeriveDataTypeable #-}
 
 module Control.Monad.Incremental.Tree where
 
@@ -24,6 +24,7 @@ import System.Mem.Weak as Weak
 import Prelude hiding (mod,const,read)
 import Data.Memo
 import Data.Derive.Memo
+import GHC.Generics
 
 type TreeMod
 	(mod :: ((* -> * -> *) -> * -> * -> *))
@@ -37,9 +38,8 @@ data TreeMod'
 	(l :: * -> * -> *)
 	inc
 	a
-	= EmptyMod | BinMod a (TreeMod mod l inc a) (TreeMod mod l inc a)
+	= EmptyMod | BinMod a (TreeMod mod l inc a) (TreeMod mod l inc a) deriving (Generic,Typeable)
 
-deriving instance Typeable TreeMod'
 deriving instance (Eq a,Eq (TreeMod mod l inc a)) => Eq (TreeMod' mod l inc a)
 
 instance (DeepTypeable mod,DeepTypeable l,DeepTypeable inc,DeepTypeable a,DeepTypeable (TreeMod mod l inc a)) => DeepTypeable (TreeMod' mod l inc a) where
@@ -90,7 +90,7 @@ instance (DeepTypeable mod,DeepTypeable inc,DeepTypeable l,Sat (ctx (TreeMod' mo
       toConstr ctx x@EmptyMod = ((dataTypeOf ctx x) >>= (return . (flip indexConstr 1)))
       toConstr ctx x@(BinMod x1 x2 x3) = ((dataTypeOf ctx x) >>= (return . (flip indexConstr 2)))
       dataTypeOf ctx x = return ty where
-            ty = mkDataType "Todo.TreeMod'" [mkConstr ty "EmptyMod" [] Prefix,mkConstr ty "BinMod" [] Prefix]
+            ty = mkDataType "Todo.TreeMod'" [mkConstr ty "EmptyMod" [] Data.WithClass.MData.Prefix,mkConstr ty "BinMod" [] Data.WithClass.MData.Prefix]
 
 $(deriveMemo ''TreeMod')
 

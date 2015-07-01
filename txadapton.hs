@@ -20,7 +20,6 @@ import Data.IORef
 import Data.Typeable
 import Data.DeepTypeable
 import Language.Haskell.TH.Syntax
- (stableName)
 
 import Data.WithClass.MData
 import Data.DeriveTH
@@ -38,7 +37,6 @@ import Control.Exception (Exception(..),SomeException(..))
 import qualified Control.Exception as Exception
 import qualified Control.Monad.Catch as Catch
 import System.Mem.Weak as Weak
- as WeakKey
 import System.IO.Unsafe
 import System.Mem.StableName.Exts
 

@@ -116,14 +116,14 @@ getOuterM = \t -> unsafeIOToInc $ readIORef (dataM t)
 {-# INLINE checkM #-}
 checkM :: (Eq a,IncK inc a,Layer Inside inc) => M Inside inc a -> a -> IO Bool
 checkM = \t oldv -> do
-	v <- readIORef (dataM t)
+	v <- readIORef' (dataM t)
 	return (oldv == v)
 
-setM :: (Eq a,IncK inc a,Layer Outside inc,Layer l inc) => M l inc a -> a -> Outside inc ()
+setM  :: (Eq a,IncK inc a,Layer Outside inc,Layer l inc) => M l inc a -> a -> Outside inc ()
 setM t v' = debug ("changed " ++ show (hashUnique $ idNM $ metaM t)) $ unsafeIOToInc $ do
-	v <- readIORef (dataM t)
+	v <- readIORef' (dataM t)
 	unless (v == v') $ do
-		writeIORef (dataM t) $! v'
+		writeIORef' (dataM t) v'
 		dirty (metaM t) -- dirties only dependents; dirty also parent dependencies (to avoid reuse for thunks that created this reference)
 
 -- * Lazy modifiables

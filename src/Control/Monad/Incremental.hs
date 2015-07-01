@@ -87,6 +87,8 @@ class (LayerKind l,Monad (l inc),Incremental inc) => Layer l inc where
 	inside :: Inside inc a -> l inc a
 	outside :: l inc a -> Outside inc a
 	isInside :: l inc Bool
+	isOutside :: l inc Bool
+	isOutside = liftM not isInside
 
 instance (Incremental inc) => Layer Outside inc where
 	inside = world

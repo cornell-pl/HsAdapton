@@ -17,11 +17,11 @@ version :: Version
 version = Version {versionBranch = [0,1,0,3], versionTags = []}
 bindir, libdir, datadir, libexecdir, sysconfdir :: FilePath
 
-bindir     = "/home/hpacheco/.cabal/bin"
-libdir     = "/home/hpacheco/.cabal/lib/x86_64-linux-ghc-7.8.3/weak-ctrie-0.1.0.3"
-datadir    = "/home/hpacheco/.cabal/share/x86_64-linux-ghc-7.8.3/weak-ctrie-0.1.0.3"
-libexecdir = "/home/hpacheco/.cabal/libexec"
-sysconfdir = "/home/hpacheco/.cabal/etc"
+bindir     = "/Users/hpacheco/Library/Haskell/bin"
+libdir     = "/Users/hpacheco/Library/Haskell/ghc-7.8.3-x86_64/lib/weak-ctrie-0.1.0.3"
+datadir    = "/Users/hpacheco/Library/Haskell/share/ghc-7.8.3-x86_64/weak-ctrie-0.1.0.3"
+libexecdir = "/Users/hpacheco/Library/Haskell/libexec"
+sysconfdir = "/Users/hpacheco/Library/Haskell/etc"
 
 getBinDir, getLibDir, getDataDir, getLibexecDir, getSysconfDir :: IO FilePath
 getBinDir = catchIO (getEnv "weak_ctrie_bindir") (\_ -> return bindir)
